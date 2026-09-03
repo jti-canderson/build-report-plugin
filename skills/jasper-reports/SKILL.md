@@ -3,20 +3,15 @@ name: jasper-reports
 description: >-
   Build, change, and verify eSeries (Sustain / Symphony) Jasper reports — the Groovy business
   rule that produces the data, the .jrxml that lays out the page, and the contract between
-  them. Use this for any report
-  work: "build a report that shows X", "here's the ticket for this report", "add a column",
-  "why is this blank", "why does it print null", "the totals don't match the case screen",
-  "rename that field", or a report stack trace. Also use it for a FILE handed over with no
-  instructions at all — a .jrxml, a *BR*.groovy, or an eSeries config export zip such as
-  FORM-local-2026-08-21.zip / FORM=<code>.xml — because an upload with no words is itself a
-  request to build the report for it. Putting a finished report INTO an environment — the rule
-  editor, Reports Admin, Import vs Replace — is the `report-deployment` skill; this one stops
-  at the finished files. Self-contained for building: everything needed to produce a report is
-  in this skill and its references, so it can be handed to someone working from exported
-  config with no live system access.
-  Reach for it even when the request sounds like a one-line change, because the expensive
-  failures are silent — a wrong path or a missing key empties a column without erroring,
-  and the local harness cannot catch that.
+  them. Use for any report work: "build a report that shows X", "add a column", "why is this
+  blank", "why does it print null", "the totals don't match the case screen", "rename that
+  field", or a report stack trace. Also use it for a FILE handed over with no instructions —
+  a .jrxml, a *BR*.groovy, or an eSeries config export zip such as FORM-local-2026-08-21.zip —
+  because an upload with no words is itself a request to build the report. Putting a finished
+  report into an environment is a separate concern; this one stops at the finished files.
+  Self-contained: works from exported config alone, no live system access needed. Reach for
+  it even for a one-line change — the expensive failures are silent, a wrong path or missing
+  key empties a column without erroring, and the local harness can't catch that.
 ---
 
 # Jasper reports (eSeries)

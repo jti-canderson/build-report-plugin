@@ -1,20 +1,17 @@
 ---
 name: financials
 description: >-
-  The eSeries (Sustain / Symphony) financial data model, and how to get money numbers out of
-  it correctly — payments, receipts, allocations to fees and restitution, obligations,
-  balances, pay plans, overpayments, deposits, vouchers and disbursements. Use this whenever
-  a task involves an amount: "report on payments collected", "why doesn't this total match
-  the Financials screen", "past due obligations", "payments by obligation type", "the
-  restitution figures are short", "receipt shows the wrong amount", "deposit ticket", "sum
-  the balances", or any column named Amount, Paid, Balance, Allocated, Collected or Past Due.
-  Reach for it before writing the query, not after the numbers come out wrong, because the
-  characteristic failure here is a total that looks plausible and is quietly incomplete: a
-  payment allocates down two separate branches plus an assessment side, some amount fields are
-  integer cents and some are already dollars, overpayments have two representations, and
-  reversed receipts carry no instruments of their own — miss any of these and the number is
-  wrong with no error. Pairs with `jasper-reports` when the deliverable is a report; this skill is
-  the domain knowledge, that one is the mechanics.
+  The eSeries (Sustain / Symphony) financial data model, and how to get money numbers out
+  correctly — payments, receipts, allocations to fees and restitution, obligations, balances,
+  pay plans, overpayments, deposits, vouchers and disbursements. Use whenever a task involves
+  an amount: "report on payments collected", "why doesn't this total match the Financials
+  screen", "past due obligations", "receipt shows the wrong amount", or any column named
+  Amount, Paid, Balance, Allocated, Collected or Past Due. Reach for it before writing the
+  query, not after: a total can look plausible and be quietly incomplete — a payment allocates
+  down two branches plus an assessment side, some amount fields are integer cents and some are
+  already dollars, overpayments have two representations, and reversed receipts carry no
+  instruments of their own. Miss any of these and the number is wrong with no error. Pairs
+  with `jasper-reports` for report work; this is the domain knowledge, that is the mechanics.
 ---
 
 # eSeries financials
