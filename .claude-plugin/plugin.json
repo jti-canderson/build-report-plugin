@@ -1,0 +1,17 @@
+{
+  "name": "jti-reports",
+  "version": "0.3.1",
+  "description": "Build eSeries (Sustain/Symphony) Jasper reports from JTI house templates. /build-report walks you through project, SDK, template and requirements.",
+  "author": {
+    "name": "Journal Technologies"
+  },
+  "keywords": [
+    "jasper",
+    "eseries",
+    "sustain",
+    "symphony",
+    "reports",
+    "jrxml",
+    "groovy"
+  ]
+}

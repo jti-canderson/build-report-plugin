@@ -1,0 +1,108 @@
+#!/usr/bin/env python3
+"""
+The template picker. Show this FIRST, before building anything.
+
+    python3 catalog.py            # the menu
+    python3 catalog.py B          # one template in detail
+    python3 catalog.py --preview  # regenerate every sample PDF to look at
+
+Written for someone who does not read Groovy. Pick by what the page looks like, not
+by what the rule does.
+"""
+import pathlib
+import subprocess
+import sys
+
+HERE = pathlib.Path(__file__).parent
+
+CATALOG = [
+    ("A", "record_summary", "Record Summary",
+     "Everything about ONE person or case, broken into sections.",
+     "Person Summary, Case Summary",
+     "A header with the name, a few counts in boxes, then a section per topic - "
+     "Address, Telephone, Identification - each with its own columns and a count."),
+    ("B", "tabular_list", "List",
+     "A straight list. One row per record, runs over as many pages as it needs.",
+     "Payments Report, Past Due Financial Obligations, Age Caseload",
+     "Title, the criteria you searched on, then one table. The workhorse - reach "
+     "for this unless something below fits better."),
+    ("C", "grouped_summary", "Grouped Summary",
+     "A list split into groups, each with a subtotal, and a grand total at the end.",
+     "Collections by Agency, Payments by Obligation Type",
+     "Same as a List, but banded - 'Tulsa County DA' then its rows then its "
+     "subtotal, and so on. Use it whenever someone asks 'broken down by'."),
+    ("D", "statement", "Statement",
+     "A document you hand or send to somebody, not a data dump.",
+     "Receipt, Voucher Payee Statement, Depository Ticket",
+     "From and To blocks, a document number and date, the amount in large type, "
+     "the line items, and a signature line."),
+    ("E", "wide_table", "Wide Table (landscape)",
+     "A List turned sideways for up to nine columns.",
+     "VOCA, full payment detail",
+     "Only when the columns genuinely will not fit upright - landscape does not "
+     "print well in a stack with everything else."),
+]
+
+
+def menu():
+    print("\n  Which one should this report look like?\n")
+    for key, _, title, one_liner, egs, _ in CATALOG:
+        print(f"  {key}.  {title}")
+        print(f"      {one_liner}")
+        print(f"      like: {egs}\n")
+    print("  Reply with a letter. `python3 catalog.py B` for more on one of them.")
+    ex = HERE / "examples"
+    if ex.exists():
+        print(f"  Rendered examples are already on disk: {ex}\n")
+    else:
+        print("  `python3 catalog.py --preview` writes a sample PDF of each to out/.\n")
+
+
+def detail(key):
+    for k, mod, title, one_liner, egs, more in CATALOG:
+        if k.upper() == key.upper() or mod == key:
+            print(f"\n  {k}.  {title}   (templates/{mod}.py)\n")
+            print(f"      {one_liner}\n      {more}\n")
+            print(f"      Reports like this: {egs}")
+            s = sample(mod)
+            print(f"      Sample page:       {s}")
+            print(f"      Sample PDF:        {s.with_suffix('.pdf')}\n")
+            return 0
+    print(f"no template '{key}' - run without arguments for the menu")
+    return 1
+
+
+def _name(mod):
+    src = (HERE / "templates" / f"{mod}.py").read_text()
+    return src.split('NAME = "')[1].split('"')[0]
+
+
+def sample(mod):
+    """Where the already-rendered example lives.
+
+    Prefer examples/ - shipped pre-rendered, so picking a template never waits on a
+    render. Fall back to out/ when working in the source library.
+    """
+    n = _name(mod)
+    for cand in (HERE / "examples" / f"{n}.png", HERE / "out" / f"{n}_sample_p1.png"):
+        if cand.exists():
+            return cand
+    return HERE / "examples" / f"{n}.png"
+
+
+def preview():
+    for _, mod, title, *_ in CATALOG:
+        print(f"  {title} ...")
+        subprocess.run(["./render.sh", f"templates/{mod}.py"], cwd=HERE,
+                       capture_output=True)
+    print(f"\n  sample pages in {HERE / 'out'}\n")
+
+
+if __name__ == "__main__":
+    a = sys.argv[1] if len(sys.argv) > 1 else None
+    if a == "--preview":
+        preview()
+    elif a:
+        sys.exit(detail(a))
+    else:
+        menu()
