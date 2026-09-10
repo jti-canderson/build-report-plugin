@@ -1,5 +1,5 @@
 """
-Template B: ESERIES SUMMARY  (the folder-view look)
+Template: ESERIES SUMMARY  (the folder-view look)
 
 A print copy of an eSeries folder view - the Case Summary screen and its relatives.
 Flag banners, the two-column header block, then grey section bands each with their own

@@ -261,7 +261,7 @@ Measured by extracting the text of the PDF itself:
 | `🔽` `📁` `📍` (U+1F5xx) | gone | gone |
 | `•` U+2022, `–` U+2013, ASCII | visible | visible |
 
-This was caught building template B (eSeries Screen), whose collapse carets and column funnels looked perfect
+This was caught building the eSeries Screen template, whose collapse carets and column funnels looked perfect
 in verification and did not exist in the PDF. Two fixes are now in place, and both matter:
 
 - **`jti_style.static()` refuses a non-WinAnsi literal at generate time** (`_winansi`), so
@@ -272,7 +272,7 @@ in verification and did not exist in the PDF. Two fixes are now in place, and bo
   the page that ships. The JVM has no PDFBox, so this cannot be done inside `render_check`.
 
 **Draw the shape instead of typing it.** `jti_style.tri_down()` is a caret built from
-stacked rectangles; the folder in template B is two rectangles. At 6-8pt no one can tell.
+stacked rectangles; the folder in the eSeries Screen template is two rectangles. At 6-8pt no one can tell.
 
 ### Every `lookupItemFormat: LABEL` field has a `<name>Label` getter — USE IT
 
@@ -601,7 +601,7 @@ a property is not proof the property is the field.
 
 ---
 
-## Shared template B CLIPS the title, subtitle, status and banner captions — not just the header columns
+## The eSeries Screen template CLIPS the title, subtitle, status and banner captions — not just the header columns
 
 *Established 2026-09-09 on `templates/eseries_summary.py`, extending the
 "Template B's DEFAULT two-column header block CLIPS real values" entry above. The earlier
@@ -623,7 +623,7 @@ Note also that `S.text(18, 230, ...)` runs to x=248 while the default `HEADER_CO
 at x=238 — the identity boxes already overlap column one.
 
 **For a case-header-shaped report, start from `case_screen.py`** in
-`OCDA Reports/Case Summary Report/` rather than template B. It is the same screen look and
+`OCDA Reports/Case Summary Report/` rather than the eSeries Screen template. It is the same screen look and
 it has none of these limits: the title box is two lines deep and top-aligned, every info
 value box holds two lines of 8pt, and the flag bars span the full width split *n* ways.
 Copying it into the new report folder is the corpus convention and took one command.

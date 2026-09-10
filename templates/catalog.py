@@ -3,7 +3,7 @@
 The template picker. Show this FIRST, before building anything.
 
     python3 catalog.py            # the menu
-    python3 catalog.py B          # one template in detail
+    python3 catalog.py list       # one template in detail, by name
     python3 catalog.py --preview  # regenerate every sample PDF to look at
 
 Written for someone who does not read Groovy. Pick by what the page looks like, not
@@ -16,12 +16,12 @@ import sys
 HERE = pathlib.Path(__file__).parent
 
 CATALOG = [
-    ("A", "record_summary", "Record Summary",
+    ("record_summary", "Record Summary",
      "Everything about ONE person or case, broken into sections.",
      "Person Summary, Case Summary",
      "A header with the name, a few counts in boxes, then a section per topic - "
      "Address, Telephone, Identification - each with its own columns and a count."),
-    ("B", "eseries_summary", "eSeries Screen",
+    ("eseries_summary", "eSeries Screen",
      "A print copy of an eSeries folder view - it looks like the application.",
      "Case Summary, any folder view someone screenshots",
      "Flag banners, the case title block with its two columns of details, then a "
@@ -30,22 +30,22 @@ CATALOG = [
      "look like that - which is a complete answer, not a fallback. Interactivity "
      "(hover, the Filter box, collapsing a panel, clicking a tab) cannot come "
      "across; every visual thing can."),
-    ("C", "tabular_list", "List",
+    ("tabular_list", "List",
      "A straight list. One row per record, runs over as many pages as it needs.",
      "Payments Report, Past Due Financial Obligations, Age Caseload",
      "Title, the criteria you searched on, then one table. The workhorse - reach "
      "for this unless something below fits better."),
-    ("D", "grouped_summary", "Grouped Summary",
+    ("grouped_summary", "Grouped Summary",
      "A list split into groups, each with a subtotal, and a grand total at the end.",
      "Collections by Agency, Payments by Obligation Type",
      "Same as a List, but banded - 'Tulsa County DA' then its rows then its "
      "subtotal, and so on. Use it whenever someone asks 'broken down by'."),
-    ("E", "statement", "Statement",
+    ("statement", "Statement",
      "A document you hand or send to somebody, not a data dump.",
      "Receipt, Voucher Payee Statement, Depository Ticket",
      "From and To blocks, a document number and date, the amount in large type, "
      "the line items, and a signature line."),
-    ("F", "wide_table", "Wide Table (landscape)",
+    ("wide_table", "Wide Table (landscape)",
      "A List turned sideways for up to nine columns.",
      "VOCA, full payment detail",
      "Only when the columns genuinely will not fit upright - landscape does not "
@@ -55,11 +55,11 @@ CATALOG = [
 
 def menu():
     print("\n  Which one should this report look like?\n")
-    for key, _, title, one_liner, egs, _ in CATALOG:
-        print(f"  {key}.  {title}")
+    for _, title, one_liner, egs, _ in CATALOG:
+        print(f"  {title}")
         print(f"      {one_liner}")
         print(f"      like: {egs}\n")
-    print("  Reply with a letter. `python3 catalog.py B` for more on one of them.")
+    print("  Reply with a name. `python3 catalog.py list` for more on one of them.")
     ex = HERE / "examples"
     if ex.exists():
         print(f"  Rendered examples are already on disk: {ex}\n")
@@ -68,9 +68,9 @@ def menu():
 
 
 def detail(key):
-    for k, mod, title, one_liner, egs, more in CATALOG:
-        if k.upper() == key.upper() or mod == key:
-            print(f"\n  {k}.  {title}   (templates/{mod}.py)\n")
+    for mod, title, one_liner, egs, more in CATALOG:
+        if mod == key or title.lower().startswith(key.lower()):
+            print(f"\n  {title}   (templates/{mod}.py)\n")
             print(f"      {one_liner}\n      {more}\n")
             print(f"      Reports like this: {egs}")
             s = sample(mod)
@@ -100,7 +100,7 @@ def sample(mod):
 
 
 def preview():
-    for _, mod, title, *_ in CATALOG:
+    for mod, title, *_ in CATALOG:
         print(f"  {title} ...")
         subprocess.run(["./render.sh", f"templates/{mod}.py"], cwd=HERE,
                        capture_output=True)

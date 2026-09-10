@@ -1,6 +1,6 @@
 ---
 description: Build an eSeries Jasper report from a JTI house template
-argument-hint: [anything you already know - project, template letter, what the report should do, or a folder-view zip]
+argument-hint: [anything you already know - project, template name, what the report should do, or a folder-view zip]
 allowed-tools: Bash, Read, Write, Edit, Glob, Grep, Skill, AskUserQuestion, Task, SendUserFile
 model: sonnet
 ---
@@ -37,7 +37,7 @@ it is; there is no third option worth a filesystem crawl.
 
 Read `$ARGUMENTS` and any attached file, and answer from it whatever you can.
 **Never ask a question the user has already answered.** A message like
-"OKDAC, template C, payments by agency for a date range" answers three of the four —
+"OKDAC, a grouped summary, payments by agency for a date range" answers three of the four —
 ask only the one that is left.
 
 **An attached picture answers question 3** - a screenshot, a PDF or a report from another
@@ -79,7 +79,7 @@ Bad: `Before we get started, I'd like to understand a bit more about which clien
 report is intended for, since that affects where the files will live.`
 
 Never attach the example **PDFs** - five documents at once buries the question. The
-labelled **PNGs** are the exception and they are REQUIRED at question 3: a letter with no
+labelled **PNGs** are the exception and they are REQUIRED at question 3: a name with no
 picture is not a choice anyone can make. See step 3.
 
 ---
@@ -184,18 +184,20 @@ in the same turn, before the question. Send all six in ONE `SendUserFile` call w
 `display: "render"`, in A-F order:
 
 ```
-${CLAUDE_PLUGIN_ROOT}/templates/examples/labeled/A_JTI_Record_Summary.png
-${CLAUDE_PLUGIN_ROOT}/templates/examples/labeled/B_JTI_ESeries_Summary.png
-${CLAUDE_PLUGIN_ROOT}/templates/examples/labeled/C_JTI_Tabular_List.png
-${CLAUDE_PLUGIN_ROOT}/templates/examples/labeled/D_JTI_Grouped_Summary.png
-${CLAUDE_PLUGIN_ROOT}/templates/examples/labeled/E_JTI_Statement.png
-${CLAUDE_PLUGIN_ROOT}/templates/examples/labeled/F_JTI_Wide_Table.png
+${CLAUDE_PLUGIN_ROOT}/templates/examples/labeled/JTI_Record_Summary.png
+${CLAUDE_PLUGIN_ROOT}/templates/examples/labeled/JTI_ESeries_Summary.png
+${CLAUDE_PLUGIN_ROOT}/templates/examples/labeled/JTI_Tabular_List.png
+${CLAUDE_PLUGIN_ROOT}/templates/examples/labeled/JTI_Grouped_Summary.png
+${CLAUDE_PLUGIN_ROOT}/templates/examples/labeled/JTI_Statement.png
+${CLAUDE_PLUGIN_ROOT}/templates/examples/labeled/JTI_Wide_Table.png
 ```
 
-Each carries its letter in a navy band above the page, so the picture and the option label
-match without the user holding a mapping in their head. **This is the one place six files
+Each carries its NAME in a navy band above the page, so the picture and the option label
+match without the user holding a mapping in their head. **There are no letters** - the menu
+is ordered by what the report sounds like, so a letter and its position disagreed and the
+user had to cross-reference a shifting list. Never reintroduce them. **This is the one place six files
 at once is right** - they are one comparison, not five documents, and asking someone to pick
-between "A - Record Summary" and "B - eSeries Screen" as bare words is asking them to guess.
+between "Record Summary" and "eSeries Screen" as bare words is asking them to guess.
 
 **Then ask with `AskUserQuestion`** so the letters are clickable. Do not print the text
 menu; the catalog output is for you, not them.
@@ -203,32 +205,33 @@ menu; the catalog output is for you, not them.
 **`AskUserQuestion` accepts at most FOUR options.** Six templates plus Custom is seven, so
 they do not fit in one question and an attempt to list them all silently drops the tail -
 that is how the last option went missing the first time this ran. Ask in two steps, and
-only reach the second if they pick the fourth:
+only reach the second if they pick the fourth.
+
+**Put the three that best fit the request first**, and say so plainly in the labels. The
+options are NAMES, never letters.
 
 *First question* - `Which template?`
 
 | Option | Label |
 |---|---|
-| 1 | `A - Record Summary` |
-| 2 | `B - eSeries Screen (looks like the application)` |
-| 3 | `C - List` |
-| 4 | `Something else` — *D Grouped Summary, E Statement, F Wide Table, or send a picture* |
+| 1 | the best fit, e.g. `Record Summary` |
+| 2 | second best, e.g. `eSeries Screen (looks like the application)` |
+| 3 | third, e.g. `List` |
+| 4 | `Something else` — *name the three not shown, or send a picture* |
 
 *Second question, only after `Something else`* - `Which one?`
 
 | Option | Label |
 |---|---|
-| 1 | `D - Grouped Summary` |
-| 2 | `E - Statement` |
-| 3 | `F - Wide Table (landscape)` |
+| 1-3 | the three templates not offered above, by name |
 | 4 | `Custom - I'll send a picture` |
 
 All six previews were already sent above, so both questions are asked against pictures the
 user is already looking at. Order the FIRST question by what the report sounds like - if
 question 4 is already answered and it reads like a grouped total, lead with `C`.
 
-**A screenshot of an eSeries screen is template B, not Custom.** Say so and confirm in one
-line rather than opening the Custom branch - B already is that look, and starting from it is
+**A screenshot of an eSeries screen is the eSeries Screen template, not Custom.** Say so and confirm in one
+line rather than opening the Custom branch - it already is that look, and starting from it is
 faster and safer than composing a layout from primitives.
 
 ### Custom — they send a picture
@@ -268,7 +271,7 @@ Three rules for what comes next:
      user choose.
    - **Charts.** No template produces one.
 
-   Width is a trade-off, not a limit: more columns than fit portrait is what F (landscape)
+   Width is a trade-off, not a limit: more columns than fit portrait is what Wide Table (landscape)
    is for, and past that it is a font-size and column-priority conversation.
 
 4. **"Make it look like the screenshot" is a legitimate and complete answer.** When the user
@@ -281,18 +284,18 @@ Three rules for what comes next:
 
 **Never regenerate a sample to answer this question.** They are rendered and on disk; a
 re-render is slow and nothing about it is per-project. If a template changes, re-render it
-and re-run `templates/label_examples.py`, which restamps every letter from the originals.
+and re-run `templates/label_examples.py`, which restamps every name from the originals.
 
-| | Template | Labelled preview |
-|---|---|---|
-| A | Record Summary | `labeled/A_JTI_Record_Summary.png` |
-| B | eSeries Screen | `labeled/B_JTI_ESeries_Summary.png` |
-| C | List | `labeled/C_JTI_Tabular_List.png` |
-| D | Grouped Summary | `labeled/D_JTI_Grouped_Summary.png` |
-| E | Statement | `labeled/E_JTI_Statement.png` |
-| F | Wide Table (landscape) | `labeled/F_JTI_Wide_Table.png` |
+| Template | Labelled preview |
+|---|---|
+| Record Summary | `labeled/JTI_Record_Summary.png` |
+| eSeries Screen | `labeled/JTI_ESeries_Summary.png` |
+| List | `labeled/JTI_Tabular_List.png` |
+| Grouped Summary | `labeled/JTI_Grouped_Summary.png` |
+| Statement | `labeled/JTI_Statement.png` |
+| Wide Table (landscape) | `labeled/JTI_Wide_Table.png` |
 
-If a folder-view export was supplied, name the letter its shape implies and ask only for
+If a folder-view export was supplied, name the template its shape implies and ask only for
 confirmation.
 
 ## 4. What should the report show?
