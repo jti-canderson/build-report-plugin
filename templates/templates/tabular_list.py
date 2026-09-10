@@ -59,9 +59,9 @@ def build(columns=None, name=None, params=(), title=None, subtitle=None, slug=No
 <band height="74" splitType="Stretch">
 {S.line(0, 0, CW, S.NAVY, 2.0)}
 {S.logo(0, 10, 40, 48)}
-{S.label(52, 14, 96, 8, "Journal Technologies   ·   ")}
-{S.text(148, 14, CW - 148, 8, slug + ".toUpperCase()", size=6, bold=True, color=S.MUTED)}
-{S.text(52, 26, CW - 52, 24, title, size=17, bold=True, color=S.NAVY)}
+{S.label(52, 14, 96, 10, "Journal Technologies   ·   ")}
+{S.text(148, 14, CW - 148, 9, slug + ".toUpperCase()", size=6, bold=True, color=S.MUTED)}
+{S.text(52, 26, CW - 52, 25, title, size=17, bold=True, color=S.NAVY)}
 {S.text(52, 50, CW - 52, 12, subtitle, size=8, color=S.MUTED, stretch=False)}
 </band>
 </title>"""

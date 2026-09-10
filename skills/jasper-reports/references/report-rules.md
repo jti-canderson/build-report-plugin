@@ -39,7 +39,7 @@ K=$(for p in . .. ../.. ../../..; do for b in System/Skills .claude/skills; do
       [ -d "$p/$b/$SK" ] && { echo "$p/$b/$SK"; exit; }; done; done
     [ -d "$HOME/.claude/skills/$SK" ] && echo "$HOME/.claude/skills/$SK")
 S=$K/scripts
-python3 "$S/entity_field.py" county
+python3 "$S/entity_field.py" county payPlan balance   # many names, one pass
 python3 "$S/entity_field.py" payPlan --dir "$MYREPORTS/Entities"
 ```
 

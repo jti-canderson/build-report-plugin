@@ -48,9 +48,9 @@ def build():
 <band height="74" splitType="Stretch">
 {S.line(0, 0, CW, S.NAVY, 2.0)}
 {S.logo(0, 10, 40, 48)}
-{S.label(52, 14, 96, 8, "Journal Technologies   ·   ")}
-{S.text(148, 14, CW - 148, 8, "$F{rptSlug}.toUpperCase()", size=6, bold=True, color=S.MUTED)}
-{S.text(52, 26, CW - 52, 24, "$F{rptTitle}", size=17, bold=True, color=S.NAVY)}
+{S.label(52, 14, 96, 10, "Journal Technologies   ·   ")}
+{S.text(148, 14, CW - 148, 9, "$F{rptSlug}.toUpperCase()", size=6, bold=True, color=S.MUTED)}
+{S.text(52, 26, CW - 52, 25, "$F{rptTitle}", size=17, bold=True, color=S.NAVY)}
 {S.text(52, 50, CW - 52, 12, "$F{rptSubtitle}", size=8, color=S.MUTED)}
 </band>
 </title>"""
@@ -68,8 +68,8 @@ def build():
 <groupExpression><![CDATA[$F{{grp}}]]></groupExpression>
 <groupHeader>
 <band height="24" splitType="Stretch">
-{S.label(0, 4, 120, 8, GROUP_LABEL)}
-{S.text(0, 12, CW - 110, 12, "$F{grp}", size=10, bold=True, color=S.NAVY)}
+{S.label(0, 4, 120, 16, GROUP_LABEL)}
+{S.text(0, 12, CW - 110, 15, "$F{grp}", size=10, bold=True, color=S.NAVY)}
 {S.line(0, 23, CW, S.RULE_HI)}
 </band>
 </groupHeader>
@@ -97,10 +97,10 @@ def build():
     summary = f"""<summary>
 <band height="40" splitType="Stretch">
 {S.line(0, 2, CW, S.NAVY, 1.5)}
-{S.static(xs[0], 8, ws[0] + ws[1], 14, "Grand Total", size=10, bold=True, color=S.NAVY, pad=3)}
-{S.text(xs[2], 8, ws[2], 14, "$V{GrandTotal}", size=10, bold=True, color=S.NAVY,
+{S.static(xs[0], 8, ws[0] + ws[1], 15, "Grand Total", size=10, bold=True, color=S.NAVY, pad=3)}
+{S.text(xs[2], 8, ws[2], 15, "$V{GrandTotal}", size=10, bold=True, color=S.NAVY,
         align="Right", pad=3, pattern=MONEY)}
-{S.static(0, 24, CW, 12, "None recorded.", size=9, color=S.MUTED,
+{S.static(0, 24, CW, 14, "None recorded.", size=9, color=S.MUTED,
           when='$V{REPORT_COUNT} == 0')}
 </band>
 </summary>"""

@@ -57,16 +57,16 @@ TOP_PAD = 4     # and above its first line, so a row does not start flush agains
 def _masthead(META, TILES):
     """Accent rule, the J, eyebrow, title, metadata strip, stat tiles."""
     o = [S.line(0, 0, CW, S.NAVY, 2.0), S.logo(0, 10, 40, 48)]
-    o.append(S.label(52, 14, CW - 52, 8, "Journal Technologies   ·   ", color=S.MUTED))
-    o.append(S.text(52 + 96, 14, CW - 148, 8, "$F{recKicker}.toUpperCase()",
+    o.append(S.label(52, 14, CW - 52, 10, "Journal Technologies   ·   ", color=S.MUTED))
+    o.append(S.text(52 + 96, 14, CW - 148, 12, "$F{recKicker}.toUpperCase()",
                     size=6, bold=True, color=S.MUTED))
-    o.append(S.text(52, 26, CW - 52, 26, "$F{recTitle}",
+    o.append(S.text(52, 26, CW - 52, 28, "$F{recTitle}",
                     size=19, bold=True, color=S.NAVY))
     y = 62
     o.append(S.line(0, y, CW, S.RULE))
     mw = S.widths([1] * len(META))
     for x, w, lbl, i in zip(S.xs_of(mw), mw, META, range(1, len(META) + 1)):
-        o.append(S.label(x, y + 8, w, 8, lbl))
+        o.append(S.label(x, y + 8, w, 12, lbl))
         o.append(S.text(x, y + 18, w, 12, f"$F{{m{i}v}}", size=8, color=S.INK))
     y += 36
     o.append(S.line(0, y, CW, S.RULE))
@@ -76,9 +76,9 @@ def _masthead(META, TILES):
     gap = 10
     for x, w, lbl, i in zip(S.xs_of([v + gap for v in tw]), tw, TILES, range(1, len(TILES) + 1)):
         o.append(S.rect(x, ty, w - gap, TILE_H, S.FILL))
-        o.append(S.text(x + 12, ty + 6, w - 24, 18, f"$F{{t{i}v}}",
+        o.append(S.text(x + 12, ty + 6, w - 24, 22, f"$F{{t{i}v}}",
                         size=15, bold=True, color=S.NAVY))
-        o.append(S.label(x + 12, ty + 26, w - 24, 8, lbl))
+        o.append(S.label(x + 12, ty + 26, w - 24, 9, lbl))
     return f"""<title>
 <band height="{ty + TILE_H + 10}" splitType="Stretch">
 {chr(10).join(o)}
@@ -100,9 +100,9 @@ def _section_header(SECTIONS):
         cols = _cols(sec)
         when = f'$F{{section}}.equals("{key}")'
         inner = [
-            S.static(0, 4, CW - 90, 14, heading.upper(), size=10, bold=True, color=S.NAVY),
+            S.static(0, 4, CW - 90, 15, heading.upper(), size=10, bold=True, color=S.NAVY),
             # entry count, resolved at the end of the group
-            S.text(CW - 90, 6, 90, 10,
+            S.text(CW - 90, 6, 90, 12,
                    '$V{SectionCount} + ($V{SectionCount} == 1 ? " ENTRY" : " ENTRIES")',
                    size=6, bold=True, color=S.MUTED, align="Right",
                    eval_time="Group", eval_group="Section"),

@@ -21,22 +21,31 @@ CATALOG = [
      "Person Summary, Case Summary",
      "A header with the name, a few counts in boxes, then a section per topic - "
      "Address, Telephone, Identification - each with its own columns and a count."),
-    ("B", "tabular_list", "List",
+    ("B", "eseries_summary", "eSeries Screen",
+     "A print copy of an eSeries folder view - it looks like the application.",
+     "Case Summary, any folder view someone screenshots",
+     "Flag banners, the case title block with its two columns of details, then a "
+     "grey bar per panel with that panel's own column grid. Reach for this when "
+     "someone hands you a SCREENSHOT of an eSeries screen and wants the report to "
+     "look like that - which is a complete answer, not a fallback. Interactivity "
+     "(hover, the Filter box, collapsing a panel, clicking a tab) cannot come "
+     "across; every visual thing can."),
+    ("C", "tabular_list", "List",
      "A straight list. One row per record, runs over as many pages as it needs.",
      "Payments Report, Past Due Financial Obligations, Age Caseload",
      "Title, the criteria you searched on, then one table. The workhorse - reach "
      "for this unless something below fits better."),
-    ("C", "grouped_summary", "Grouped Summary",
+    ("D", "grouped_summary", "Grouped Summary",
      "A list split into groups, each with a subtotal, and a grand total at the end.",
      "Collections by Agency, Payments by Obligation Type",
      "Same as a List, but banded - 'Tulsa County DA' then its rows then its "
      "subtotal, and so on. Use it whenever someone asks 'broken down by'."),
-    ("D", "statement", "Statement",
+    ("E", "statement", "Statement",
      "A document you hand or send to somebody, not a data dump.",
      "Receipt, Voucher Payee Statement, Depository Ticket",
      "From and To blocks, a document number and date, the amount in large type, "
      "the line items, and a signature line."),
-    ("E", "wide_table", "Wide Table (landscape)",
+    ("F", "wide_table", "Wide Table (landscape)",
      "A List turned sideways for up to nine columns.",
      "VOCA, full payment detail",
      "Only when the columns genuinely will not fit upright - landscape does not "

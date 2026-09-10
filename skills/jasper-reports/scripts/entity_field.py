@@ -11,6 +11,7 @@ guessing a path costs a full deploy-and-run cycle to disprove.
 
 Usage:
   entity_field.py county                       # search the default Entities directory
+  entity_field.py county payPlan balance       # MANY names in one pass - same cost as one
   entity_field.py payPlan --dir /path/to/Entities
   entity_field.py 'balance|amount' --regex
   entity_field.py --list                       # which entities are documented
@@ -35,7 +36,10 @@ DEFAULT_DIR = os.path.expanduser("~/JaspersoftWorkspace/MyReports/Entities")
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('term', nargs='?', help='field or relation name to look for')
+    # MANY terms in one pass. Opening and text-extracting the PDFs is the whole cost,
+    # so one name and twenty names cost the same - while asking one at a time turned
+    # twenty field questions into twenty turns.
+    ap.add_argument('term', nargs='*', help='field or relation name(s) to look for')
     ap.add_argument('--dir', default=DEFAULT_DIR)
     ap.add_argument('--regex', action='store_true', help='treat term as a regex')
     ap.add_argument('--list', action='store_true', help='list documented entities')
@@ -52,7 +56,8 @@ def main():
     if not args.term:
         sys.exit('Give a search term, or use --list')
 
-    pattern = re.compile(args.term if args.regex else re.escape(args.term), re.I)
+    pattern = re.compile("|".join(args.term if args.regex
+                                  else [re.escape(t) for t in args.term]), re.I)
 
     for path in pdfs:
         lines = []

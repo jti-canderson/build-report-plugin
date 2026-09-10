@@ -134,12 +134,67 @@ def wide_table():
     _w("JTI_Wide_Table", rows)
 
 
+def eseries_summary():
+    """The screenshot this template was built from, plus the awkwardness the screen
+    happened not to show: a long contact line and a long note wrapping in a grid."""
+    head = dict(
+        recTitle="Felony Citation ~ 26-132", recSubtitle="Mick Foley",
+        recStatus="Open", recSlug="Case 26-132",
+        bn1="Sex Offender", bn2="Brady Disclosure",
+        hReceived="07/30/2026", hNext="N/A", hAttorney="N/A", hDefense="N/A",
+        hJurisdiction="Central", hVerticalUnit="Auto Insurance",
+        hRelated="Auto Insurance", hCrimeCategory="Juvenile Probation Violation",
+        hLocation="Acton")
+    body = [
+        ("DEFENDANT", dict(dType="Defendant", dPerson="Foley, Mick",
+                           dContact="132 Here and There, Beverly Hills, CA 90210 [Residence]",
+                           dAppearance="")),
+        ("ASSETS", dict(aDate="09/02/2026", aType="Currency", aName="gsddsfgsdf",
+                        aNumber="", aDescription="sdfg", aMemo="sdfgsdfg")),
+        ("PERSONNEL", dict(pRole="Investigator", pPerson="May, Jake", pStatus="Current",
+                           pAssigned="08/26/2026", pRemoved="")),
+        ("PERSONNEL", dict(pRole="Prosecuting DDA", pPerson="Robbins, Austin",
+                           pStatus="Current", pAssigned="08/20/2026", pRemoved="")),
+        ("PERSONNEL", dict(pRole="Investigator", pPerson="Robbins, Austin",
+                           pStatus="Current", pAssigned="08/26/2026", pRemoved="")),
+        ("PERSONNEL", dict(pRole="Filing DDA [Brady]", pPerson="Sanchez, Alma",
+                           pStatus="Current", pAssigned="08/19/2026", pRemoved="")),
+        ("PERSONNEL", dict(pRole="Event DDA", pPerson="Svensson, Beck", pStatus="Current",
+                           pAssigned="08/21/2026", pRemoved="")),
+        ("CASENUMBERS", dict(nType="Filing DR #", nNumber="1234",
+                             nAgency="Whittier Police Dept.", nActive="", nLead="")),
+        ("STATUSHISTORY", dict(sStatus="Queued", sBegin="07/30/2026", sEnd="08/25/2026",
+                               sNote="")),
+        ("STATUSHISTORY", dict(sStatus="Closed", sBegin="08/25/2026", sEnd="08/25/2026",
+                               sNote="Closed at filing review; see the conviction "
+                                     "integrity note for the full history.")),
+        ("REVIEW", dict(rType="Conviction Integrity", rContent="dasddfas",
+                        rStatus="Complete", rDate="08/05/2026")),
+    ]
+    keys = ["section", "recTitle", "recSubtitle", "recStatus", "recSlug", "bn1", "bn2",
+            "hReceived", "hNext", "hAttorney", "hDefense", "hJurisdiction",
+            "hVerticalUnit", "hRelated", "hCrimeCategory", "hLocation",
+            "dType", "dPerson", "dContact", "dAppearance",
+            "aDate", "aType", "aName", "aNumber", "aDescription", "aMemo",
+            "pRole", "pPerson", "pStatus", "pAssigned", "pRemoved",
+            "nType", "nNumber", "nAgency", "nActive", "nLead",
+            "sStatus", "sBegin", "sEnd", "sNote",
+            "rType", "rContent", "rStatus", "rDate"]
+    rows = []
+    for sec, vals in body:
+        r = {k: "" for k in keys}
+        r.update(head); r["section"] = sec; r.update(vals)
+        rows.append(r)
+    _w("JTI_ESeries_Summary", rows)
+
+
 BUILDERS = {
     "JTI_Record_Summary": record_summary,
     "JTI_Tabular_List": tabular_list,
     "JTI_Grouped_Summary": grouped_summary,
     "JTI_Statement": statement,
     "JTI_Wide_Table": wide_table,
+    "JTI_ESeries_Summary": eseries_summary,
 }
 
 if __name__ == "__main__":

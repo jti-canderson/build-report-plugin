@@ -124,6 +124,7 @@ def text(x, y, w, h, expr, *, style=None, align="Left", valign="Middle",
 def static(x, y, w, h, label, *, style=None, align="Left", valign="Middle",
            size=None, bold=False, color=None, font=FONT, pad=0, when=None):
     _fits(h, size, label)
+    _winansi(label)
     return f"""<staticText>
 {_re(x, y, w, h, style=style, when=when, forecolor=color)}
 {_box(pad)}<textElement textAlignment="{align}" verticalAlignment="{valign}">
@@ -139,6 +140,25 @@ def rect(x, y, w, h, fill, *, when=None, radius=0, grow=False):
      stretch_type="RelativeToBandHeight" if grow else None)}
 <graphicElement><pen lineWidth="0.0" lineColor="{fill}"/></graphicElement>
 </rectangle>"""
+
+
+def tri_down(x, y, w, h, color, *, when=None):
+    """A downward triangle, DRAWN as stacked rectangles.
+
+    Every caret/arrow/triangle character is outside WinAnsi and vanishes from the PDF
+    (see _winansi), so a UI-style caret has to be drawn. At 6-8pt the stair-stepping is
+    not visible; what IS visible is the empty gap you get from typing one.
+    """
+    rows = max(2, int(h))
+    o = []
+    for i in range(rows):
+        # jrxml coordinates are INTEGERS - a float x or width fails the parse with
+        # NumberFormatException, not a validation warning.
+        rw = int(round(w * (rows - i) / float(rows)))
+        if rw < 1:
+            break
+        o.append(rect(int(x + (w - rw) // 2), int(y + i), rw, 1, color, when=when))
+    return "\n".join(o)
 
 
 def line(x, y, w, color=RULE, weight=0.5, *, when=None, at_bottom=False):
@@ -177,8 +197,51 @@ def label(x, y, w, h, txt, **kw):
 
 
 # ------------------------------------------------------------------ internals
-MIN_LEAD = 1.2   # a line box shorter than this x the font size prints NOTHING
+# A line box shorter than this x the font size prints NOTHING.
+#
+# Was 1.2, which is what a LOCAL render tolerates - and that is the trap, because the
+# threshold is a property of the JasperReports build and fonts doing the rendering, not of
+# the .jrxml. Measured against a real server run (Case Summary Report on
+# eh-team-config-symphony.logan-symphony.com, 09/03/2026, page read directly):
+#
+#     ratio 1.67 (column headers)  rendered        ratio 1.33 (meta + tile labels)  BLANK
+#     ratio 1.50 (meta values)     rendered        ratio 1.20 (tile numbers)        BLANK
+#     ratio 1.37 (record title)    rendered
+#
+# So the server's real cutoff sits between 1.33 and 1.37 while the local one sits below 1.20.
+# Every static label in the masthead cleared the old guard, passed the local geometry check,
+# and then printed blank in production - the report lost its entire metadata label row and
+# both lines of every stat tile, with no error anywhere. 1.45 puts the guard on the far side
+# of the observed cutoff with margin; raise it, do not lower it.
+MIN_LEAD = 1.45
 CAP_EM = 0.62    # approx width of one UPPERCASE bold SansSerif char, in ems
+
+
+def _winansi(txt):
+    """A character outside WinAnsi is DROPPED SILENTLY at PDF export - no error, no
+    placeholder, an empty cell. Refuse to generate one.
+
+    Established 2026-09-04, and the reason this guard exists rather than a note: the
+    LOCAL RASTER DOES NOT SHOW IT. render_check.groovy rasterises with
+    JasperPrintManager.printPageToImage, which draws through AWT and renders ANY glyph
+    the JVM font has. The PDF is exported through WinAnsi and drops it. So a glyph can
+    be plainly visible in the PNG a human is shown and absent from the document that
+    ships. Verified by extracting text from the PDF itself: U+25BC, U+25BE, U+2304 and
+    U+2207 all appear in the raster and are simply GONE in the PDF, alongside the
+    emoji (U+1F53D, U+1F4C1, U+1F4CD) that at least fail visibly in both.
+
+    Safe: U+2022 bullet, U+2013 en dash, U+2014 em dash, U+00B7 middle dot.
+    Not safe: every arrow, triangle, caret, check, funnel and emoji. DRAW those - see
+    templates/eseries_summary.py, where the folder and the carets are rectangles.
+    """
+    try:
+        txt.encode("windows-1252")
+    except UnicodeEncodeError as e:
+        bad = txt[e.start:e.end]
+        raise ValueError(
+            f"{bad!r} (U+{ord(bad[0]):04X}) is outside WinAnsi and is DROPPED SILENTLY "
+            f"at PDF export - it will be visible in the local PNG and absent from the "
+            f"PDF: {txt!r}. Draw the shape instead of typing it.")
 
 
 def _fits_width(w, size, txt, pad):

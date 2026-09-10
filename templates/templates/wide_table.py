@@ -62,9 +62,9 @@ def build():
 <band height="62" splitType="Stretch">
 {S.line(0, 0, CW, S.NAVY, 2.0)}
 {S.logo(0, 8, 34, 40)}
-{S.label(44, 12, 96, 8, "Journal Technologies   ·   ")}
-{S.text(140, 12, 300, 8, "$F{rptSlug}.toUpperCase()", size=6, bold=True, color=S.MUTED)}
-{S.text(44, 22, CW - 300, 22, "$F{rptTitle}", size=16, bold=True, color=S.NAVY)}
+{S.label(44, 12, 96, 10, "Journal Technologies   ·   ")}
+{S.text(140, 12, 300, 9, "$F{rptSlug}.toUpperCase()", size=6, bold=True, color=S.MUTED)}
+{S.text(44, 22, CW - 300, 24, "$F{rptTitle}", size=16, bold=True, color=S.NAVY)}
 {S.text(CW - 292, 26, 292, 12, "$F{rptSubtitle}", size=8, color=S.MUTED, align="Right")}
 </band>
 </title>"""
@@ -95,10 +95,10 @@ def build():
     summary = f"""<summary>
 <band height="38" splitType="Stretch">
 {S.line(0, 2, CW, S.NAVY, 1.5)}
-{S.static(0, 8, 200, 14, "Grand Total", size=10, bold=True, color=S.NAVY, pad=3)}
+{S.static(0, 8, 200, 15, "Grand Total", size=10, bold=True, color=S.NAVY, pad=3)}
 {S.text(tx, 8, tw, 14, "$V{GrandTotal}", size=9, bold=True, color=S.NAVY,
         align="Right", pad=3, pattern=MONEY)}
-{S.static(0, 24, CW, 12, "None recorded.", size=9, color=S.MUTED,
+{S.static(0, 24, CW, 14, "None recorded.", size=9, color=S.MUTED,
           when='$V{REPORT_COUNT} == 0')}
 </band>
 </summary>"""

@@ -45,24 +45,24 @@ def build():
 <band height="196" splitType="Stretch">
 {S.line(0, 0, CW, S.NAVY, 2.0)}
 {S.logo(0, 12, 40, 48)}
-{S.text(52, 20, 260, 22, "$F{rptTitle}", size=18, bold=True, color=S.NAVY)}
-{S.label(CW - 200, 18, 90, 8, "Document No.", align="Right")}
-{S.text(CW - 200, 28, 90, 12, "$F{docNo}", size=9, color=S.INK, align="Right")}
-{S.label(CW - 100, 18, 100, 8, "Date", align="Right")}
-{S.text(CW - 100, 28, 100, 12, "$F{docDate}", size=9, color=S.INK, align="Right")}
+{S.text(52, 20, 260, 28, "$F{rptTitle}", size=18, bold=True, color=S.NAVY)}
+{S.label(CW - 200, 18, 90, 14, "Document No.", align="Right")}
+{S.text(CW - 200, 28, 90, 14, "$F{docNo}", size=9, color=S.INK, align="Right")}
+{S.label(CW - 100, 18, 100, 14, "Date", align="Right")}
+{S.text(CW - 100, 28, 100, 14, "$F{docDate}", size=9, color=S.INK, align="Right")}
 {S.line(0, 68, CW, S.RULE)}
-{S.label(0, 78, half, 8, "From")}
-{S.text(0, 90, half, 12, "$F{fromName}", size=9, bold=True, color=S.INK)}
+{S.label(0, 78, half, 14, "From")}
+{S.text(0, 90, half, 14, "$F{fromName}", size=9, bold=True, color=S.INK)}
 {S.text(0, 104, half, 26, "$F{fromAddr}", size=8, color=S.MUTED, valign="Top", stretch=True)}
-{S.label(CW - half, 78, half, 8, "To")}
-{S.text(CW - half, 90, half, 12, "$F{toName}", size=9, bold=True, color=S.INK)}
+{S.label(CW - half, 78, half, 14, "To")}
+{S.text(CW - half, 90, half, 14, "$F{toName}", size=9, bold=True, color=S.INK)}
 {S.text(CW - half, 104, half, 26, "$F{toAddr}", size=8, color=S.MUTED, valign="Top", stretch=True)}
 {S.line(0, 140, CW, S.RULE)}
 {S.rect(0, 150, CW, 40, S.FILL)}
-{S.text(14, 160, 180, 8, "$F{totalLabel}.toUpperCase()", size=6, bold=True, color=S.MUTED)}
-{S.text(14, 168, 180, 20, "$F{totalValue}", size=14, bold=True, color=S.NAVY)}
-{S.text(CW - 214, 160, 200, 8, "$F{methodLabel}.toUpperCase()", size=6, bold=True, color=S.MUTED, align="Right")}
-{S.text(CW - 214, 170, 200, 14, "$F{methodValue}", size=10, color=S.INK, align="Right")}
+{S.text(14, 160, 180, 9, "$F{totalLabel}.toUpperCase()", size=6, bold=True, color=S.MUTED)}
+{S.text(14, 168, 180, 21, "$F{totalValue}", size=14, bold=True, color=S.NAVY)}
+{S.text(CW - 214, 160, 200, 9, "$F{methodLabel}.toUpperCase()", size=6, bold=True, color=S.MUTED, align="Right")}
+{S.text(CW - 214, 170, 200, 15, "$F{methodValue}", size=10, color=S.INK, align="Right")}
 </band>
 </title>"""
 
@@ -87,10 +87,10 @@ def build():
 
     summary = f"""<summary>
 <band height="70" splitType="Stretch">
-{S.static(0, 8, CW, 12, "None recorded.", size=9, color=S.MUTED,
+{S.static(0, 8, CW, 14, "None recorded.", size=9, color=S.MUTED,
           when='$V{REPORT_COUNT} == 0')}
 {S.line(CW - 240, 46, 220, S.RULE_HI)}
-{S.label(CW - 240, 50, 220, 8, "Authorised Signature")}
+{S.label(CW - 240, 50, 220, 9, "Authorised Signature")}
 </band>
 </summary>"""
 

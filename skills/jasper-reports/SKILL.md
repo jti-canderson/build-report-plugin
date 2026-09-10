@@ -49,7 +49,14 @@ A green run is not "it works". Say both halves when you report back. See
 
 ## The references
 
-Read the one you need. You rarely need more than one or two.
+Read the one you need. You rarely need more than one or two — reading all of them is not
+thoroughness, it is 1900 lines of standing context crowding out the report.
+
+**Read them in one call, not several:**
+
+```bash
+python3 "$PLUGIN/scripts/refs.py" model-facts criteria-api     # or --list
+```
 
 | File | Read it when |
 |---|---|

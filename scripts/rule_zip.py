@@ -33,6 +33,7 @@ import sys, os, re, argparse
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, '..', 'skills', 'report-deployment', 'scripts'))
 import rule_import
+import contract_docs
 
 # journalLogo is the masthead image, supplied by the template's own defaultValueExpression.
 # It is never a launch input and never appears on the rule.
@@ -67,6 +68,7 @@ def main():
     ap.add_argument('--category', default='Reports')
     ap.add_argument('--url', default='')
     ap.add_argument('--out')
+    ap.add_argument('--template', default='')
     ap.add_argument('-h', '--help', action='store_true')
     a = ap.parse_args()
     if a.help:
@@ -109,6 +111,16 @@ def main():
         print(f"  input  {p['name']:22} {p['className']:24} {p['type']}")
     for p in outputs:
         print(f"  output {p['name']:22} {p['className']:24} {p['type']}")
+    # The two text files are a restatement of the tables above, so they are written from the
+    # same parse rather than retyped. Human notes in each survive regeneration - see
+    # contract_docs.py; finish.sh re-runs this on every iteration.
+    present = SELF_SUPPLIED & set(re.findall(r'<parameter\\s+name="([^"]+)"',
+                                            open(a.jrxml, encoding='utf8').read()))
+    reg, con = contract_docs.write(out_dir, meta, inputs, outputs, present, a.jrxml, a.template)
+    for f in (reg, con):
+        print(f"  wrote  {os.path.basename(f)}")
+    print("\n  Fill the NOTES block in each - the generated part is the mechanical half only.")
+
     print("\n  IMPORTING IS A WRITE - hand this to the user; do not import it yourself.")
 
 
