@@ -122,6 +122,7 @@ def main():
     print("\n  Fill the NOTES block in each - the generated part is the mechanical half only.")
 
     print("\n  IMPORTING IS A WRITE - hand this to the user; do not import it yourself.")
+    print('  Send it with SendUserFile display:"attach" - it is a download, not a preview.')
 
 
 if __name__ == '__main__':

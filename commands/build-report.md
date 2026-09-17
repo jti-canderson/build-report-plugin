@@ -211,7 +211,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/templates/catalog.py"
 
 **ALWAYS send the six labelled previews first, then ask.** Not on request - every time,
 in the same turn, before the question. Send all six in ONE `SendUserFile` call with
-`display: "render"`, in A-F order:
+`display: "render"`, in the order below:
 
 ```
 ${CLAUDE_PLUGIN_ROOT}/templates/examples/labeled/JTI_Record_Summary.png
@@ -483,7 +483,26 @@ what an empty input means, which fields belong to which section, and above all *
 proven**. Fill them before the handoff — an unfilled `TODO` block shipping to a deployer is
 worse than no file.
 
-Hand the zip to the user. **Never import it yourself** - importing is a write.
+### Hand the three files over as DOWNLOADS, not previews
+
+Send them in ONE `SendUserFile` call with **`display: "attach"`**:
+
+```
+<Report Name>/<rule>.groovy
+<Report Name>/<report>.jrxml
+<Report Name>/RULE-<Code>.zip
+```
+
+`attach` gives a download card. **Omitting `display` lets the client decide by file type,
+and it previews the zip in the in-app browser instead** - which is useless, because the
+whole point of these three is that they leave this machine: the zip gets imported into
+eSeries, the other two get attached to a ticket or opened in Studio. A file you can only
+look at inside the chat has not been delivered. Reported 09/17.
+
+Use `display: "render"` only for things meant to be LOOKED at here - the template previews
+at question 3, and the rendered report pages. Never for a deliverable.
+
+**Never import the zip yourself** - importing is a write.
 
 ## Report back
 

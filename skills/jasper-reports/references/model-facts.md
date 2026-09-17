@@ -790,3 +790,79 @@ on it, so a null matches neither and the row vanishes silently.
 a fixture had a right-aligned money column next to a left-aligned one. Put a
 right-aligned column, a name long enough to wrap, and a full date-plus-time string in
 every fixture — the defects these catch are all silent ones.
+
+---
+
+## FINANCIALS, corrected: there is a `-1L` LONG sentinel too, so "every `*Cents` getter is real" is FALSE
+
+*Established 2026-09-17 by `javap -c` against `ecourt-sdk-local-2026-09-17.jar` while
+building `OKDAC Reports/Case Financials` from the FV-CaseObligations export. This
+CORRECTS three claims in the 2026-09-10 FINANCIALS entry above, which was measured on the
+2026-09-02 jar. Where the two disagree, believe this one for the 09-17 jar and re-measure
+before trusting either on a third.*
+
+The 09-10 entry established the `ldc2_w -1.0d / dreturn` double sentinel and concluded
+**"every `*Cents` getter is real"**. That second half does not hold. There is a **`ldc2_w
+-1l` LONG sentinel** as well, and it lands squarely on cents getters:
+
+| Sentinel | Getters |
+|---|---|
+| `double -1.0d` | `Invoice.getAmount/getBalance`, `Restitution.getAmount/getOutstandingAmount`, `PayPlan.getBalance/getPayPlanAmount`, `Installment.getBalance/getAmount`, `MonInstrument.getAmount`, `PaymentInvoice.getAmount`, **`Case.getInvoicesBalance`** |
+| **`long -1l`** | **`PayPlan.getBalanceCents`, `PayPlan.getPastDueAmountCents`, `Installment.getAmountPaidCents`, `Installment.getBalanceCents`, `Installment.getPastDueAmountCents`, `Receipt.getTotalAmountCents`, `TrustTransaction.getAmountSignedCents`** |
+
+Genuinely real (`aload_0/getfield`): `Invoice.amountCents/balanceCents/paidCents`,
+`Restitution.amountCents/balanceCents/paidCents`, `Installment.amountCents`,
+`InstallmentPayment.amountCents`, `InstallmentTrustPayment.amountCents`,
+`MonInstrument.amountCents`, `PaymentInvoice.amountCents`, `TrustTransaction.amountCents`.
+
+**Three corrections to the 09-10 entry, each of which would have shipped a wrong number:**
+
+- **`Case.getInvoicesBalance()` is a `-1.0d` stub.** The 09-10 entry lists it under
+  "confirmed real and useful". It is not. A case-balance header sourced from it prints
+  `-$1.00`.
+- **`Receipt.getTotalAmountCents()` returns `-1l`** rather than being absent. Same
+  practical advice (sum the `MonInstrument`s) but the failure mode is a plausible number,
+  not a blank.
+- **`Restitution.getBalanceCents()` is REAL**, so outstanding restitution is a direct read;
+  no need to compute `amountCents - paidCents`. And `Restitution` lives in
+  **`com.sustain.cases.model`**, not `com.sustain.financial.model` — a `javap` against the
+  guessed package prints nothing and reads exactly like "the class does not exist".
+
+**The rule that survives all of it: reject `-1` on EVERY money read, long and double
+alike, and never test for null alone.**
+
+```groovy
+def cents = { o, String n ->          // returns null, never -1
+    def v = safe(o, n); if (v == null) return null
+    long l; try { l = ((Number) v).longValue() } catch (ignored) { return null }
+    return (l == -1L) ? null : Long.valueOf(l)
+}
+```
+
+`PayPlan` has **no readable amount of any kind** — sum its installments. `Installment` has
+only `amountCents` — its paid figure sums `installmentPayments` + `installmentTrustPayments`.
+
+### `sdk_fields.py` REPORTS THESE SENTINELS AS `field-backed` — do not trust it on money
+
+This is the dangerous half. Asked about `Installment.balance`, `PayPlan.payPlanAmount` or
+`Receipt.totalAmountCents`, `scripts/sdk_fields.py` prints **`field-backed`** — the verdict
+that means "the getter returns the stored field". `javap -c` on the same method prints
+`ldc2_w -1.0d / dreturn`. The tool's classifier evidently does not recognise the sentinel
+form, so **the one verdict that should warn you reads as the all-clear.**
+
+`sdk_fields.py` remains right for "does this name exist, and where is it declared", which
+is what it is for. For any getter whose value is MONEY, confirm with `javap -c` before
+reading it. The batch form costs one call:
+
+```bash
+JAVAP=/Applications/jasperreports-server-9.0.0/java/bin/javap
+$JAVAP -c -p -cp "$JAR" com.sustain.financial.model.Invoice | grep -A4 ' getBalance();'
+```
+
+### cliphunt has a THIRD blind spot: static column HEADINGS
+
+Extending the two recorded above. cliphunt matches **fixture values** against the page, and
+a column heading is a `S.static()`, not a field — so a heading clipped by its own column is
+invisible to it. On this build the heading `Charge` printed as `Charg` through a completely
+green gate, and only reading the rendered page found it. **Look at the headings, every
+time.** A narrow right-hand column with a word longer than its digits is the usual shape.
