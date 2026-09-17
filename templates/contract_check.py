@@ -4,7 +4,9 @@ Diff a Groovy rule against its .jrxml. Run it before every deploy.
 
     python3 contract_check.py <rule>.groovy <report>.jrxml
 
-Three ways a report goes wrong in silence, all of them a set difference:
+FIRST, the one that is not a set difference at all: does the rule assign `_data`? Without
+it the report produces no output and eSeries refuses the run outright. Then three ways a
+report goes wrong in silence, all of them a set difference:
 
   declared but not emitted   the column prints blank, and nothing errors
   emitted but not declared   the rule computed data the page throws away. A WARNING
@@ -48,6 +50,21 @@ def check(rule_path, jrxml_path):
     placed = set(re.findall(r'\$F\{([A-Za-z0-9_]+)\}', jr))
     prm = set(re.findall(r'<parameter name="([^"]+)"', jr)) - {"journalLogo"}
 
+    # THE OUTPUT. Everything else on this page is about which columns fill; this is
+    # about whether the report produces anything at all. eSeries reads the output as
+    # `_data`, so a rule ending `data = rows` - one character short - assigns an ordinary
+    # Groovy local, the engine finds no output, and the run dies with
+    # MissingOutputsRuleException. Nothing else in the pipeline looks at it: the renderer
+    # fills from a hand-written fixture and never executes the rule, and rule_zip.py emits
+    # the `data` output row unconditionally. Shipped once, 09/17, in Case Financials.
+    #
+    # Comments and strings are stripped first so a `_data` that only appears in the header
+    # block does not count as an assignment.
+    body = re.sub(r'/\*.*?\*/', ' ', rule, flags=re.S)
+    body = re.sub(r'//[^\n]*', ' ', body)
+    body = re.sub(r'"[^"\n]*"|\'[^\'\n]*\'', ' ', body)
+    assigns_data = bool(re.search(r'^\s*_data\s*=[^=]', body, re.M))
+
     blank = sorted(decl - emits)
     lost = sorted(emits - decl)
     dead = sorted(decl - placed)
@@ -60,6 +77,11 @@ def check(rule_path, jrxml_path):
     print(f"        {len(emits)} keys emitted, {len(decl)} fields declared, "
           f"{len(placed)} placed, {len(prm)} parameters")
     ok = True
+    if not assigns_data:
+        print("  FAIL  the rule never assigns _data - it produces NO OUTPUT.")
+        print("        eSeries fails the run with MissingOutputsRuleException before any")
+        print("        page is drawn. Check for `data = rows` missing its underscore.")
+        ok = False
     for lbl, items, fatal in (
             ("declared but NOT emitted (prints blank)", blank, True),
             ("emitted but NOT declared (data discarded, or just a local)", lost, False),
@@ -70,7 +92,7 @@ def check(rule_path, jrxml_path):
             print(f"  {'FAIL' if fatal else 'warn'}  {lbl}: {items}")
             ok = ok and not fatal
     if ok and not (blank or lost or dead or pmiss or pextra):
-        print("  OK    contract is exact on all three axes")
+        print("  OK    _data assigned; contract is exact on all three axes")
     return 0 if ok else 1
 
 
