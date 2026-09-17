@@ -67,6 +67,11 @@ python3 "${CLAUDE_PLUGIN_ROOT}/skills/jasper-reports/scripts/formexport.py" <the
 next step in the same turn, and never put two questions in one message - it reads as one
 question and the first gets answered while the second is silently dropped.
 
+**That includes two `AskUserQuestion` questions in one call.** The call accepts four, and
+they render as four prompts the user answers all at once - correct for four different
+questions, wrong for one question split in half. A list longer than the four-option cap is
+asked as a SEQUENCE, never as parallel prompts. See question 1.
+
 **Anything with a fixed set of answers uses `AskUserQuestion`, so the user clicks instead
 of typing.** That means question 1 (project) and question 3 (template) ALWAYS. Only
 question 4 is free text.
@@ -90,10 +95,35 @@ picture is not a choice anyone can make. See step 3.
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/project.py" list
 ```
 
-`AskUserQuestion`: the existing projects as options, plus **New project**. Wait for the
-click. **Never skip this and never infer it** — not from an attachment's folder, not from
-the environment named in an export, not from the report's subject. Those identify the
-SOURCE; the project is where the work should LAND, and only the user knows that.
+`AskUserQuestion`. **Never skip this and never infer it** — not from an attachment's
+folder, not from the environment named in an export, not from the report's subject. Those
+identify the SOURCE; the project is where the work should LAND, and only the user knows that.
+
+**The FOUR-option cap applies here too.** It is documented at question 3 for the templates
+and it bites just as hard on a workspace with five projects plus **New project**. Handle it
+the same way — and read the rule below before improvising, because the obvious improvisation
+is the one that already went wrong.
+
+- **Four or fewer** (projects + New project): one question, all of them.
+- **More than four:** the three most likely, then `Something else`. Ask the second question
+  ONLY if they pick it, in its own message, listing the rest plus **New project**.
+
+Order the three by what the request already tells you — the client or environment named in
+`$ARGUMENTS` or an attached export, otherwise the project holding the most reports. The
+free-text **Other** box is always there, so someone whose project is not in the three can
+simply type it.
+
+### NEVER split one question across two questions in one call
+
+`AskUserQuestion` takes up to four QUESTIONS, and it presents them all at once, each
+expecting its own answer. That is for genuinely different questions. Splitting a single
+list — "Which project?" and "Which project? (more options)" — produces two prompts the user
+must both answer, so they pick one project in each and neither is wrong. You then have two
+different answers to a question with one right answer, and you have to ask a third time.
+Happened 09/17: the list came back `OKDAC Reports` and `Test Builds`.
+
+A list too long for one question is a SEQUENCE — question, wait, then a follow-up only if
+needed — never two parallel prompts.
 
 The list prints the root it resolved and why. If a project the user expects is missing, the
 ROOT is wrong — say so and stop; do not offer to create a replacement folder.
