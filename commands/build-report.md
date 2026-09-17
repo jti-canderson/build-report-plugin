@@ -506,6 +506,15 @@ at question 3, and the rendered report pages. Never for a deliverable.
 
 ## Report back
 
+**Say where the files are, on the first line.** They were written to
+`<project>/<Report Name>/` as they were built - that folder IS the delivery, and a handoff
+that does not name it sends the user hunting for a download button for files already
+sitting on their disk. Happened 09/17.
+
+```
+OKDAC Reports/Case Financials/   -  .groovy, .jrxml, RULE-<Code>.zip
+```
+
 Pages first, then a short list of what needs the user's decision. Keep it brief — the
 detail belongs in `HANDOFF.md`, not in the message.
 
