@@ -44,12 +44,71 @@ class ${ROOT} {
     static Long FIXTURE_ID
     static Object get(Long id) { id == FIXTURE_ID ? FIXTURE : null }
     static Object get(Object cls, Long id) { get(id) }   // the two-arg form some entities need
+    // The platform hands ids over as Strings, and rules call Case.get(str(_CaseId)).
+    static Object get(String id) { get(id?.isLong() ? id.toLong() : -1L) }
 }
-""", "${ROOT}.groovy")
+""", "\${ROOT}.groovy")
+
+// The platform API a search rule reaches for. Without these the rule does not COMPILE
+// off-platform, so nothing runs and the only gates left are text inspection - which is how
+// a rule that never assigned _data shipped on 09/17.
+//
+// These are stubs with the real SHAPES, not the real behaviour: find() returns whatever the
+// fixture put in SEARCH_RESULTS, getLabel() echoes the code. That is enough to prove the
+// rule executes, produces _data, and survives an empty result - and it proves NOTHING about
+// whether a traversal resolves. Only eSeries settles that; say so when reporting.
+//
+// The addX list is the one attested in production (references/criteria-api.md). A rule
+// calling something absent here fails loudly, which is the right outcome: an unattested
+// criteria method is a finding, not a convenience to paper over.
+gcl.parseClass("""
+class Where {
+    List conditions = []
+    private Where rec(String op, Object... a) { conditions << [op: op, args: a as List]; this }
+    Where addEquals(Object... a)              { rec('addEquals', a) }
+    Where addNotEquals(Object... a)           { rec('addNotEquals', a) }
+    Where addIn(Object... a)                  { rec('addIn', a) }
+    Where addNotIn(Object... a)               { rec('addNotIn', a) }
+    Where addContains(Object... a)            { rec('addContains', a) }
+    Where addLessThan(Object... a)            { rec('addLessThan', a) }
+    Where addLessThanOrEquals(Object... a)    { rec('addLessThanOrEquals', a) }
+    Where addGreaterThan(Object... a)         { rec('addGreaterThan', a) }
+    Where addGreaterThanOrEquals(Object... a) { rec('addGreaterThanOrEquals', a) }
+    Where addDateRange(Object... a)           { rec('addDateRange', a) }
+    Where addDayRange(Object... a)            { rec('addDayRange', a) }
+    Where addIsNull(Object... a)              { rec('addIsNull', a) }
+    Where addIsNotNull(Object... a)           { rec('addIsNotNull', a) }
+    Where addOrderBy(Object... a)             { rec('addOrderBy', a) }
+    Where setMaxResults(Object... a)          { rec('setMaxResults', a) }
+}
+class DomainObject {
+    static List SEARCH_RESULTS = []
+    static List find(Object... a) { SEARCH_RESULTS }
+    static Object get(Object... a) { SEARCH_RESULTS ? SEARCH_RESULTS[0] : null }
+}
+class LookupItem {
+    // Echo the code. A label that differs from its code would make a fixture look right
+    // for the wrong reason.
+    static String getLabel(String list, String code) { code }
+    static String getLabel(Object... a) { a ? a[-1]?.toString() : null }
+}
+class DateUtil {
+    static Date addDays(Date d, int n) {
+        if (d == null) return null
+        def c = Calendar.getInstance(); c.setTime(d); c.add(Calendar.DATE, n); c.getTime()
+    }
+    static Date addDays(Object d, Object n) { addDays((Date) d, n as int) }
+}
+""", "PlatformStubs.groovy")
 
 def fb = new Binding()
 new GroovyShell(gcl, fb).evaluate(new File(argv.fixture))
 def fixture = fb.getVariable('ROOT_FIXTURE')
+// A search rule gets its rows from DomainObject.find. The fixture may set SEARCH_RESULTS;
+// default to the root fixture itself so a single-record rule and a search rule both run.
+def searchResults = fb.hasVariable('SEARCH_RESULTS') ? fb.getVariable('SEARCH_RESULTS')
+                                                     : (fixture ? [fixture] : [])
+gcl.loadClass('DomainObject').SEARCH_RESULTS = searchResults
 rootClass.FIXTURE = fixture
 rootClass.FIXTURE_ID = ID as Long
 

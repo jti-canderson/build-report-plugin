@@ -37,6 +37,37 @@ echo "== 1/4  contract =========================================="
 python3 "$ROOT/templates/contract_check.py" "$RULE" "$JRXML" || fail 1 "the rule and the layout disagree"
 
 echo
+echo "== 1.5/4  rule executes ==================================="
+# THE GATE THAT WAS MISSING. Everything else inspects TEXT - columns against fields,
+# parameters against reads - and a rule that never assigned _data passed all of it and died
+# on first use in eSeries (09/17). This RUNS the rule against a stub object graph and reads
+# _data back out of the binding, so "produces no output" fails here instead of in front of
+# a user.
+#
+# It proves the rule executes, returns rows, that every value is a String (a GString reaching
+# a Jasper field is not), and that an unresolvable id still yields a page. It proves NOTHING
+# about whether a traversal resolves - the fixture answers every property. Only eSeries
+# settles that.
+FX=verification/Fixture.groovy
+if [ -f "$FX" ]; then
+  SK="$ROOT/skills/jasper-reports"
+  JRS="${JRS:-/Applications/jasperreports-server-9.0.0}"
+  RC="$JRS/buildomatic/lib/groovy-3.0.13.jar:$JRS/apache-tomcat/webapps/jasperserver-pro/WEB-INF/lib/*"
+  rlog=$(mktemp); rrc=0
+  "$JRS/java/bin/java" -Djava.awt.headless=true -cp "$RC" groovy.ui.GroovyMain \
+    "$SK/scripts/rulecheck.groovy" --rule "$RULE" --jrxml "$JRXML" --fixture "$FX" \
+    >"$rlog" 2>&1 || rrc=$?
+  grep -vE '^\s+at |^\s+\.\.\. |log4j|SLF4J|Illegal reflective|^$' "$rlog" || true
+  rm -f "$rlog"
+  [ $rrc -eq 0 ] || fail 1.5 "the rule did not execute cleanly"
+else
+  echo "  NO verification/Fixture.groovy - the rule was NOT executed, only inspected."
+  echo "  Scaffold one, or copy the pattern from a recent report. A rule that is never run"
+  echo "  can still fail on its first use in eSeries."
+  RULE_NOT_RUN=1
+fi
+
+echo
 echo "== 2/4  render ============================================"
 if [ -x ./verification/run.sh ]; then
   ./verification/run.sh render || fail 2 "the jrxml did not compile or fill"
@@ -76,6 +107,7 @@ for f in "$RULE" "$JRXML" RULE-*.zip RULE_REGISTRATION.txt JRXML_CONTRACT.txt; d
   if [ -f "$f" ]; then echo "  ok      $f"; else echo "  MISSING $f"; ok=0; fi
 done
 [ "${RENDER_SKIPPED:-0}" = 1 ] && echo "  WARN    layout unproven - no render was run"
+[ "${RULE_NOT_RUN:-0}" = 1 ] && echo "  WARN    rule never executed - no Fixture.groovy"
 ls verification/*.pdf >/dev/null 2>&1 && echo "  ok      $(ls verification/*.pdf | wc -l | tr -d ' ') rendered PDF(s) - LOOK AT EVERY PAGE before reporting back"
 [ "$ok" = 1 ] || exit 1
 echo

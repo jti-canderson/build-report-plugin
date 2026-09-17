@@ -408,6 +408,18 @@ the same shape.
 destroy exactly the two things worth keeping: the fixture rows and any hand-edit to the
 generator.
 
+### Three rules the executing gate enforces — write to them from the start
+
+1. **Assign `_data`.** The output is read as `_data`; `data = rows` assigns an ordinary
+   local, the engine produces nothing, and eSeries refuses the run.
+2. **No `import com.sustain.*`.** The platform supplies those implicitly - 82 of the 95
+   rules in this corpus carry none - and a fully-qualified import makes the rule impossible
+   to compile off-platform, which disables the gate that runs it.
+3. **Every value a String, every date coerced.** A `GString` is not a String and fails the
+   gate. And whether eSeries hands a `java.util.Date` parameter over as a Date or a String
+   is UNVERIFIED, so parse defensively (`toDate()`) rather than assuming - a rule that
+   assumes Date dies with a GroovyCastException if it is a String.
+
 Then author the parts it deliberately leaves alone:
 
 1. **the `.groovy` rule** — every line of it is a decision

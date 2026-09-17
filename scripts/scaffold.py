@@ -12,9 +12,10 @@ cell in silence. This generates FROM the spec, the same way parse_cols() compute
 instead of anyone doing the arithmetic by hand.
 
 WHAT IT WRITES  (three files, ~170 lines, none of it a decision)
-    gen_jrxml.py            the template call
-    verification/fixture.py the KEYS list, the row plumbing, the TSV writer
-    verification/run.sh     regenerate -> render each variant -> collect output
+    gen_jrxml.py                 the template call
+    verification/fixture.py      the KEYS list, the row plumbing, the TSV writer
+    verification/Fixture.groovy  the object graph rulecheck.groovy RUNS the rule against
+    verification/run.sh          regenerate -> render each variant -> collect output
 
 WHAT IT DELIBERATELY DOES NOT WRITE
     the .groovy rule        every line of it is a decision
@@ -230,6 +231,34 @@ def gen_fixture(s, declared):
     return "\n".join(L)
 
 
+def gen_groovy_fixture(s):
+    """The object graph `rulecheck.groovy` runs the rule against.
+
+    This is what makes the rule EXECUTE locally rather than merely be inspected. Without it
+    the only gates are text comparisons, and a rule ending `data = rows` - one character
+    short of `_data` - passed all of them and died on first use in eSeries (09/17).
+
+    Maps, not Expandos: a missing key answers null, which is exactly how a rule's guarded
+    accessors expect an absent property to behave. Start minimal and add only what the rule
+    actually reads - a fixture that answers everything proves nothing about guards.
+    """
+    root = s.get("root", "Case")
+    return "\n".join([
+        f'// Object graph for {s["title"]} - drives rulecheck.groovy, NOT the page render.',
+        '// (verification/fixture.py holds the ROW fixture that drives the layout.)',
+        '//',
+        '// Maps, not Expandos: a missing key answers null, which is how the rule\'s guarded',
+        '// accessors expect an absent property to behave. Add keys only as the rule needs',
+        '// them - a fixture that answers everything stops proving the guards work.',
+        f'ROOT_FIXTURE = [id: \'{s.get("id", "19")}\', caseNumber: \'CF-2026-00184\']',
+        '',
+        '// What DomainObject.find() returns. A single-record report can leave this alone;',
+        '// a search rule should list a few rows here.',
+        'SEARCH_RESULTS = [ROOT_FIXTURE]',
+        '',
+    ])
+
+
 def gen_run(s):
     variants = s.get("variants", ["full", "none"])
     name = s["name"]
@@ -361,6 +390,7 @@ def main():
         return
 
     files = [(os.path.join('verification', 'fixture.py'), gen_fixture(spec, declared), False),
+             (os.path.join('verification', 'Fixture.groovy'), gen_groovy_fixture(spec), False),
              (os.path.join('verification', 'run.sh'), gen_run(spec), True)]
     for rel, body, ex in files:
         p = os.path.join(out, rel)
