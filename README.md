@@ -96,3 +96,21 @@ and a wrong one is silent — the report compiles here and behaves differently t
 - Python 3
 - A JasperReports Server install for local rendering (default
   `/Applications/jasperreports-server-9.0.0`; override with `JRS`)
+
+## Building by form instead of by question
+
+```bash
+python3 scripts/serve_builder.py
+```
+
+Opens a local page (127.0.0.1 only) listing your real projects and all six templates with
+their previews side by side. Fill it in, hit **Write spec.json**, and it prints the one
+command to run. `/build-report` reads the spec and skips the questions.
+
+The form exists because `AskUserQuestion` caps at four options, and that cap is what made
+the template letters misleading, split a five-project list across two prompts, and forced a
+two-step template menu. A form has no cap.
+
+It writes a file and nothing else — it does not invoke Claude, and it cannot write outside
+the workspace root. The gates are unchanged: a spec skips the questions, never the
+verification.

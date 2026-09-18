@@ -134,20 +134,25 @@ def cmd_root():
         print("  workspace folder to pin it.")
 
 
-def cmd_list():
-    """Report projects visible from ROOT: ROOT itself if it qualifies, plus any child that
-    is a project rather than a report.
+def list_projects():
+    """The projects, as data. ONE definition, because the builder page needs the same list
+    the command does - and a second hand-written copy of this filter immediately disagreed
+    with it (09/18: the page offered `jti-report-deploy-plugin` and two folders holding no
+    reports, none of which `list` shows).
 
     The distinction that matters, and the one an earlier cut got wrong twice: a folder
     holding a .jrxml is a REPORT and must never be offered as somewhere to build a report
-    INTO, while a folder holding report folders is a PROJECT. ROOT can be both a project
-    and a container of them - MyReports holds seven loose reports AND three client
-    projects - so both get listed rather than one hiding the other."""
-    rows = []
+    INTO, while a folder holding report folders is a PROJECT. ROOT can be both - MyReports
+    holds loose reports AND client projects - so both get listed rather than one hiding
+    the other. A child qualifies only if it carries project metadata or actually holds
+    reports; an empty folder is not a project.
+    """
+    out = []
     m = _meta(ROOT)
     if m or _reports_in(ROOT):
-        rows.append((f"{ROOT.name}  (here)", len(_reports_in(ROOT)),
-                     bool(m.get("sdk")), m.get("environment")))
+        out.append({"name": ".", "label": f"{ROOT.name}  (here)",
+                    "reports": len(_reports_in(ROOT)), "sdk": bool(m.get("sdk")),
+                    "environment": m.get("environment")})
     try:
         children = sorted(ROOT.iterdir())
     except OSError:
@@ -159,7 +164,22 @@ def cmd_list():
             continue
         cm, reports = _meta(d), _reports_in(d)
         if cm or reports:
-            rows.append((d.name, len(reports), bool(cm.get("sdk")), cm.get("environment")))
+            out.append({"name": d.name, "label": d.name, "reports": len(reports),
+                        "sdk": bool(cm.get("sdk")), "environment": cm.get("environment")})
+    return out
+
+
+def cmd_list():
+    """Report projects visible from ROOT: ROOT itself if it qualifies, plus any child that
+    is a project rather than a report.
+
+    The distinction that matters, and the one an earlier cut got wrong twice: a folder
+    holding a .jrxml is a REPORT and must never be offered as somewhere to build a report
+    INTO, while a folder holding report folders is a PROJECT. ROOT can be both a project
+    and a container of them - MyReports holds seven loose reports AND three client
+    projects - so both get listed rather than one hiding the other."""
+    rows = [(r["label"], r["reports"], r["sdk"], r["environment"])
+            for r in list_projects()]
     if not rows:
         print(f"no projects yet under {ROOT}")
         print(f"  (root chosen by: {ROOT_WHY})")

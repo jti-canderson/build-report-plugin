@@ -33,6 +33,28 @@ prompt, caused by a missing variable and nothing else. Searching also takes minu
 usually fails anyway. The plugin is in one of the three places above or the user knows where
 it is; there is no third option worth a filesystem crawl.
 
+## A spec.json answers EVERYTHING — check for one first
+
+If `$ARGUMENTS` names a `spec.json`, or the named report folder holds one, **read it and
+ask nothing**. It already carries the project, the template, the report name, the sections
+and columns, the launch inputs, and the brief in `intent`. Asking again is asking someone
+to repeat what they just typed into a form.
+
+```bash
+cat "<the spec.json>"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/scaffold.py" "<the spec.json>" --out "<its folder>"
+```
+
+Go straight from there to the SDK check (question 2, the only one a spec cannot answer)
+and then to the build. **The gates are unchanged** — a spec skips the questions, never the
+verification.
+
+The form that writes these:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/serve_builder.py"
+```
+
 ## Before asking anything
 
 Read `$ARGUMENTS` and any attached file, and answer from it whatever you can.
