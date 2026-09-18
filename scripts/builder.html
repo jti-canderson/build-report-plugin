@@ -28,6 +28,12 @@
   .card img { width:100%; height:186px; object-fit:cover; object-position:top;
               border:1px solid var(--rule); border-radius:4px; background:var(--fill) }
   .card .t { font-weight:700; margin:8px 0 2px } .card .d { font-size:12px; color:var(--muted) }
+  /* The "match a picture" card has no preview to show until one is uploaded. */
+  .card .ph { height:186px; display:flex; align-items:center; justify-content:center;
+              border:1px dashed var(--rule); border-radius:4px; background:var(--fill);
+              color:var(--muted); font-size:26px; text-align:center; padding:10px;
+              word-break:break-word }
+  .pick { margin-top:14px }
   .sec { border:1px solid var(--rule); border-radius:8px; padding:14px; margin-bottom:12px }
   .sec .hd { display:flex; gap:12px; align-items:flex-end; margin-bottom:10px }
   table { width:100%; border-collapse:collapse } td { padding:3px 4px 3px 0; vertical-align:top }

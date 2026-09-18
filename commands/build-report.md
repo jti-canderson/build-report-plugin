@@ -87,6 +87,36 @@ Go straight from there to the SDK check (question 2, the only one a spec cannot 
 and then to the build. **The gates are unchanged** — a spec skips the questions, never the
 verification.
 
+### `look_like` — the spec says "match this picture"
+
+A spec with `"template": ""` and `"look_like": "reference/<file>"` is someone who did not
+want any of the six. **Read the picture before anything else** — it is sitting in the report
+folder next to the spec — then say in ONE line which template you are starting from and
+carry on. Do not re-open the template menu; they already answered it, with a picture.
+
+```
+Read <the report folder>/reference/<file>
+```
+
+Everything in the **Custom — they send a picture** branch below applies, unchanged: start
+from the nearest template's generator (never a blank `.jrxml`), copy the STRUCTURE, keep
+the JTI style unless `intent` asks for the picture's styling too, and say plainly what you
+could not honour — checking `jti_style.py` first, because colours, banners and badges are
+three lines each and are NOT limits. `scaffold.py` refuses this spec until a template is
+named, which is deliberate: something has to look at the picture first.
+
+Write the template you chose back into the spec, so the folder is self-describing and a
+re-run does not re-derive it:
+
+```bash
+python3 - "<the spec.json>" <<'EOF'
+import json, sys
+p = sys.argv[1]; s = json.load(open(p))
+s['template'] = '<the module you chose>'
+json.dump(s, open(p, 'w'), indent=2)
+EOF
+```
+
 The form that writes these:
 
 ```bash

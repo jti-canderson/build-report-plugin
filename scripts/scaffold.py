@@ -366,6 +366,14 @@ def main():
         print(__doc__); sys.exit(2)
 
     spec = json.load(open(sys.argv[1], encoding='utf8'))
+    # A "match this picture" spec carries no template on purpose: the builder could not pick
+    # one and neither can this script - something has to LOOK at the reference first. Say
+    # that, rather than "spec is missing 'template'", which reads like a corrupt file.
+    if not spec.get('template') and spec.get('look_like'):
+        print(f"  this spec says: match {spec['look_like']} - no template chosen yet.\n"
+              f"  A picture has to be read before a starting template can be named, so run\n"
+              f"  /jti-reports:build-report on it instead of scaffolding it directly.")
+        sys.exit(2)
     for k in ('name', 'title', 'template', 'sections'):
         if not spec.get(k):
             print(f"  spec is missing '{k}'"); sys.exit(2)

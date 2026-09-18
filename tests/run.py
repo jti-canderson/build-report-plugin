@@ -179,6 +179,54 @@ def main():
     check("scaffold refuses a template that cannot be parameterised",
           rc != 0 and "cannot be parameterised" in out, out)
 
+    # a "match a picture" spec: no template, a reference image beside it. scaffold must say
+    # WHY rather than "missing 'template'", and the builder must have copied the picture in.
+    sp = os.path.join(ws, "look.json")
+    s = json.load(open(os.path.join(FIX, "good_spec.json")))
+    s["template"] = ""
+    s["look_like"] = "reference/screenshot.png"
+    json.dump(s, open(sp, "w"))
+    rc, out = run(["python3", os.path.join(PLUGIN, "scripts", "scaffold.py"), sp,
+                   "--out", os.path.join(ws, "nope2")])
+    check("scaffold refuses a match-a-picture spec and names build-report",
+          rc != 0 and "build-report" in out and "missing" not in out, out)
+
+    # the upload round trip, in-process: a PNG is accepted, a text file is not, and writing
+    # the spec COPIES the picture into the report folder instead of leaving a temp path.
+    look_probe = """
+import json, os, sys
+sys.path.insert(0, %r)
+import serve_builder as B
+png = bytes([137, 80, 78, 71, 13, 10, 26, 10]) + b'0' * 64
+bad = B.keep_look(b'this is not a picture at all', 'notes.txt')
+good = B.keep_look(png, 'my screen shot.PNG')
+ok, msg = B.write_spec({'name': 'Look_Probe', 'project': 'Probe Project',
+                        'template': '', 'look': good['token'],
+                        'sections': [{'key': 'ROWS', 'title': 'Rows',
+                                      'cols': [['A', 20, 'Left', 'a']]}]})
+folder = os.path.join(os.environ['JTI_PROJECT_ROOT'], 'Probe Project', 'Look_Probe')
+spec = json.load(open(os.path.join(folder, 'spec.json')))
+notpl, why = B.write_spec({'name': 'No_Tpl', 'project': 'Probe Project', 'template': '',
+                           'sections': [{'key': 'R', 'title': 'R',
+                                         'cols': [['A', 20, 'Left', 'a']]}]})
+print(json.dumps({'badRejected': not bad['ok'], 'goodOk': good.get('ok'),
+                  'name': good.get('name'), 'wrote': ok,
+                  'lookLike': spec.get('look_like'),
+                  'copied': os.path.exists(os.path.join(folder, spec.get('look_like') or 'x')),
+                  'refusedNoTemplate': not notpl, 'why': why}))
+""" % os.path.join(PLUGIN, "scripts")
+    rc, out = run(["python3", "-c", look_probe], env={"JTI_PROJECT_ROOT": ws})
+    try:
+        d = json.loads(out.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        d = {}
+    check("an uploaded example layout is sniffed, named and copied into the report folder",
+          rc == 0 and d.get("badRejected") and d.get("goodOk")
+          and d.get("name") == "my_screen_shot.png" and d.get("wrote")
+          and d.get("lookLike") == "reference/my_screen_shot.png" and d.get("copied"), out)
+    check("a spec with neither a template nor a picture is refused",
+          bool(d.get("refusedNoTemplate")) and "picture" in (d.get("why") or ""), out)
+
     # the two listings that disagreed twice
     rc, out = run(["python3", "-c",
                    "import sys; sys.path.insert(0, %r); import project as P; "

@@ -16,6 +16,10 @@ const TYPES = [
   ['java.util.Date', 'Date'],
   ['java.lang.Integer', 'Whole number'],
 ];
+// "None of these - here is a picture of what I want." Not a template module: it is the
+// absence of one, and the server turns it into a spec with no template and a reference
+// image beside it, which /build-report reads and starts from the nearest match.
+const PICTURE = '__picture__';
 const uid = (() => { let n = 0; return () => ++n; })();
 const newCol = () => ({ id: uid(), header: '', width: 20, align: 'Left', field: '' });
 const newSection = () => ({ id: uid(), key: '', title: '', cols: [newCol(), newCol()] });
@@ -176,6 +180,8 @@ function App() {
   const [imported, setImported] = useState(null);
   const [secOpen, setSecOpen] = useState(false);
   const [impErr, setImpErr] = useState('');
+  const [look, setLook] = useState(null);
+  const [lookErr, setLookErr] = useState('');
 
   // A folder-view export answers the sections, the columns and the root entity outright -
   // they are the panels of a screen someone already designed. Retyping them by hand is
@@ -217,6 +223,19 @@ function App() {
     e.target.value = '';
   };
 
+  // The example layout. Uploaded now, but only COPIED into the report folder when the spec
+  // is written - until then it is a temp file the server holds, like the folder-view export.
+  const onLook = e => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    setLookErr(''); setLook(null);
+    file.arrayBuffer().then(buf =>
+      fetch('/api/look?name=' + encodeURIComponent(file.name), { method: 'POST', body: buf })
+        .then(r => r.json())
+        .then(d => (d.ok ? setLook(d) : setLookErr(d.message))));
+    e.target.value = '';
+  };
+
   useEffect(() => {
     fetch('/api/bootstrap').then(r => r.json()).then(d => {
       setBoot(d);
@@ -235,7 +254,9 @@ function App() {
       method: 'POST',
       body: JSON.stringify({
         project, name: name.trim(), title: title.trim(), intent: intent.trim(),
-        template: tpl, meta: [], tiles: [], variants: ['full', 'none'],
+        template: tpl === PICTURE ? '' : tpl,
+        look: look ? look.token : '',
+        meta: [], tiles: [], variants: ['full', 'none'],
         root: 'Case', id: '19',
         sections: sections.map(s => ({
           key: (s.key || 'ROWS').trim().toUpperCase(),
@@ -281,7 +302,30 @@ function App() {
               <div class="t">${t.title}</div>
               <div class="d">${t.one_liner}</div>
             </button>`)}
+          <button class=${'card' + (tpl === PICTURE ? ' sel' : '')}
+                  onClick=${() => setTpl(PICTURE)}
+                  title="Send a screenshot, a PDF, or a report from another system">
+            ${look && look.kind !== 'application/pdf'
+              ? html`<img src=${look.url} alt=${look.name}/>`
+              : html`<div class="ph">${look ? '\u{1F4C4} ' + look.name : '\u2295'}</div>`}
+            <div class="t">None of these — match a picture</div>
+            <div class="d">Upload a screenshot, a PDF, or a report from another system.</div>
+          </button>
         </div>
+        ${tpl === PICTURE && html`
+          <div class="pick">
+            <div class="hint">Claude reads the picture, starts from whichever template is
+              closest, and matches its columns, grouping and section order. Say in the brief
+              below if you want the picture's colours and fonts too — otherwise the JTI
+              masthead and styling stay. Charts and anything interactive cannot be
+              reproduced: a report is paper.</div>
+            <input type="file" accept="image/*,.pdf" onChange=${onLook}/>
+            ${lookErr && html`<div class="out err">${lookErr}</div>`}
+            ${look && html`<div class="out ok">Attached <b>${look.name}</b> —
+              ${Math.max(1, Math.round(look.bytes / 1024))} KB. It gets copied into the
+              report folder as <code>reference/${look.name}</code> so the build can look at
+              it.</div>`}
+          </div>`}
 
         <h2>Start from a folder view (optional)</h2>
         <div class="hint">Export a folder view from eSeries — <b>System Setup → Screens →
@@ -357,9 +401,12 @@ function App() {
         <button class="mini" onClick=${() => setParams(xs => [...xs, newParam()])}>+ input</button>
 
         <div class="foot2">
-          <button class="go" disabled=${busy || !tpl} onClick=${submit}>
+          <button class="go" disabled=${busy || !tpl || (tpl === PICTURE && !look)}
+                  onClick=${submit}>
             ${busy ? 'Writing…' : 'Write spec.json'}</button>
           ${!tpl && html`<span class="hint ml12">Pick a template first.</span>`}
+          ${tpl === PICTURE && !look && html`
+            <span class="hint ml12">Attach the picture you want it to look like.</span>`}
           ${res && html`
             <div class=${'out ' + (res.ok ? 'ok' : 'err')}>
               ${res.ok ? html`

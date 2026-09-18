@@ -27,6 +27,7 @@ import json
 import os
 import pathlib
 import re
+import shutil
 import socketserver
 import subprocess
 import sys
@@ -51,6 +52,54 @@ NAME_OK = re.compile(r'^[A-Za-z][A-Za-z0-9_]{0,60}$')
 WRITES = []
 WROTE = threading.Condition()
 WAITERS = [0]          # how many /api/wait calls are parked right now
+
+
+# A picture the user uploaded as "make it look like THIS". Kept in a temp file keyed by
+# token and copied into the report folder only when the spec is written - the same rule the
+# folder-view upload follows: an upload is an INPUT until the user commits to a destination.
+LOOKS = {}
+LOOK_LOCK = threading.Lock()
+
+# (magic bytes, extension, content type). Sniffed rather than trusted from the filename,
+# because the browser's accept= list is advice and the extension is whatever was typed.
+MAGIC = [
+    (b"\x89PNG\r\n\x1a\n", ".png", "image/png"),
+    (b"\xff\xd8\xff", ".jpg", "image/jpeg"),
+    (b"%PDF-", ".pdf", "application/pdf"),
+    (b"GIF87a", ".gif", "image/gif"),
+    (b"GIF89a", ".gif", "image/gif"),
+]
+
+
+def sniff(blob):
+    """What kind of picture is this really? None if it is not one we can show Claude."""
+    for magic, ext, ctype in MAGIC:
+        if blob.startswith(magic):
+            return ext, ctype
+    if blob[:4] == b"RIFF" and blob[8:12] == b"WEBP":
+        return ".webp", "image/webp"
+    return None
+
+
+def keep_look(blob, filename):
+    """Stash an uploaded reference picture and hand back a token the form can show."""
+    kind = sniff(blob)
+    if not kind:
+        return {"ok": False, "message":
+                "That is not a picture or a PDF. Send a screenshot (PNG or JPEG), a PDF, "
+                "or a photo of a printout - something Claude can look at."}
+    ext, ctype = kind
+    fd, tmp = tempfile.mkstemp(suffix=ext, prefix="jti-look-")
+    with os.fdopen(fd, "wb") as f:
+        f.write(blob)
+    token = os.path.basename(tmp)
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "_", os.path.basename(filename or "example")) or "example"
+    stem = os.path.splitext(stem)[0][:60] or "example"
+    with LOOK_LOCK:
+        LOOKS[token] = {"path": tmp, "ctype": ctype, "name": stem + ext}
+    return {"ok": True, "token": token, "name": stem + ext, "kind": ctype,
+            "url": "/api/look?token=" + urllib.parse.quote(token),
+            "bytes": len(blob)}
 
 
 def projects():
@@ -291,6 +340,15 @@ def write_spec(payload):
     if folder is None:
         return False, (f"{proj!r} is not a folder that exists. Browse to it, or create it "
                        f"first.")
+    look = None
+    if payload.get("look"):
+        with LOOK_LOCK:
+            look = LOOKS.get(payload["look"])
+        if not look:
+            return False, ("The example picture is no longer on file - the builder was "
+                           "restarted. Attach it again.")
+    if not payload.get("template") and not look:
+        return False, ("Pick a template, or attach a picture of what it should look like.")
     if not payload.get("sections"):
         return False, "Add at least one section with at least one column."
     for s in payload["sections"]:
@@ -302,6 +360,13 @@ def write_spec(payload):
     spec = {k: payload.get(k) for k in
             ("name", "title", "template", "why", "sections", "meta", "tiles",
              "params", "variants", "root", "id", "intent")}
+    if look:
+        # Copied, not referenced: a temp file disappears on reboot and the spec has to stay
+        # readable weeks later, next to the report it describes.
+        ref = out / "reference"
+        ref.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(look["path"], ref / look["name"])
+        spec["look_like"] = "reference/" + look["name"]
     spec["title"] = spec.get("title") or name.replace("_", " ")
     spec["variants"] = spec.get("variants") or ["full", "none"]
     p = out / "spec.json"
@@ -364,6 +429,19 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                         {"ok": True, "spec": WRITES[since], "seen": since + 1}))
             return self._send(200, json.dumps({"ok": False, "timeout": True,
                                                "seen": len(WRITES)}))
+        if path == "/api/look":
+            # Show the upload back to the user. Served from the temp copy by token only -
+            # no path comes in from the page, so there is nothing to traverse.
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            with LOOK_LOCK:
+                rec = LOOKS.get((q.get("token") or [""])[0])
+            if not rec:
+                return self._send(404, b"no such upload", "text/plain")
+            try:
+                with open(rec["path"], "rb") as f:
+                    return self._send(200, f.read(), rec["ctype"])
+            except OSError:
+                return self._send(404, b"upload is gone", "text/plain")
         if path == "/api/checkdir":
             q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             return self._send(200, json.dumps(checkdir((q.get("path") or [""])[0])))
@@ -395,6 +473,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             q = urllib.parse.parse_qs(route.query)
             body = self.rfile.read(n)
             out = form_spec(body, (q.get("name") or ["upload.zip"])[0])
+            return self._send(200 if out.get("ok") else 400, json.dumps(out))
+        if route.path == "/api/look":
+            n = int(self.headers.get("Content-Length") or 0)
+            if n > 20 * 1024 * 1024:
+                return self._send(400, json.dumps(
+                    {"ok": False, "message": "that file is over 20 MB - send a screenshot "
+                                             "or a PDF, not a scan at full resolution"}))
+            q = urllib.parse.parse_qs(route.query)
+            out = keep_look(self.rfile.read(n), (q.get("name") or ["example"])[0])
             return self._send(200 if out.get("ok") else 400, json.dumps(out))
         if route.path != "/api/spec":
             return self._send(404, b"not found", "text/plain")
