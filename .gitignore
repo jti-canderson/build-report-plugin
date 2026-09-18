@@ -1,2 +1,8 @@
-skills/report-deployment/
+# Render output only. Everything else the plugin needs must be IN the repo:
+# skills/report-deployment/ was excluded until 09/18, which meant rule_import.py - the
+# writer rule_zip.py imports - was missing from every clone, so a teammate's very first
+# build died at the zip gate with an ImportError on a checkout that looked complete.
 templates/out/
+
+# Stale copies kept beside a fixed file during an incident. Useful locally, noise in the repo.
+*.bak-*

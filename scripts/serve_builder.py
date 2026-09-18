@@ -60,6 +60,53 @@ def templates():
     return out
 
 
+def pickable(d):
+    """Can a report be built INTO this folder?
+
+    Not simply `not _is_report(d)`. The workspace root holds 14 loose .jrxml files AND
+    seven report folders, so it is both - and `list_projects` rightly offers it while a
+    naive is-it-a-report test disabled it. The page asks the server this question rather
+    than re-deriving it, because the first cut re-derived it and the two disagreed.
+
+    A folder is a destination when it holds report folders or carries project metadata.
+    Loose .jrxml files with nothing under them mean it IS a report, and building a report
+    inside a report is never what anyone meant.
+    """
+    return bool(P._reports_in(d) or P._meta(d))
+
+
+def browse(rel):
+    """Folders under the workspace root, for picking a project that is not in the list.
+
+    Scoped to ROOT and nowhere else: the plugin's whole permission model is that pointing
+    it at a folder IS the grant. If the folder someone wants lives outside, that is a
+    different workspace - a `.jti-root` marker there, or $JTI_PROJECT_ROOT - not a path
+    this page should reach.
+    """
+    here = P.ROOT if rel in ("", ".", None) else P._under_root(P.ROOT / rel)
+    if here is None or not here.is_dir():
+        return {"error": f"{rel!r} is not a folder inside {P.ROOT}"}
+    kids = []
+    try:
+        for d in sorted(here.iterdir()):
+            if not d.is_dir() or d.name.startswith(".") or d.name in P.NOT_A_PROJECT:
+                continue
+            kids.append({"name": d.name,
+                         "rel": str(d.relative_to(P.ROOT)),
+                         "isReport": P._is_report(d),
+                         "reports": len(P._reports_in(d)),
+                         "pickable": pickable(d)})
+    except OSError:
+        pass
+    parent = None
+    if here != P.ROOT:
+        parent = "" if here.parent == P.ROOT else str(here.parent.relative_to(P.ROOT))
+    return {"path": "" if here == P.ROOT else str(here.relative_to(P.ROOT)),
+            "label": str(here), "parent": parent, "dirs": kids,
+            "isReport": P._is_report(here), "reports": len(P._reports_in(here)),
+            "pickable": pickable(here)}
+
+
 def write_spec(payload):
     """Validate, then write spec.json inside the chosen project. Returns (ok, message)."""
     name = (payload.get("name") or "").strip()
@@ -106,6 +153,18 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if path in ("/", "/index.html"):
             with open(os.path.join(HERE, "builder.html"), "rb") as f:
                 return self._send(200, f.read(), "text/html; charset=utf-8")
+        if path.startswith("/vendor/") or path == "/app.js":
+            fn = os.path.basename(path)
+            base = os.path.join(HERE, "vendor") if path.startswith("/vendor/") else HERE
+            full = os.path.join(base, fn)
+            if os.path.realpath(full).startswith(os.path.realpath(base)) \
+                    and os.path.exists(full):
+                with open(full, "rb") as f:
+                    return self._send(200, f.read(), "application/javascript")
+            return self._send(404, b"not found", "text/plain")
+        if path == "/api/browse":
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            return self._send(200, json.dumps(browse((q.get("path") or [""])[0])))
         if path == "/api/bootstrap":
             return self._send(200, json.dumps({
                 "root": str(P.ROOT), "rootWhy": P.ROOT_WHY,
@@ -142,6 +201,19 @@ def main():
     if a.help:
         print(__doc__)
         sys.exit(0)
+
+    # If the port is taken, find out by WHOM before shouting about it. A second
+    # `/build-report` should say "it is already open at this URL", not fail with
+    # EADDRINUSE and leave someone wondering which of the two is real.
+    import urllib.request
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{a.port}/api/bootstrap", timeout=1):
+            print(f"  report builder ALREADY RUNNING at http://127.0.0.1:{a.port}/")
+            if not a.no_open:
+                webbrowser.open(f"http://127.0.0.1:{a.port}/")
+            sys.exit(0)
+    except Exception:
+        pass
 
     socketserver.TCPServer.allow_reuse_address = True
     # 127.0.0.1, never 0.0.0.0: this writes files, and nothing about it should be reachable

@@ -33,6 +33,28 @@ prompt, caused by a missing variable and nothing else. Searching also takes minu
 usually fails anyway. The plugin is in one of the three places above or the user knows where
 it is; there is no third option worth a filesystem crawl.
 
+## 0.5 Open the builder — unless a spec was handed over
+
+No `spec.json` and no detailed `$ARGUMENTS`? **Start the form and point the user at it**
+rather than beginning the interview:
+
+```bash
+nohup python3 "${CLAUDE_PLUGIN_ROOT}/scripts/serve_builder.py" >/tmp/jti-builder.log 2>&1 &
+sleep 2 && head -4 /tmp/jti-builder.log
+```
+
+It opens the browser itself and prints the URL. If one is already running it says so and
+reuses it instead of failing on the port. Then say, in one line: *the builder is open at
+http://127.0.0.1:8787/ — fill it in and paste the command it gives you back here.*
+
+**Then stop and wait.** Do not start asking the four questions underneath a form the user
+is already looking at.
+
+Two reasons to skip the form and interview instead, both of which mean the user has
+already given the answers: they passed a `spec.json`, or `$ARGUMENTS` already describes the
+report. And if someone says they would rather just answer questions, do that — the chat
+flow below still works and nothing about it changed.
+
 ## A spec.json answers EVERYTHING — check for one first
 
 If `$ARGUMENTS` names a `spec.json`, or the named report folder holds one, **read it and

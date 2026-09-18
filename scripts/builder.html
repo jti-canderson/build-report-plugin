@@ -4,234 +4,81 @@
 <style>
   :root { --navy:#1C3971; --ink:#1A1D21; --muted:#7A828C; --rule:#D8DCE2; --fill:#F4F6F8; }
   * { box-sizing:border-box }
-  body { margin:0; font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  body { margin:0; font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
          color:var(--ink); background:#fff }
-  header { background:var(--navy); color:#fff; padding:18px 28px }
-  header h1 { margin:0; font-size:19px; letter-spacing:.2px }
-  header .root { font-size:12px; opacity:.75; margin-top:3px }
-  main { max-width:1000px; margin:0 auto; padding:28px }
+  header { background:var(--navy); color:#fff; padding:16px 28px; position:sticky; top:0; z-index:5 }
+  header h1 { margin:0; font-size:18px }
+  header .root { font-size:12px; opacity:.75; margin-top:2px }
+  main { max-width:1000px; margin:0 auto; padding:24px 28px 80px }
   h2 { font-size:12px; text-transform:uppercase; letter-spacing:.09em; color:var(--muted);
-       margin:32px 0 12px; border-bottom:1px solid var(--rule); padding-bottom:6px }
-  h2:first-of-type { margin-top:8px }
+       margin:30px 0 10px; border-bottom:1px solid var(--rule); padding-bottom:6px }
+  h2:first-of-type { margin-top:6px }
   label { display:block; font-size:12px; color:var(--muted); margin-bottom:4px }
   input[type=text], textarea, select {
     width:100%; padding:8px 10px; border:1px solid var(--rule); border-radius:5px;
     font:inherit; color:var(--ink); background:#fff }
-  textarea { min-height:78px; resize:vertical }
+  input:focus, textarea:focus, select:focus { outline:2px solid rgba(28,57,113,.25); border-color:var(--navy) }
+  textarea { min-height:76px; resize:vertical }
   .row { display:flex; gap:12px } .row > * { flex:1 }
   .cards { display:grid; grid-template-columns:repeat(3,1fr); gap:14px }
   .card { border:2px solid var(--rule); border-radius:8px; padding:10px; cursor:pointer;
-          background:#fff; text-align:left }
+          background:#fff; text-align:left; font:inherit; color:inherit }
   .card:hover { border-color:#B9C0CA }
   .card.sel { border-color:var(--navy); box-shadow:0 0 0 3px rgba(28,57,113,.10) }
-  .card img { width:100%; height:190px; object-fit:cover; object-position:top;
+  .card img { width:100%; height:186px; object-fit:cover; object-position:top;
               border:1px solid var(--rule); border-radius:4px; background:var(--fill) }
-  .card .t { font-weight:700; margin:8px 0 2px }
-  .card .d { font-size:12px; color:var(--muted) }
+  .card .t { font-weight:700; margin:8px 0 2px } .card .d { font-size:12px; color:var(--muted) }
   .sec { border:1px solid var(--rule); border-radius:8px; padding:14px; margin-bottom:12px }
   .sec .hd { display:flex; gap:12px; align-items:flex-end; margin-bottom:10px }
-  table { width:100%; border-collapse:collapse } td { padding:3px 4px 3px 0 }
+  table { width:100%; border-collapse:collapse } td { padding:3px 4px 3px 0; vertical-align:top }
   th { font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted);
        text-align:left; padding:0 4px 4px 0; font-weight:600 }
   button { font:inherit; border-radius:5px; cursor:pointer }
   .mini { background:#fff; border:1px solid var(--rule); padding:4px 10px; color:var(--ink) }
   .mini:hover { border-color:var(--navy) }
-  .x { background:none; border:none; color:var(--muted); font-size:16px; padding:0 6px }
+  .x { background:none; border:none; color:var(--muted); font-size:16px; padding:0 6px; line-height:1 }
   .x:hover { color:#B3261E }
-  .go { background:var(--navy); color:#fff; border:none; padding:11px 22px; font-weight:600;
-        font-size:15px }
+  .go { background:var(--navy); color:#fff; border:none; padding:11px 22px; font-weight:600; font-size:15px }
   .go:disabled { background:#9AA3B0; cursor:not-allowed }
-  footer { margin:30px 0 60px; padding-top:18px; border-top:1px solid var(--rule) }
-  .out { margin-top:16px; padding:14px 16px; border-radius:6px; display:none }
-  .out.ok { background:#EDF7ED; border:1px solid #BFE0BF; display:block }
-  .out.err { background:#FDECEA; border:1px solid #F0C2BD; display:block }
+  .out { margin-top:16px; padding:14px 16px; border-radius:6px }
+  .out.ok { background:#EDF7ED; border:1px solid #BFE0BF }
+  .out.err { background:#FDECEA; border:1px solid #F0C2BD }
   code { background:var(--fill); padding:2px 6px; border-radius:4px; font-size:13px;
          font-family:ui-monospace,Menlo,monospace }
   pre { background:var(--ink); color:#F2F4F7; padding:12px 14px; border-radius:6px;
         overflow-x:auto; font-size:13px; margin:10px 0 0 }
-  .hint { font-size:12px; color:var(--muted); margin:-6px 0 12px }
+  .hint { font-size:12px; color:var(--muted); margin:-4px 0 12px }
+  .modal { position:fixed; inset:0; background:rgba(26,29,33,.45); display:flex;
+           align-items:center; justify-content:center; z-index:20 }
+  .sheet { background:#fff; border-radius:10px; width:min(620px,92vw); max-height:78vh;
+           display:flex; flex-direction:column; overflow:hidden }
+  .sheet h3 { margin:0; padding:14px 18px; border-bottom:1px solid var(--rule); font-size:15px }
+  .sheet .body { overflow:auto; padding:6px 0 }
+  .sheet .foot { border-top:1px solid var(--rule); padding:12px 18px; display:flex;
+                 justify-content:space-between; align-items:center; gap:12px }
+  .dir { display:flex; width:100%; gap:10px; align-items:center; padding:9px 18px;
+         border:none; background:none; text-align:left; font:inherit; cursor:pointer }
+  .dir:hover { background:var(--fill) }
+  .dir .n { flex:1 } .dir .m { font-size:12px; color:var(--muted) }
+  .crumb { font-size:12px; color:var(--muted); padding:8px 18px; word-break:break-all }
+  .pill { font-size:11px; background:var(--fill); border:1px solid var(--rule);
+          border-radius:20px; padding:1px 8px; color:var(--muted) }
+  .spin { padding:40px; text-align:center; color:var(--muted) }
+  /* Utilities. React rejects a string `style` prop (error #62), so inline styles are
+     classes here rather than object literals scattered through the JS. */
+  .end { align-items:flex-end }
+  .fix { flex:0 0 auto; padding:8px 14px }
+  .mt12 { margin-top:12px } .ml12 { margin-left:12px }
+  .note { font-size:12px; color:var(--muted) }
+  .note.mt8 { margin-top:8px }
+  .actions { display:flex; gap:8px }
+  .go.sm { padding:7px 16px; font-size:14px }
+  .foot2 { margin-top:30px; padding-top:18px; border-top:1px solid var(--rule) }
+  .c1 { width:32% } .c2 { width:13% } .c3 { width:15% } .c4 { width:30px }
+  .p1 { width:45% }
 </style>
-
-<header>
-  <h1>JTI Report Builder</h1>
-  <div class="root" id="root"></div>
-</header>
-
-<main>
-  <h2>Project</h2>
-  <select id="project"></select>
-  <div class="hint" id="projHint"></div>
-
-  <h2>Template</h2>
-  <div class="cards" id="templates"></div>
-
-  <h2>Report</h2>
-  <div class="row">
-    <div><label>File name — letters, digits, underscores</label>
-      <input type="text" id="name" placeholder="Cases_By_Type"></div>
-    <div><label>Title on the page</label>
-      <input type="text" id="title" placeholder="Cases By Type"></div>
-  </div>
-  <div style="margin-top:12px">
-    <label>What should it show? Plain words — this is the brief, not a spec.</label>
-    <textarea id="intent" placeholder="Every case filed in a date range, one row each, with its type and jurisdiction. Grouped by nothing; just a list."></textarea>
-  </div>
-
-  <h2>Sections and columns</h2>
-  <div class="hint">One section per grid on the page. Widths are relative — they are scaled
-    to the page, so they need not add to 100.</div>
-  <div id="sections"></div>
-  <button class="mini" onclick="addSection()">+ section</button>
-
-  <h2>Launch inputs</h2>
-  <div class="hint">What the person running the report fills in. Leave empty for a report
-    that takes no input.</div>
-  <table><thead><tr><th style="width:45%">Name</th><th>Type</th><th style="width:34px"></th></tr></thead>
-    <tbody id="params"></tbody></table>
-  <button class="mini" onclick="addParam()">+ input</button>
-
-  <footer>
-    <button class="go" id="go" onclick="submit()">Write spec.json</button>
-    <div class="out" id="out"></div>
-  </footer>
-</main>
-
-<script>
-let TPL = [], chosen = null;
-
-const el = (t, a = {}, kids = []) => {
-  const n = document.createElement(t);
-  for (const k in a) k === 'class' ? n.className = a[k] : n.setAttribute(k, a[k]);
-  for (const c of [].concat(kids)) n.append(c);
-  return n;
-};
-
-fetch('/api/bootstrap').then(r => r.json()).then(d => {
-  document.getElementById('root').textContent = `workspace ${d.root}  (${d.rootWhy})`;
-  const ps = document.getElementById('project');
-  d.projects.forEach(p => {
-    const bits = [`${p.reports} report${p.reports === 1 ? '' : 's'}`];
-    bits.push(p.sdk ? 'SDK on file' : 'no SDK');
-    if (p.environment) bits.push(p.environment);
-    ps.append(el('option', { value: p.name }, `${p.label}  —  ${bits.join(', ')}`));
-  });
-  TPL = d.templates;
-  const box = document.getElementById('templates');
-  TPL.forEach((t, i) => {
-    const c = el('button', { class: 'card', type: 'button' });
-    if (t.preview) c.append(el('img', { src: t.preview, alt: t.title }));
-    c.append(el('div', { class: 't' }, t.title), el('div', { class: 'd' }, t.one_liner));
-    c.onclick = () => {
-      chosen = t.module;
-      [...box.children].forEach(x => x.classList.remove('sel'));
-      c.classList.add('sel');
-    };
-    box.append(c);
-  });
-  addSection(); addParam();
-});
-
-function addSection() {
-  const wrap = document.getElementById('sections');
-  const s = el('div', { class: 'sec' });
-  const cols = el('tbody');
-  s.append(
-    el('div', { class: 'hd' }, [
-      el('div', {}, [el('label', {}, 'Section key — SHOUTY, used by the rule'),
-                     el('input', { type: 'text', class: 'k', placeholder: 'ROWS' })]),
-      el('div', {}, [el('label', {}, 'Heading shown on the page'),
-                     el('input', { type: 'text', class: 'h', placeholder: 'Cases' })]),
-      el('button', { class: 'x', title: 'remove section', type: 'button' }, '×')]),
-    el('table', {}, [
-      el('thead', {}, el('tr', {}, [el('th', { style: 'width:34%' }, 'Column header'),
-        el('th', { style: 'width:14%' }, 'Width'), el('th', { style: 'width:16%' }, 'Align'),
-        el('th', {}, 'Field name the rule fills'), el('th', { style: 'width:34px' }, '')])),
-      cols]));
-  s.querySelector('.x').onclick = () => s.remove();
-  s._cols = cols;
-  wrap.append(s);
-  addCol(s); addCol(s);
-}
-
-function addCol(s) {
-  const tr = el('tr', {}, [
-    el('td', {}, el('input', { type: 'text', class: 'ch', placeholder: 'Case Number' })),
-    el('td', {}, el('input', { type: 'text', class: 'cw', value: '20' })),
-    el('td', {}, (() => {
-      const sel = el('select', { class: 'ca' });
-      ['Left', 'Right', 'Center'].forEach(a => sel.append(el('option', {}, a)));
-      return sel; })()),
-    el('td', {}, el('input', { type: 'text', class: 'cf', placeholder: 'caseNumber' })),
-    el('td', {}, el('button', { class: 'x', type: 'button' }, '×'))]);
-  tr.querySelector('.x').onclick = () => tr.remove();
-  s._cols.append(tr);
-  if (!s._btn) {
-    s._btn = el('button', { class: 'mini', type: 'button' }, '+ column');
-    s._btn.onclick = () => addCol(s);
-    s.append(s._btn);
-  }
-}
-
-function addParam() {
-  const tr = el('tr', {}, [
-    el('td', {}, el('input', { type: 'text', class: 'pn', placeholder: 'StartDate' })),
-    el('td', {}, (() => {
-      const sel = el('select', { class: 'pt' });
-      [['java.lang.String', 'Text'], ['java.util.Date', 'Date'],
-       ['java.lang.Integer', 'Whole number']].forEach(([v, l]) =>
-        sel.append(el('option', { value: v }, l)));
-      return sel; })()),
-    el('td', {}, el('button', { class: 'x', type: 'button' }, '×'))]);
-  tr.querySelector('.x').onclick = () => tr.remove();
-  document.getElementById('params').append(tr);
-}
-
-function collect() {
-  const sections = [...document.querySelectorAll('.sec')].map(s => ({
-    key: (s.querySelector('.k').value || 'ROWS').trim().toUpperCase(),
-    title: (s.querySelector('.h').value || '').trim(),
-    cols: [...s.querySelectorAll('tbody tr')].map(tr => [
-      tr.querySelector('.ch').value.trim(),
-      Number(tr.querySelector('.cw').value) || 20,
-      tr.querySelector('.ca').value,
-      tr.querySelector('.cf').value.trim()
-    ]).filter(c => c[0] && c[3])
-  })).filter(s => s.cols.length);
-
-  return {
-    project: document.getElementById('project').value,
-    name: document.getElementById('name').value.trim(),
-    title: document.getElementById('title').value.trim(),
-    intent: document.getElementById('intent').value.trim(),
-    template: chosen, sections, meta: [], tiles: [],
-    params: [...document.querySelectorAll('#params tr')].map(tr => [
-      tr.querySelector('.pn').value.trim(), tr.querySelector('.pt').value
-    ]).filter(p => p[0]),
-    variants: ['full', 'none'], root: 'Case', id: '19'
-  };
-}
-
-function submit() {
-  const out = document.getElementById('out');
-  const body = collect();
-  if (!body.template) {
-    out.className = 'out err';
-    out.textContent = 'Pick a template first.';
-    return;
-  }
-  document.getElementById('go').disabled = true;
-  fetch('/api/spec', { method: 'POST', body: JSON.stringify(body) })
-    .then(r => r.json()).then(d => {
-      document.getElementById('go').disabled = false;
-      out.className = 'out ' + (d.ok ? 'ok' : 'err');
-      out.textContent = '';
-      if (!d.ok) { out.textContent = d.message; return; }
-      out.append(el('div', {}, ['Wrote ', el('code', {}, d.message),
-        '. Now run this in Claude Code:']));
-      out.append(el('pre', {}, `/jti-reports:build-report ${d.message}`));
-      out.append(el('div', { style: 'font-size:12px;color:#7A828C;margin-top:8px' },
-        'It will skip the questions and build from this spec. Everything still goes '
-        + 'through the gates — nothing here bypasses verification.'));
-    });
-}
-</script>
+<div id="app" class="spin">Loading…</div>
+<script src="/vendor/react.production.min.js"></script>
+<script src="/vendor/react-dom.production.min.js"></script>
+<script src="/vendor/htm.umd.js"></script>
+<script src="/app.js"></script>
