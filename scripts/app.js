@@ -33,6 +33,20 @@ function FolderBrowser({ onPick, onClose }) {
   }, []);
   useEffect(() => { load(''); }, [load]);
 
+  // Choose a folder WITHOUT listing it. Reading ~/Desktop or ~/Documents is what triggers
+  // the macOS privacy prompt, and browsing is not choosing - the prompt belongs at the
+  // moment something is written, not when someone clicks a suggestion.
+  const usePath = () => {
+    fetch('/api/checkdir?path=' + encodeURIComponent(typed))
+      .then(r => r.json())
+      .then(d => {
+        if (!d.ok) return setErr(d.message);
+        if (!d.pickable) return setErr('That folder is itself a report — pick its parent.');
+        onPick(d.inside && d.path === d.root ? '.' : d.path);
+        onClose();
+      });
+  };
+
   if (!at) return html`<div class="modal"><div class="sheet">
     ${err ? html`<div class="out err" style="margin:16px">${err}</div>` : html`<div class="spin">Loading…</div>`}
   </div></div>`;
@@ -43,16 +57,25 @@ function FolderBrowser({ onPick, onClose }) {
         <h3>Choose a folder</h3>
         <div class="quick">
           ${at.quick.map(q => html`
-            <button key=${q.name} class="mini" onClick=${() => load(q.path)}>${q.name}</button>`)}
+            <button key=${q.name} class="mini" title=${q.path}
+                    onClick=${() => setTyped(q.path)}>${q.name}</button>`)}
+        </div>
+        <div class="quick">
           <input type="text" value=${typed} spellcheck="false"
                  onInput=${e => setTyped(e.target.value)}
                  onKeyDown=${e => e.key === 'Enter' && load(typed)}/>
-          <button class="mini" onClick=${() => load(typed)}>Go</button>
+          <button class="mini" onClick=${() => load(typed)}>Open</button>
+          <button class="mini" onClick=${usePath}>Use this path</button>
         </div>
+        <div class="pathnote"><b>Open</b> lists a folder. <b>Use this path</b> picks it
+          without reading it — so macOS only asks for file access when the report is
+          actually written there.</div>
         ${!at.inside && html`
           <div class="warn">Outside the workspace (<code>${at.root}</code>). That is allowed
             — the report will be written here — but it will not appear in the project list.</div>`}
-        ${err && html`<div class="warn err2">${err}</div>`}
+        ${err && html`<div class="warn err2">${err}
+          ${' '}You can still choose it with <b>Use this path</b> — that does not read the
+          folder, so macOS will only ask when the report is written.</div>`}
         <div class="body">
           ${at.parent !== null && html`
             <button class="dir" onClick=${() => load(at.parent)}>

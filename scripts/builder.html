@@ -67,6 +67,9 @@
   .quick { display:flex; gap:6px; align-items:center; padding:10px 18px;
            border-bottom:1px solid var(--rule) }
   .quick input { flex:1; font-size:12px; padding:5px 8px }
+  .quick + .quick { border-top:none; padding-top:0 }
+  .pathnote { padding:0 18px 10px; font-size:11px; color:var(--muted);
+              border-bottom:1px solid var(--rule) }
   .warn { margin:0; padding:9px 18px; background:#FFF6E5; border-bottom:1px solid #F0DFB8;
           font-size:12px; color:#7A5B12 }
   .warn.err2 { background:#FDECEA; border-color:#F0C2BD; color:#8C2F26 }

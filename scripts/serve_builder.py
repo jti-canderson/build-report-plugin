@@ -90,10 +90,39 @@ def pickable(d):
     return not (P._is_report(d) and not P._reports_in(d))
 
 
+# Suggestions for the PATH BOX, not buttons that list on click. Enumerating ~/Desktop or
+# ~/Documents is what makes macOS throw the "would like to access data from other apps"
+# prompt, and a shortcut bar is browsing, not choosing - nobody should get a privacy prompt
+# for clicking a suggestion. `is_dir()` below is a stat, which is not gated.
 QUICK = [("Workspace", lambda: P.ROOT),
          ("Home", lambda: pathlib.Path.home()),
          ("Downloads", lambda: pathlib.Path.home() / "Downloads"),
-         ("Desktop", lambda: pathlib.Path.home() / "Desktop")]
+         ("Desktop", lambda: pathlib.Path.home() / "Desktop"),
+         ("Documents", lambda: pathlib.Path.home() / "Documents")]
+
+
+def checkdir(rel):
+    """Does this path exist and is it a folder - WITHOUT reading it.
+
+    stat() is not gated by macOS TCC; iterdir() is. So a folder can be validated, chosen and
+    written into without ever triggering the privacy prompt for merely looking. The prompt
+    then appears where it belongs: at the moment something is actually written.
+    """
+    if rel in ("", ".", None):
+        d = P.ROOT
+    else:
+        d = pathlib.Path(str(rel)).expanduser()
+        if not str(d).startswith("/"):
+            d = P.ROOT / rel
+    try:
+        d = d.resolve()
+        ok = d.is_dir()
+    except OSError:
+        return {"ok": False, "message": f"{rel} cannot be reached"}
+    if not ok:
+        return {"ok": False, "message": f"{d} is not a folder that exists"}
+    return {"ok": True, "path": str(d), "inside": inside_ws(d),
+            "pickable": pickable(d), "root": str(P.ROOT)}
 
 
 def browse(rel):
@@ -220,6 +249,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 with open(full, "rb") as f:
                     return self._send(200, f.read(), "application/javascript")
             return self._send(404, b"not found", "text/plain")
+        if path == "/api/checkdir":
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            return self._send(200, json.dumps(checkdir((q.get("path") or [""])[0])))
         if path == "/api/browse":
             q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             return self._send(200, json.dumps(browse((q.get("path") or [""])[0])))
