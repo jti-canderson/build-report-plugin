@@ -174,6 +174,7 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [res, setRes] = useState(null);
   const [imported, setImported] = useState(null);
+  const [secOpen, setSecOpen] = useState(false);
   const [impErr, setImpErr] = useState('');
 
   // A folder-view export answers the sections, the columns and the root entity outright -
@@ -197,6 +198,7 @@ function App() {
     if (!name || name === priorName) setName(derived);
     if (!title || (prior && title === prior.formName)) setTitle(f.formName || '');
     setImported(f);
+    setSecOpen(true);
   };
 
   const onFile = e => {
@@ -317,14 +319,22 @@ function App() {
             placeholder="Every case filed in a date range, one row each, with its type and jurisdiction."></textarea>
         </div>
 
-        <h2>Sections and columns</h2>
-        <div class="hint">One section per grid. Widths are relative — they get scaled to the
-          page, so they need not add to 100.</div>
-        ${sections.map(s => html`
-          <${Section} key=${s.id} s=${s} only=${sections.length === 1}
-            set=${u => setSections(xs => xs.map(x => (x.id === s.id ? u : x)))}
-            remove=${() => setSections(xs => xs.filter(x => x.id !== s.id))}/>`)}
-        <button class="mini" onClick=${() => setSections(xs => [...xs, newSection()])}>+ section</button>
+        <button type="button" class="h2btn" onClick=${() => setSecOpen(o => !o)}>
+          <h2>Sections and columns</h2>
+          <span class="chev">${secOpen ? '\u2212' : '+'}</span>
+          <span class="h2sum">${sections.length} section${sections.length === 1 ? '' : 's'},
+            ${sections.reduce((n, s) => n + s.cols.length, 0)} column(s)${secOpen ? '' : ' \u2014 click to edit'}</span>
+        </button>
+        ${secOpen && html`<${React.Fragment}>
+          <div class="hint">One section per grid. Widths are relative — they get scaled to
+            the page, so they need not add to 100.</div>
+          ${sections.map(s => html`
+            <${Section} key=${s.id} s=${s} only=${sections.length === 1}
+              set=${u => setSections(xs => xs.map(x => (x.id === s.id ? u : x)))}
+              remove=${() => setSections(xs => xs.filter(x => x.id !== s.id))}/>`)}
+          <button class="mini" onClick=${() => setSections(xs => [...xs, newSection()])}>
+            + section</button>
+        <//>`}
 
         <h2>Launch inputs</h2>
         <div class="hint">What the person running the report fills in. Leave empty for a
