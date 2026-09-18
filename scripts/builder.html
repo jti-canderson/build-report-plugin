@@ -60,10 +60,13 @@
   .dir { display:flex; width:100%; gap:10px; align-items:center; padding:9px 18px;
          border:none; background:none; text-align:left; font:inherit; cursor:pointer }
   .dir:hover { background:var(--fill) }
+  /* Folders that already hold a report. Still navigable - you may want to look inside -
+     but visibly not a destination, rather than tagged with a jargon pill that read like a
+     file type. */
+  .dir.taken .n { color:var(--muted) }
+  .dir.taken .m { font-style:italic }
   .dir .n { flex:1 } .dir .m { font-size:12px; color:var(--muted) }
   .crumb { font-size:12px; color:var(--muted); padding:8px 18px; word-break:break-all }
-  .pill { font-size:11px; background:var(--fill); border:1px solid var(--rule);
-          border-radius:20px; padding:1px 8px; color:var(--muted) }
   .spin { padding:40px; text-align:center; color:var(--muted) }
   .quick { display:flex; gap:6px; align-items:center; padding:10px 18px;
            border-bottom:1px solid var(--rule) }

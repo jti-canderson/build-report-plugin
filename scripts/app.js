@@ -93,18 +93,20 @@ function FolderBrowser({ onPick, onClose }) {
               <span class="n">↑ up one level</span></button>`}
           ${at.dirs.length === 0 && html`<div class="crumb">No sub-folders here.</div>`}
           ${at.dirs.map(d => html`
-            <button class="dir" key=${d.rel} onClick=${() => load(d.rel)}>
+            <button class=${'dir' + (d.pickable ? '' : ' taken')} key=${d.rel}
+                    onClick=${() => load(d.rel)}>
               <span class="n">${d.name}</span>
               ${d.pickable
-                ? html`<span class="m">${d.reports} report${d.reports === 1 ? '' : 's'}</span>`
-                : html`<span class="pill">a report, not a project</span>`}
+                ? html`<span class="m">${d.reports
+                    ? d.reports + ' report' + (d.reports === 1 ? '' : 's') : 'empty'}</span>`
+                : html`<span class="m">already a report</span>`}
             </button>`)}
         </div>
         <div class="foot">
           <span class="note">
             ${at.pickable
               ? 'Builds land in a new folder inside whichever folder you choose.'
-              : 'This folder holds a .jrxml and no report folders — it IS a report, so it is not somewhere to build into.'}
+              : 'This folder already holds a report, so a new one cannot go inside it. Pick its parent.'}
           </span>
           <span class="actions">
             <button class="mini" onClick=${onClose}>Cancel</button>
