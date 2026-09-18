@@ -45,6 +45,13 @@ import catalog as C          # noqa: E402  - the template list, single source of
 PREVIEW = os.path.join(PLUGIN, "templates", "examples", "labeled")
 NAME_OK = re.compile(r'^[A-Za-z][A-Za-z0-9_]{0,60}$')
 
+# Every spec written this run, and a condition to wake anyone long-polling /api/wait.
+# This is what lets Claude Code sit and WAIT for the Write button instead of the user
+# copying a command back into the chat.
+WRITES = []
+WROTE = threading.Condition()
+WAITERS = [0]          # how many /api/wait calls are parked right now
+
 
 def projects():
     """Straight from project.py - never a second copy of the filter. A hand-written
@@ -299,8 +306,14 @@ def write_spec(payload):
     spec["variants"] = spec.get("variants") or ["full", "none"]
     p = out / "spec.json"
     p.write_text(json.dumps(spec, indent=2) + "\n")
-    rel = p.relative_to(P.ROOT)
-    return True, str(rel)
+    try:
+        rel = str(p.relative_to(P.ROOT))
+    except ValueError:
+        rel = str(p)                       # a folder chosen outside the workspace
+    with WROTE:
+        WRITES.append(rel)
+        WROTE.notify_all()
+    return True, rel
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
@@ -329,6 +342,28 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 with open(full, "rb") as f:
                     return self._send(200, f.read(), "application/javascript")
             return self._send(404, b"not found", "text/plain")
+        if path == "/api/wait":
+            # Block until a spec is written, then hand back its path. `since` is how many
+            # writes the caller has already seen, so a spec written between polls is not
+            # missed - a plain "wait for the next event" would drop it.
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            since = int((q.get("since") or ["0"])[0] or 0)
+            secs = min(int((q.get("secs") or ["540"])[0] or 540), 900)
+            with WROTE:
+                WAITERS[0] += 1
+            try:
+                with WROTE:
+                    if len(WRITES) <= since:
+                        WROTE.wait(timeout=secs)
+            finally:
+                with WROTE:
+                    WAITERS[0] -= 1
+            with WROTE:
+                if len(WRITES) > since:
+                    return self._send(200, json.dumps(
+                        {"ok": True, "spec": WRITES[since], "seen": since + 1}))
+            return self._send(200, json.dumps({"ok": False, "timeout": True,
+                                               "seen": len(WRITES)}))
         if path == "/api/checkdir":
             q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             return self._send(200, json.dumps(checkdir((q.get("path") or [""])[0])))
@@ -369,7 +404,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         except ValueError:
             return self._send(400, json.dumps({"ok": False, "message": "bad JSON"}))
         ok, msg = write_spec(payload)
-        return self._send(200 if ok else 400, json.dumps({"ok": ok, "message": msg}))
+        return self._send(200 if ok else 400,
+                          json.dumps({"ok": ok, "message": msg,
+                                      "watched": WAITERS[0] > 0}))
 
 
 def main():
@@ -395,10 +432,16 @@ def main():
     except Exception:
         pass
 
-    socketserver.TCPServer.allow_reuse_address = True
+    # THREADED, not the plain TCPServer this used until 09/18. /api/wait blocks for minutes
+    # by design, and on a single-threaded server that blocked the form too - the Write button
+    # could never be served, so the thing being waited for could never happen.
+    class Server(socketserver.ThreadingTCPServer):
+        daemon_threads = True
+        allow_reuse_address = True
+
     # 127.0.0.1, never 0.0.0.0: this writes files, and nothing about it should be reachable
     # from the network.
-    with socketserver.TCPServer(("127.0.0.1", a.port), Handler) as httpd:
+    with Server(("127.0.0.1", a.port), Handler) as httpd:
         url = f"http://127.0.0.1:{a.port}/"
         print(f"  report builder  {url}")
         print(f"  workspace       {P.ROOT}   ({P.ROOT_WHY})")

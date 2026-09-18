@@ -354,11 +354,17 @@ function App() {
             <div class=${'out ' + (res.ok ? 'ok' : 'err')}>
               ${res.ok ? html`
                 <${React.Fragment}>
-                  <div>Wrote <code>${res.message}</code>. Now run this in Claude Code:</div>
-                  <pre>/jti-reports:build-report ${res.message}</pre>
+                  <div>Wrote <code>${res.message}</code>.</div>
+                  ${res.watched
+                    ? html`<div class="note mt8"><b>Claude is watching and has picked this
+                        up — go back to the chat.</b> Nothing to copy.</div>`
+                    : html`<${React.Fragment}>
+                        <div>Now run this in Claude Code:</div>
+                        <pre>/jti-reports:build-report ${res.message}</pre>
+                      <//>`}
                   <div class="note mt8">
-                    It skips the questions and builds from this spec. Everything still goes
-                    through the gates — nothing here bypasses verification.</div>
+                    Everything still goes through the gates — nothing here bypasses
+                    verification.</div>
                 <//>` : res.message}
             </div>`}
         </div>

@@ -44,11 +44,27 @@ sleep 2 && head -4 /tmp/jti-builder.log
 ```
 
 It opens the browser itself and prints the URL. If one is already running it says so and
-reuses it instead of failing on the port. Then say, in one line: *the builder is open at
-http://127.0.0.1:8787/ — fill it in and paste the command it gives you back here.*
+reuses it instead of failing on the port.
 
-**Then stop and wait.** Do not start asking the four questions underneath a form the user
-is already looking at.
+### Then WAIT for the Write button — do not ask them to copy anything back
+
+Say in one line that the builder is open at http://127.0.0.1:8787/, then block on it:
+
+```bash
+curl -s --max-time 540 "http://127.0.0.1:8787/api/wait?since=0"
+```
+
+It returns `{"ok": true, "spec": "<path>"}` the moment **Write spec.json** is clicked. Read
+that spec and build — the user never copies a command, and the form tells them Claude has
+already picked it up.
+
+On `{"timeout": true, "seen": N}` nobody has clicked yet: poll again with `since=N`. The
+`since` is not decoration - it is what stops a spec written between two polls from being
+missed. Say you are still waiting rather than silently re-polling forever, and stop after a
+couple of rounds; they may have wandered off.
+
+If the user would rather answer questions in chat, or pastes the command themselves, both
+still work - this only removes a copy-paste step, it does not replace the other routes.
 
 Two reasons to skip the form and interview instead, both of which mean the user has
 already given the answers: they passed a `spec.json`, or `$ARGUMENTS` already describes the
