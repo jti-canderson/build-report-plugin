@@ -1,0 +1,16 @@
+{
+  "name": "Probe_Report",
+  "title": "Probe Report",
+  "template": "tabular_list",
+  "why": "the smallest report that exercises every gate",
+  "sections": [
+    {"key": "ROWS", "title": "Rows", "cols": [
+      ["Case Number", 40, "Left", "caseNumber"],
+      ["Case Type", 60, "Left", "caseType"]
+    ]}
+  ],
+  "meta": [], "tiles": [],
+  "params": [["CaseType", "java.lang.String"]],
+  "variants": ["full", "none"],
+  "root": "Case", "id": "19"
+}
