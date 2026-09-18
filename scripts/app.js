@@ -29,7 +29,17 @@ function FolderBrowser({ onPick, onClose }) {
   const load = useCallback(p => {
     fetch('/api/browse?path=' + encodeURIComponent(p || ''))
       .then(r => r.json())
-      .then(d => (d.error ? setErr(d.error) : (setErr(''), setAt(d), setTyped(d.label))));
+      .then(d => {
+        if (d.error) {
+          // Put the ATTEMPTED path in the box, not the last one that worked. The error
+          // tells the user they can still pick it with "Use this path" - which would have
+          // silently picked the previous folder instead if the box had not been updated.
+          setErr(d.error);
+          if (p) setTyped(p);
+          return;
+        }
+        setErr(''); setAt(d); setTyped(d.label);
+      });
   }, []);
   useEffect(() => { load(''); }, [load]);
 
@@ -57,8 +67,9 @@ function FolderBrowser({ onPick, onClose }) {
         <h3>Choose a folder</h3>
         <div class="quick">
           ${at.quick.map(q => html`
-            <button key=${q.name} class="mini" title=${q.path}
-                    onClick=${() => setTyped(q.path)}>${q.name}</button>`)}
+            <button key=${q.name} title=${q.path}
+                    class=${'mini' + (at.label === q.path ? ' on' : '')}
+                    onClick=${() => load(q.path)}>${q.name}</button>`)}
         </div>
         <div class="quick">
           <input type="text" value=${typed} spellcheck="false"
@@ -67,9 +78,9 @@ function FolderBrowser({ onPick, onClose }) {
           <button class="mini" onClick=${() => load(typed)}>Open</button>
           <button class="mini" onClick=${usePath}>Use this path</button>
         </div>
-        <div class="pathnote"><b>Open</b> lists a folder. <b>Use this path</b> picks it
-          without reading it — so macOS only asks for file access when the report is
-          actually written there.</div>
+        <div class="pathnote">Shortcuts and <b>Open</b> show a folder's contents.
+          <b>Use this path</b> picks a folder <i>without</i> reading it — useful when macOS
+          blocks the listing, since writing may still be allowed.</div>
         ${!at.inside && html`
           <div class="warn">Outside the workspace (<code>${at.root}</code>). That is allowed
             — the report will be written here — but it will not appear in the project list.</div>`}
