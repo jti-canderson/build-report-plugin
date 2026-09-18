@@ -90,15 +90,54 @@ def pickable(d):
     return not (P._is_report(d) and not P._reports_in(d))
 
 
-# Suggestions for the PATH BOX, not buttons that list on click. Enumerating ~/Desktop or
-# ~/Documents is what makes macOS throw the "would like to access data from other apps"
-# prompt, and a shortcut bar is browsing, not choosing - nobody should get a privacy prompt
-# for clicking a suggestion. `is_dir()` below is a stat, which is not gated.
-QUICK = [("Workspace", lambda: P.ROOT),
-         ("Home", lambda: pathlib.Path.home()),
-         ("Downloads", lambda: pathlib.Path.home() / "Downloads"),
-         ("Desktop", lambda: pathlib.Path.home() / "Desktop"),
-         ("Documents", lambda: pathlib.Path.home() / "Documents")]
+SHORTCUTS_FILE = ".jti-shortcuts"
+
+
+def shortcuts():
+    """The folder shortcuts, most-used first.
+
+    The one people reach for constantly is the level ABOVE the workspace root - here
+    ~/JaspersoftWorkspace, which holds MyReports alongside Config Work - so it is derived
+    rather than hardcoded, and it leads. `Workspace` (the .jti-root itself) comes next.
+
+    A teammate's layout will not match this one, so `<workspace>/.jti-shortcuts` is read if
+    present: one path per line, `Label = /path` or just `/path`. Those come first. `#`
+    starts a comment. Nothing here enumerates anything - is_dir() is a stat, which macOS
+    does not gate; the listing only happens when a shortcut is actually clicked.
+    """
+    home = pathlib.Path.home()
+    out, seen = [], set()
+
+    def add(label, path):
+        try:
+            path = pathlib.Path(path).expanduser()
+            if path.is_dir() and str(path) not in seen:
+                seen.add(str(path))
+                out.append((label, path))
+        except OSError:
+            pass
+
+    cfg = P.ROOT / SHORTCUTS_FILE
+    if cfg.exists():
+        try:
+            for line in cfg.read_text().splitlines():
+                line = line.split("#", 1)[0].strip()
+                if not line:
+                    continue
+                label, _, path = line.partition("=")
+                add(label.strip(), path.strip()) if path else \
+                    add(pathlib.Path(label).name, label)
+        except OSError:
+            pass
+
+    parent = P.ROOT.parent
+    if parent != home and parent != P.ROOT:
+        add(parent.name, parent)
+    add("Workspace", P.ROOT)
+    add("Home", home)
+    for n in ("Downloads", "Desktop", "Documents"):
+        add(n, home / n)
+    return out
 
 
 def checkdir(rel):
@@ -183,7 +222,7 @@ def browse(rel):
             "dirs": kids, "isReport": P._is_report(here),
             "reports": len(P._reports_in(here)), "pickable": pickable(here),
             "inside": inside, "root": str(P.ROOT),
-            "quick": [{"name": n, "path": str(f())} for n, f in QUICK if f().is_dir()]}
+            "quick": [{"name": n, "path": str(d)} for n, d in shortcuts()]}
 
 
 def write_spec(payload):

@@ -114,3 +114,21 @@ two-step template menu. A form has no cap.
 It writes a file and nothing else — it does not invoke Claude, and it cannot write outside
 the workspace root. The gates are unchanged: a spec skips the questions, never the
 verification.
+
+### Folder shortcuts in the picker
+
+The picker leads with the folder **above** the workspace root (here
+`~/JaspersoftWorkspace`, which holds `MyReports` alongside `Config Work`) because that is
+the one people navigate from most, then Workspace, Home, Downloads, Desktop and Documents.
+
+A teammate's layout will not match. Drop a `.jti-shortcuts` file in the workspace root to
+put your own first:
+
+```
+Checks      = ~/JaspersoftWorkspace/MyReports/OKDAC Reports/Checks
+~/Projects/reports          # no label: the folder name is used
+# lines starting with # are ignored
+```
+
+Nothing is read until a shortcut is clicked — the list is built with `stat`, which macOS
+does not gate, so opening the picker never triggers a file-access prompt.
