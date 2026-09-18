@@ -28,7 +28,9 @@ import os
 import pathlib
 import re
 import socketserver
+import subprocess
 import sys
+import tempfile
 import threading
 import urllib.parse
 import webbrowser
@@ -138,6 +140,45 @@ def shortcuts():
     for n in ("Downloads", "Desktop", "Documents"):
         add(n, home / n)
     return out
+
+
+def form_spec(blob, filename):
+    """Parse an uploaded folder-view export into builder-shaped sections.
+
+    The file is written to a temp path and handed to formexport.py --spec, the same parser
+    the command uses - one implementation, so the form and the chat flow cannot disagree
+    about what a folder view says.
+
+    Nothing is written into the workspace: an upload is an INPUT, not a deliverable. It is
+    parsed, its shape is returned, and the temp copy is deleted.
+    """
+    suffix = ".zip" if filename.lower().endswith(".zip") else ".xml"
+    tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+    try:
+        tmp.write(blob)
+        tmp.close()
+        r = subprocess.run(
+            [sys.executable,
+             os.path.join(PLUGIN, "skills", "jasper-reports", "scripts", "formexport.py"),
+             tmp.name, "--spec"],
+            capture_output=True, text=True, timeout=60)
+        if r.returncode != 0:
+            return {"ok": False, "message": (r.stderr or r.stdout or "could not read it")[:400]}
+        forms = json.loads(r.stdout or "[]")
+        if not forms:
+            return {"ok": False, "message":
+                    "No folder view in that file. A FORM export holds panels and columns; "
+                    "a RULE or REPORT export does not, and a .jrxml is already a layout."}
+        return {"ok": True, "forms": forms}
+    except json.JSONDecodeError:
+        return {"ok": False, "message": "the parser did not return readable output"}
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "message": "the parser took too long"}
+    finally:
+        try:
+            os.unlink(tmp.name)
+        except OSError:
+            pass
 
 
 def checkdir(rel):
@@ -310,7 +351,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         return self._send(404, b"not found", "text/plain")
 
     def do_POST(self):
-        if urllib.parse.urlparse(self.path).path != "/api/spec":
+        route = urllib.parse.urlparse(self.path)
+        if route.path == "/api/formexport":
+            n = int(self.headers.get("Content-Length") or 0)
+            if n > 40 * 1024 * 1024:
+                return self._send(400, json.dumps(
+                    {"ok": False, "message": "that file is over 40 MB - not a config export"}))
+            q = urllib.parse.parse_qs(route.query)
+            body = self.rfile.read(n)
+            out = form_spec(body, (q.get("name") or ["upload.zip"])[0])
+            return self._send(200 if out.get("ok") else 400, json.dumps(out))
+        if route.path != "/api/spec":
             return self._send(404, b"not found", "text/plain")
         n = int(self.headers.get("Content-Length") or 0)
         try:

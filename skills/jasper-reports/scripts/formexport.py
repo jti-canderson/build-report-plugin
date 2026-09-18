@@ -174,6 +174,89 @@ def outline(cfg, show_velocity=False):
                     print(f"             | {line}")
 
 
+def as_spec(cfg):
+    """The folder view as data the report builder can prefill from.
+
+    A panel becomes a SECTION; its column headers become COLUMNS. A header can be fed by
+    several field items (First Name = namePrefix + firstName), so the first path wins and
+    the rest ride along in `also` - the rule may want to join them, which is a decision for
+    a person, not something to guess here.
+
+    FIELD NAMES ARE MADE UNIQUE ACROSS THE WHOLE FORM, not per panel: the .jrxml declares
+    one flat field list, so a `status` in two panels would collide into a single field and
+    one of them would quietly show the other's value.
+    """
+    panels, used = [], set()
+
+    def name_for(path, panel_key):
+        base = re.sub(r'[^A-Za-z0-9]', '', (path or 'col').rsplit('.', 1)[-1]) or 'col'
+        base = base[0].lower() + base[1:]
+        if base not in used:
+            used.add(base)
+            return base
+        pref = re.sub(r'[^A-Za-z0-9]', '', panel_key).lower()[:6] or 'x'
+        cand = pref + base[0].upper() + base[1:]
+        n = 2
+        while cand in used:
+            cand, n = f"{pref}{base[0].upper()}{base[1:]}{n}", n + 1
+        used.add(cand)
+        return cand
+
+    headers, hi, cur = [], 0, None
+    items = cfg.get('formItems') or []
+
+    # A SEARCH form (S-*) has no panel items at all - just a flat list of fields - so the
+    # panel-driven walk below would yield nothing and the caller would be told "no folder
+    # view here" about a file that plainly is a form. Those fields are exactly the columns
+    # a list report wants, so give them one section named after the form.
+    if not any(i.get('type') == 2 for i in items) and any(i.get('path') for i in items):
+        cols, seen_p = [], set()
+        for it in items:
+            path = it.get('path') or ''
+            if not path or it.get('type') == 3 or path in seen_p:
+                continue
+            seen_p.add(path)
+            cols.append({"header": it.get('label') or path.rsplit('.', 1)[-1],
+                         "path": path, "also": []})
+        key = re.sub(r'[^A-Za-z0-9]', '', cfg.get('code') or 'ROWS').upper()[:14] or 'ROWS'
+        for c in cols:
+            c["field"] = name_for(c["path"], key)
+        return {"root": cfg.get('rootEntity'), "formName": cfg.get('formName'),
+                "code": cfg.get('code'), "searchForm": True,
+                "panels": [{"label": cfg.get('formName') or 'Rows', "grid": True,
+                            "key": key, "columns": cols}] if cols else []}
+
+    for it in items:
+        t, path = it.get('type'), it.get('path') or ''
+        if t == 2:
+            cur = {"label": it.get('label') or 'Panel', "grid": bool(it.get('grid')),
+                   "columns": []}
+            panels.append(cur)
+            headers, hi = it.get('columnHeaders') or [], 0
+            continue
+        if t == 3 or cur is None or not path:
+            continue
+        starts = bool(it.get('newColumn')) or hi == 0
+        if starts:
+            h = headers[hi] if hi < len(headers) else ''
+            hi += 1
+            h = '' if not h or not h.strip('&#160; ') else h
+            cur["columns"].append({"header": h or path.rsplit('.', 1)[-1],
+                                   "path": path, "also": []})
+        elif cur["columns"]:
+            cur["columns"][-1]["also"].append(path)
+
+    for pnl in panels:
+        key = re.sub(r'[^A-Za-z0-9]', '', pnl["label"]).upper()[:14] or 'PANEL'
+        pnl["key"] = key
+        for c in pnl["columns"]:
+            c["field"] = name_for(c["path"], key)
+
+    return {"root": cfg.get('rootEntity'), "formName": cfg.get('formName'),
+            "code": cfg.get('code'),
+            "panels": [p for p in panels if p["columns"]]}
+
+
 def paths(cfg):
     seen, out = set(), []
     for it in cfg.get('formItems') or []:
@@ -190,25 +273,36 @@ def main():
         sys.exit(1)
     src = sys.argv[1]
     mode = sys.argv[2] if len(sys.argv) > 2 else ''
+    # --spec: the builder-shaped view. An archive can hold several folder views, so this
+    # emits a LIST and lets the caller choose - picking the first silently would hand
+    # someone a report built from whichever form happened to sort first.
+    specs = []
+    # --spec emits JSON on stdout and NOTHING else. A stray banner line ahead of it is not
+    # cosmetic: the caller does json.loads() on the whole stream and gets an exception.
+    say = (lambda *a: None) if mode == '--spec' else print
     for name, xml in members(src):
         m = meta(xml)
-        print(f"=== {name} ===")
-        print(f"  {m['srcRoot']} {m['srcCode']}  (id {m['srcId']} in the SOURCE environment only)")
-        print(f"  from: {m['srcActionUrl']}")
+        if mode != '--spec':
+            say(f"=== {name} ===")
+        say(f"  {m['srcRoot']} {m['srcCode']}  (id {m['srcId']} in the SOURCE environment only)")
+        say(f"  from: {m['srcActionUrl']}")
         cfg = content(xml)
         if cfg is None:
             if '<jasperReport' in xml:
-                print("  This is a .jrxml, not a config export - the template IS the contract.")
-                print("  Read its <field>/<parameter> declarations and write the rule to them;")
-                print("  see 'A .jrxml: the template is the contract' in SKILL.md.")
+                say("  This is a .jrxml, not a config export - the template IS the contract.")
+                say("  Read its <field>/<parameter> declarations and write the rule to them;")
+                say("  see 'A .jrxml: the template is the contract' in SKILL.md.")
             else:
-                print("  No srcContent - not an eSeries config export.")
+                say("  No srcContent - not an eSeries config export.")
             continue
         imp = import_content(xml)
-        if m['srcRoot'] == 'RULE' and imp and mode != '--json':
+        if m['srcRoot'] == 'RULE' and imp and mode not in ('--json', '--spec'):
             show_rule(imp, dump_script=(mode == '--script'))
             continue
-        if mode == '--json':
+        if mode == '--spec':
+            if isinstance(cfg, dict) and cfg.get('formItems'):
+                specs.append(as_spec(cfg))
+        elif mode == '--json':
             print(json.dumps(cfg, indent=2) if isinstance(cfg, dict) else cfg)
         elif mode == '--paths':
             for p in paths(cfg):
@@ -217,6 +311,10 @@ def main():
             outline(cfg, show_velocity=(mode == '--velocity'))
         else:
             print(cfg[:4000])
+
+
+    if mode == '--spec':
+        print(json.dumps(specs, indent=2))
 
 
 if __name__ == '__main__':

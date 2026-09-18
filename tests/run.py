@@ -208,6 +208,56 @@ def main():
     else:
         skip("rule_import reproduces the platform exports", "no RULE-local-*.zip on hand")
 
+    # formexport --spec feeds the builder's upload. It must emit JSON and NOTHING else -
+    # a stray banner line makes json.loads() throw, which is how the RULE case first failed.
+    fe = os.path.join(PLUGIN, "skills", "jasper-reports", "scripts", "formexport.py")
+    import glob as _glob
+    forms = sorted(_glob.glob(os.path.expanduser("~/Downloads/FORM-*.zip")))
+    rules = sorted(_glob.glob(os.path.expanduser("~/Downloads/RULE-*.zip")))
+    # Use the first export that actually CONTAINS a folder view, not whichever sorts
+    # first. ~/Downloads holds FORM archives with no panels at all, so blindly taking
+    # forms[0] made this test pass or fail depending on what was in the folder - a test
+    # that is non-deterministic is worse than no test.
+    usable = None
+    for f in forms:
+        rc, out = run(["python3", fe, f, "--spec"])
+        try:
+            _d = json.loads(out) if rc == 0 else []
+            if _d and _d[0].get("panels"):
+                usable, first_out = f, out
+                break
+        except ValueError:
+            continue
+    if usable:
+        rc, out = 0, first_out
+        ok, detail = False, out
+        try:
+            d = json.loads(out)
+            ok = rc == 0 and isinstance(d, list) and d and d[0].get("panels")
+            # field names must be unique across the WHOLE form - the jrxml declares one
+            # flat list, so a `status` in two panels would collide into one field.
+            names = [c["field"] for f in d for pn in f["panels"] for c in pn["columns"]]
+            ok = ok and len(names) == len(set(names))
+            detail = f"{len(names)} columns, {len(set(names))} distinct field names"
+        except ValueError as e:
+            detail = f"not JSON: {e}\n{out[:200]}"
+        check(f"formexport --spec: parseable JSON, unique field names "
+              f"({os.path.basename(usable)})", ok, detail)
+    else:
+        skip("formexport --spec emits parseable JSON",
+             "no FORM-*.zip on hand that contains a folder view")
+
+    if rules:
+        rc, out = run(["python3", fe, rules[0], "--spec"])
+        try:
+            ok = json.loads(out) == []
+        except ValueError:
+            ok = False
+        check("formexport --spec returns an empty list for a non-folder-view export",
+              ok, out[:200])
+    else:
+        skip("formexport --spec on a non-folder-view export", "no RULE-*.zip on hand")
+
     # ---- the ones that need a JVM ---------------------------------------------
     if not JRS:
         for n in ("a rule that does not compile is rejected",

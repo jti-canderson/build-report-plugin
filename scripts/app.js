@@ -173,6 +173,47 @@ function App() {
   const [params, setParams] = useState([newParam()]);
   const [busy, setBusy] = useState(false);
   const [res, setRes] = useState(null);
+  const [imported, setImported] = useState(null);
+  const [impErr, setImpErr] = useState('');
+
+  // A folder-view export answers the sections, the columns and the root entity outright -
+  // they are the panels of a screen someone already designed. Retyping them by hand is
+  // both slow and a chance to get a path wrong.
+  const applyForm = f => {
+    setSections(f.panels.map(p => ({
+      id: uid(), key: p.key, title: p.label,
+      cols: p.columns.map(c => ({
+        id: uid(), header: c.header,
+        width: Math.max(8, Math.round(100 / p.columns.length)),
+        align: 'Left', field: c.field,
+      })),
+    })));
+    // Follow the upload, but never clobber a name the user typed. "Untouched" means empty
+    // or still exactly what the LAST import produced - so a second export replaces the
+    // first one's name, while anything hand-edited survives.
+    const derived = (f.formName || 'Report').replace(/[^A-Za-z0-9]+/g, '_');
+    const prior = imported && !imported.choose ? imported : null;
+    const priorName = prior ? (prior.formName || 'Report').replace(/[^A-Za-z0-9]+/g, '_') : '';
+    if (!name || name === priorName) setName(derived);
+    if (!title || (prior && title === prior.formName)) setTitle(f.formName || '');
+    setImported(f);
+  };
+
+  const onFile = e => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    setImpErr(''); setImported(null);
+    file.arrayBuffer().then(buf =>
+      fetch('/api/formexport?name=' + encodeURIComponent(file.name),
+            { method: 'POST', body: buf })
+        .then(r => r.json())
+        .then(d => {
+          if (!d.ok) return setImpErr(d.message);
+          if (d.forms.length === 1) return applyForm(d.forms[0]);
+          setImported({ choose: d.forms });   // several views in one archive - let them pick
+        }));
+    e.target.value = '';
+  };
 
   useEffect(() => {
     fetch('/api/bootstrap').then(r => r.json()).then(d => {
@@ -239,6 +280,27 @@ function App() {
               <div class="d">${t.one_liner}</div>
             </button>`)}
         </div>
+
+        <h2>Start from a folder view (optional)</h2>
+        <div class="hint">Export a folder view from eSeries — <b>System Setup → Screens →
+          Folder Views</b>, then Export — and drop the <code>FORM-*.zip</code> here. Its
+          panels become sections and its columns become columns, with the real field paths
+          already filled in.</div>
+        <input type="file" accept=".zip,.xml" onChange=${onFile}/>
+        ${impErr && html`<div class="out err">${impErr}</div>`}
+        ${imported && imported.choose && html`
+          <div class="out ok">
+            <div>That archive holds ${imported.choose.length} folder views — which one?</div>
+            <div class="actions" style=${undefined}>
+              ${imported.choose.map(f => html`
+                <button key=${f.code} class="mini" onClick=${() => applyForm(f)}>
+                  ${f.formName} (${f.panels.length} panels)</button>`)}
+            </div>
+          </div>`}
+        ${imported && !imported.choose && html`
+          <div class="out ok">Loaded <b>${imported.formName}</b> — root entity
+            <code>${imported.root}</code>, ${imported.panels.length} panels filled in below.
+            Widths are evenly split; adjust them and drop any column you do not want.</div>`}
 
         <h2>Report</h2>
         <div class="row">
