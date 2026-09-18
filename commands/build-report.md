@@ -188,7 +188,7 @@ from here, and do not work around a `REFUSED` by using absolute paths or shell c
 The point of the scope is that pointing the plugin at a folder is the whole permission
 grant; a tool that writes outside it is one you would have to supervise.
 
-## 2. SDK / JAR
+## 2. The field list (what eSeries calls the SDK)
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/project.py" sdk-status "<project folder>"
@@ -200,10 +200,15 @@ The command always exits 0 - the first word is the status.
   asked for a "JAR/SDK" with no reason given has no way to judge whether it is worth the
   two minutes, and mostly says skip:
 
-  > Send me the JAR/SDK for `<project>`, or say skip.
-  > It is the list of every field and record type in *your* environment — it is what lets me
-  > check a field really exists before the report ships, instead of guessing at its name.
-  > In eSeries: **System Setup → Metadata → Entities**, then **Download SDK** at the top right.
+  > Send me the **field list** for `<project>` — a `.jar` file — or say skip.
+  > It lists every field and record type that exists in *your* environment, so I can check a
+  > field is really there before the report ships instead of guessing at its name.
+  > In eSeries: **System Setup → Metadata → Entities**, then **Download SDK** at the top
+  > right. eSeries calls it "SDK"; it is a field list, not a database export.
+
+  **Call it a field list, not "the SDK" or "the JAR".** Both are jargon to the person being
+  asked, and neither says what it contains or why it is worth two minutes to fetch. Say
+  "SDK" only when naming the button they have to click.
 
 - **OK** → `AskUserQuestion`: *SDK on file: `<filename>` (registered `<date>`).* Options:
   **Still current** / **I'll send a newer one**.

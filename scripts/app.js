@@ -25,20 +25,34 @@ const newParam = () => ({ id: uid(), name: '', type: TYPES[0][0] });
 function FolderBrowser({ onPick, onClose }) {
   const [at, setAt] = useState(null);
   const [err, setErr] = useState('');
+  const [typed, setTyped] = useState('');
   const load = useCallback(p => {
     fetch('/api/browse?path=' + encodeURIComponent(p || ''))
       .then(r => r.json())
-      .then(d => (d.error ? setErr(d.error) : (setErr(''), setAt(d))));
+      .then(d => (d.error ? setErr(d.error) : (setErr(''), setAt(d), setTyped(d.label))));
   }, []);
   useEffect(() => { load(''); }, [load]);
 
-  if (!at) return html`<div class="modal"><div class="sheet"><div class="spin">Loading…</div></div></div>`;
+  if (!at) return html`<div class="modal"><div class="sheet">
+    ${err ? html`<div class="out err" style="margin:16px">${err}</div>` : html`<div class="spin">Loading…</div>`}
+  </div></div>`;
 
   return html`
     <div class="modal" onClick=${e => e.target.classList.contains('modal') && onClose()}>
       <div class="sheet">
         <h3>Choose a folder</h3>
-        <div class="crumb">${at.label}</div>
+        <div class="quick">
+          ${at.quick.map(q => html`
+            <button key=${q.name} class="mini" onClick=${() => load(q.path)}>${q.name}</button>`)}
+          <input type="text" value=${typed} spellcheck="false"
+                 onInput=${e => setTyped(e.target.value)}
+                 onKeyDown=${e => e.key === 'Enter' && load(typed)}/>
+          <button class="mini" onClick=${() => load(typed)}>Go</button>
+        </div>
+        ${!at.inside && html`
+          <div class="warn">Outside the workspace (<code>${at.root}</code>). That is allowed
+            — the report will be written here — but it will not appear in the project list.</div>`}
+        ${err && html`<div class="warn err2">${err}</div>`}
         <div class="body">
           ${at.parent !== null && html`
             <button class="dir" onClick=${() => load(at.parent)}>
@@ -168,15 +182,16 @@ function App() {
             ${boot.projects.map(p => html`
               <option key=${p.name} value=${p.name}>
                 ${p.label} — ${p.reports} report${p.reports === 1 ? '' : 's'},
-                ${p.sdk ? ' SDK on file' : ' no SDK'}${p.environment ? ', ' + p.environment : ''}
+                ${p.sdk ? ' field list (SDK) on file' : ' no field list (SDK)'}${p.environment ? ', ' + p.environment : ''}
               </option>`)}
             ${!known && html`<option value=${project}>${project}  (browsed)</option>`}
           </select>
           <button class="mini fix"
                   onClick=${() => setBrowsing(true)}>Browse…</button>
         </div>
-        <div class="hint">Not listed? Browse for any folder inside the workspace. A folder
-          outside it is a different workspace — put a <code>.jti-root</code> file there.</div>
+        <div class="hint">Not listed? <b>Browse</b> to any folder on this Mac — including
+          Downloads or Home. Anything outside the workspace still works; it just will not
+          show up in this list next time.</div>
 
         <h2>Template</h2>
         <div class="cards">

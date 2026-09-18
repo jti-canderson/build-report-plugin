@@ -25,6 +25,7 @@ import argparse
 import http.server
 import json
 import os
+import pathlib
 import re
 import socketserver
 import sys
@@ -60,6 +61,10 @@ def templates():
     return out
 
 
+def inside_ws(d):
+    return d == P.ROOT or P.ROOT in d.parents
+
+
 def pickable(d):
     """Can a report be built INTO this folder?
 
@@ -68,43 +73,88 @@ def pickable(d):
     naive is-it-a-report test disabled it. The page asks the server this question rather
     than re-deriving it, because the first cut re-derived it and the two disagreed.
 
-    A folder is a destination when it holds report folders or carries project metadata.
-    Loose .jrxml files with nothing under them mean it IS a report, and building a report
-    inside a report is never what anyone meant.
+    The ONLY disqualifier is that the folder is itself a report: loose .jrxml files with no
+    report folders under them. Building a report inside a report is never what anyone meant.
+
+    Everything else is fair game, including an empty folder and one outside the workspace.
+    The earlier rule - "it must already hold reports or carry project metadata" - came from
+    mirroring the dropdown, and it was wrong for browsing: it refused ~/Downloads and every
+    new empty folder, which is exactly what someone browsing is usually trying to reach.
     """
-    return bool(P._reports_in(d) or P._meta(d))
+    # ONLY meaningful inside the workspace. ~/Downloads holds 69 loose .jrxml files
+    # because that is where a browser puts them - which made the heuristic call it "a
+    # report" and refuse it. Outside the workspace there is no such thing as a report
+    # folder, just a folder.
+    if not inside_ws(d):
+        return True
+    return not (P._is_report(d) and not P._reports_in(d))
+
+
+QUICK = [("Workspace", lambda: P.ROOT),
+         ("Home", lambda: pathlib.Path.home()),
+         ("Downloads", lambda: pathlib.Path.home() / "Downloads"),
+         ("Desktop", lambda: pathlib.Path.home() / "Desktop")]
 
 
 def browse(rel):
-    """Folders under the workspace root, for picking a project that is not in the list.
+    """Any folder the user explicitly navigates to - including outside the workspace.
 
-    Scoped to ROOT and nowhere else: the plugin's whole permission model is that pointing
-    it at a folder IS the grant. If the folder someone wants lives outside, that is a
-    different workspace - a `.jti-root` marker there, or $JTI_PROJECT_ROOT - not a path
-    this page should reach.
+    THE RULE THAT MATTERS is not "inside ROOT"; it is WHERE THE PATH CAME FROM. A folder
+    the user clicked or typed in this form is a grant - they are looking at it and choosing
+    it. A path DERIVED from something else is not, and that distinction is the actual fix
+    for the bug this model was protecting against: on 09/09 a build took an attachment's
+    location (~/Downloads) and invented a client project from it, silently, having asked
+    nobody. Refusing every path outside ROOT prevented that, but it also stopped someone
+    deliberately putting a report on their Desktop, which is a reasonable thing to want.
+
+    So: the page browses anywhere, and says loudly when it is outside the workspace.
+    `/build-report` still refuses to infer a project from an attachment path - that rule
+    lives in the command and is unchanged.
     """
-    here = P.ROOT if rel in ("", ".", None) else P._under_root(P.ROOT / rel)
-    if here is None or not here.is_dir():
-        return {"error": f"{rel!r} is not a folder inside {P.ROOT}"}
+    if rel in ("", ".", None):
+        here = P.ROOT
+    elif str(rel).startswith("/") or str(rel).startswith("~"):
+        here = pathlib.Path(str(rel)).expanduser()
+    else:
+        here = P.ROOT / rel
+    try:
+        here = here.resolve()
+    except OSError:
+        return {"error": f"{rel!r} cannot be resolved"}
+    if not here.is_dir():
+        return {"error": f"{here} is not a folder"}
+    def ref(d):
+        """Inside the workspace, keep paths relative so they read well; outside, absolute."""
+        try:
+            return str(d.relative_to(P.ROOT))
+        except ValueError:
+            return str(d)
+
     kids = []
     try:
         for d in sorted(here.iterdir()):
             if not d.is_dir() or d.name.startswith(".") or d.name in P.NOT_A_PROJECT:
                 continue
-            kids.append({"name": d.name,
-                         "rel": str(d.relative_to(P.ROOT)),
-                         "isReport": P._is_report(d),
+            kids.append({"name": d.name, "rel": ref(d),
+                         "isReport": P._is_report(d) and inside_ws(d),
                          "reports": len(P._reports_in(d)),
                          "pickable": pickable(d)})
+    except PermissionError:
+        # macOS gates ~/Desktop, ~/Documents and friends behind TCC. Say which fix applies
+        # rather than leaving a bare refusal - the folder is not missing, the permission is.
+        return {"error": f"macOS is blocking access to {here}. Grant the terminal running "
+                         f"this builder access under System Settings \u2192 Privacy & "
+                         f"Security \u2192 Files and Folders, or pick a different folder."}
     except OSError:
         pass
-    parent = None
-    if here != P.ROOT:
-        parent = "" if here.parent == P.ROOT else str(here.parent.relative_to(P.ROOT))
-    return {"path": "" if here == P.ROOT else str(here.relative_to(P.ROOT)),
-            "label": str(here), "parent": parent, "dirs": kids,
-            "isReport": P._is_report(here), "reports": len(P._reports_in(here)),
-            "pickable": pickable(here)}
+
+    inside = here == P.ROOT or P.ROOT in here.parents
+    return {"path": ref(here), "label": str(here),
+            "parent": None if here == here.parent else ref(here.parent),
+            "dirs": kids, "isReport": P._is_report(here),
+            "reports": len(P._reports_in(here)), "pickable": pickable(here),
+            "inside": inside, "root": str(P.ROOT),
+            "quick": [{"name": n, "path": str(f())} for n, f in QUICK if f().is_dir()]}
 
 
 def write_spec(payload):
@@ -114,9 +164,17 @@ def write_spec(payload):
         return False, ("Report name must start with a letter and use only letters, digits "
                        "and underscores - it becomes the .jrxml and rule file names.")
     proj = (payload.get("project") or "").strip()
-    folder = P.ROOT if proj in ("", ".") else P._under_root(P.ROOT / proj)
-    if folder is None or not folder.exists():
-        return False, f"Project {proj!r} is not a folder inside {P.ROOT}."
+    if proj in ("", "."):
+        folder = P.ROOT
+    else:
+        cand = pathlib.Path(proj).expanduser() if proj.startswith(("/", "~")) \
+            else P.ROOT / proj
+        folder = cand.resolve() if cand.is_dir() else None
+    # The folder must already EXIST. Browsing to a place is a grant to write a report
+    # there; it is not a grant to create arbitrary directory trees anywhere on the disk.
+    if folder is None:
+        return False, (f"{proj!r} is not a folder that exists. Browse to it, or create it "
+                       f"first.")
     if not payload.get("sections"):
         return False, "Add at least one section with at least one column."
     for s in payload["sections"]:
