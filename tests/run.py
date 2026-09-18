@@ -227,6 +227,68 @@ print(json.dumps({'badRejected': not bad['ok'], 'goodOk': good.get('ok'),
     check("a spec with neither a template nor a picture is refused",
           bool(d.get("refusedNoTemplate")) and "picture" in (d.get("why") or ""), out)
 
+    # THE LISTENER. Two things have to hold or the Write button lies to the user: a spec
+    # written while Claude is parked must reach it, and the "Claude is watching" flag must
+    # go FALSE when the client hangs up. The second one was broken on 09/18 - curl's
+    # --max-time kills the client, not the server thread, so the count stayed up forever
+    # and the page said "Claude has picked this up" to nobody.
+    import socket as _socket
+    import urllib.request as _u
+    with _socket.socket() as _s:
+        _s.bind(("127.0.0.1", 0))
+        port = _s.getsockname()[1]
+    srv = subprocess.Popen(
+        ["python3", os.path.join(PLUGIN, "scripts", "serve_builder.py"),
+         "--port", str(port), "--no-open"],
+        env=dict(os.environ, JTI_PROJECT_ROOT=ws, JTI_PLUGIN=PLUGIN),
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    base = f"http://127.0.0.1:{port}"
+
+    def api(path, body=None):
+        req = _u.Request(base + path, data=body, method="POST" if body else "GET")
+        with _u.urlopen(req, timeout=20) as r:
+            return json.load(r)
+
+    try:
+        for _ in range(50):                      # wait for the port to answer
+            try:
+                api("/api/watching"); break
+            except Exception:
+                __import__("time").sleep(0.2)
+
+        idle = api("/api/watching")
+        # Park a waiter, then ABANDON it - the client goes away without the server being told
+        holder = subprocess.Popen(
+            ["curl", "-s", "--max-time", "3", f"{base}/api/wait?since=0"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        __import__("time").sleep(1.5)
+        parked = api("/api/watching")
+        holder.wait(timeout=15)
+        __import__("time").sleep(2.5)
+        released = api("/api/watching")
+
+        # and the happy path: parked, a spec is written, the waiter gets it
+        holder2 = subprocess.Popen(
+            ["curl", "-s", "--max-time", "25", f"{base}/api/wait?since=0"],
+            stdout=subprocess.PIPE, text=True)
+        __import__("time").sleep(1.5)
+        wrote = api("/api/spec", json.dumps({
+            "name": "Listener_Probe", "project": "Probe Project",
+            "template": "record_summary",
+            "sections": [{"key": "ROWS", "title": "Rows",
+                          "cols": [["A", 20, "Left", "a"]]}]}).encode())
+        delivered = json.loads((holder2.communicate(timeout=30)[0] or "{}").strip() or "{}")
+    finally:
+        srv.terminate()
+
+    check("the Write button reaches a waiting Claude",
+          parked.get("watching") and wrote.get("watched")
+          and delivered.get("spec", "").endswith("Listener_Probe/spec.json"),
+          f"parked={parked} wrote={wrote} delivered={delivered}")
+    check("a Claude that hung up stops counting as watching",
+          not idle.get("watching") and not released.get("watching"),
+          f"idle={idle} released={released}")
+
     # the two listings that disagreed twice
     rc, out = run(["python3", "-c",
                    "import sys; sys.path.insert(0, %r); import project as P; "

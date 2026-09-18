@@ -27,12 +27,15 @@ import json
 import os
 import pathlib
 import re
+import select
 import shutil
 import socketserver
+import socket
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 import urllib.parse
 import webbrowser
 
@@ -100,6 +103,45 @@ def keep_look(blob, filename):
     return {"ok": True, "token": token, "name": stem + ext, "kind": ctype,
             "url": "/api/look?token=" + urllib.parse.quote(token),
             "bytes": len(blob)}
+
+
+def version_note():
+    """Is the Claude Code session running the same version of this plugin as this page?
+
+    THIS IS THE FAILURE THIS FUNCTION EXISTS FOR. A plugin install is a version-pinned
+    SNAPSHOT under ~/.claude/plugins/cache/, and the command `.md` is read once at session
+    start. So a plugin can be five versions ahead in git while every `/build-report` quietly
+    runs the old command - and the symptom is not an error, it is a FEATURE SILENTLY
+    MISSING. On 09/18 the listener that hands a written spec straight to Claude had shipped
+    in 0.22.0 while the install sat at 0.18.0; the button worked, the spec was written, and
+    the page fell back to "paste this command" with nothing anywhere saying why.
+
+    Nothing here is authoritative about what THIS session loaded - a session started before
+    an update keeps running the old copy either way. It compares what is installed against
+    what this page is, which catches the case above; the restart advice covers the rest.
+    """
+    mine = installed = None
+    try:
+        mine = json.loads((pathlib.Path(PLUGIN) / ".claude-plugin" / "plugin.json")
+                          .read_text()).get("version")
+    except (OSError, ValueError):
+        pass
+    try:
+        reg = json.loads((pathlib.Path.home() / ".claude" / "plugins" /
+                          "installed_plugins.json").read_text())
+        for key, entries in (reg.get("plugins") or {}).items():
+            if key.split("@")[0] == "jti-reports" and entries:
+                installed = entries[0].get("version")
+    except (OSError, ValueError, AttributeError):
+        pass
+    note = {"mine": mine or "?", "installed": installed, "stale": False}
+    if mine and installed and mine != installed:
+        note["stale"] = True
+        note["message"] = (
+            f"This page is version {mine}; Claude Code has {installed} installed. Anything "
+            f"added since {installed} will not be there - run "
+            f"`claude plugin update jti-reports@jti-local` and restart Claude Code.")
+    return note
 
 
 def projects():
@@ -390,6 +432,19 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b)
 
+    def _peer_gone(self):
+        """Has the client hung up? A closed peer reads as ready-with-nothing.
+
+        MSG_PEEK so a pipelined request is not consumed. Any error here is treated as gone:
+        the cost of a false positive is one re-poll, the cost of a false negative is the
+        page claiming someone is listening when nobody is.
+        """
+        try:
+            r, _, _ = select.select([self.connection], [], [], 0)
+            return bool(r) and self.connection.recv(1, socket.MSG_PEEK) == b""
+        except OSError:
+            return True
+
     def log_message(self, *a):
         pass                                    # the console is for the spec path, not a log
 
@@ -417,9 +472,20 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             with WROTE:
                 WAITERS[0] += 1
             try:
-                with WROTE:
-                    if len(WRITES) <= since:
-                        WROTE.wait(timeout=secs)
+                # In SLICES, checking the socket between them, rather than one long
+                # WROTE.wait(secs). `curl --max-time` kills the CLIENT; the server thread
+                # knows nothing about it and would stay parked for the full nine minutes -
+                # so WAITERS stayed 1 with nobody on the other end, and the page then told
+                # the user "Claude has picked this up" when Claude had walked away and the
+                # spec was going nowhere. Found 09/18 by the badge that displays this.
+                deadline = time.monotonic() + secs
+                while time.monotonic() < deadline:
+                    with WROTE:
+                        if len(WRITES) > since:
+                            break
+                        WROTE.wait(timeout=min(1.0, deadline - time.monotonic()))
+                    if len(WRITES) > since or self._peer_gone():
+                        break
             finally:
                 with WROTE:
                     WAITERS[0] -= 1
@@ -448,9 +514,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if path == "/api/browse":
             q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             return self._send(200, json.dumps(browse((q.get("path") or [""])[0])))
+        if path == "/api/watching":
+            # Cheap enough to poll: whether Claude is parked on /api/wait right now. The
+            # page shows this BEFORE the button is clicked - finding out afterwards, from a
+            # result box, is finding out too late to do anything about it.
+            return self._send(200, json.dumps({"watching": WAITERS[0] > 0}))
         if path == "/api/bootstrap":
             return self._send(200, json.dumps({
-                "root": str(P.ROOT), "rootWhy": P.ROOT_WHY,
+                "root": str(P.ROOT), "rootWhy": P.ROOT_WHY, "version": version_note(),
                 "projects": projects(), "templates": templates()}))
         if path.startswith("/preview/"):
             fn = os.path.basename(path)

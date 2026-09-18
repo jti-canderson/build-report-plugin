@@ -182,6 +182,7 @@ function App() {
   const [impErr, setImpErr] = useState('');
   const [look, setLook] = useState(null);
   const [lookErr, setLookErr] = useState('');
+  const [watching, setWatching] = useState(null);
 
   // A folder-view export answers the sections, the columns and the root entity outright -
   // they are the panels of a screen someone already designed. Retyping them by hand is
@@ -243,6 +244,18 @@ function App() {
     });
   }, []);
 
+  // Is Claude parked on /api/wait? Shown live, because the answer decides what the Write
+  // button DOES - hand the spec straight over, or print a command to copy - and a user who
+  // only learns that from the result box learns it too late to restart anything.
+  useEffect(() => {
+    let alive = true;
+    const tick = () => fetch('/api/watching').then(r => r.json())
+      .then(d => alive && setWatching(d.watching)).catch(() => {});
+    tick();
+    const t = setInterval(tick, 3000);
+    return () => { alive = false; clearInterval(t); };
+  }, []);
+
   if (!boot) return html`<div class="spin">Loading…</div>`;
 
   // A browsed folder may not be in the dropdown; show it as a real option rather than
@@ -275,6 +288,8 @@ function App() {
         <h1>JTI Report Builder</h1>
         <div class="root">workspace ${boot.root} — ${boot.rootWhy}</div>
       </header>
+      ${boot.version && boot.version.stale && html`
+        <div class="banner">⚠︎ ${boot.version.message}</div>`}
       <main>
         <h2>Project</h2>
         <div class="row end">
@@ -404,6 +419,10 @@ function App() {
           <button class="go" disabled=${busy || !tpl || (tpl === PICTURE && !look)}
                   onClick=${submit}>
             ${busy ? 'Writing…' : 'Write spec.json'}</button>
+          <span class=${'watch' + (watching ? ' on' : '')}>
+            ${watching === null ? ''
+              : watching ? 'Claude is watching — clicking Write hands it straight over'
+                         : 'Claude is not watching — you will get a command to paste'}</span>
           ${!tpl && html`<span class="hint ml12">Pick a template first.</span>`}
           ${tpl === PICTURE && !look && html`
             <span class="hint ml12">Attach the picture you want it to look like.</span>`}
