@@ -403,6 +403,118 @@ def diff_forms(a_path, b_path):
           "Read the item list above before uploading."))
 
 
+# ── composing a form ────────────────────────────────────────────────────────────────
+def item_num(item):
+    m = re.search(r"<num>(\d+)</num>", item)
+    return int(m.group(1)) if m else -1
+
+
+def renumber(item, n):
+    """Set this item's own num, leaving any nested item's num alone.
+
+    Only the FIRST <num> belongs to this item - a nested OR-ed criterion carries its own
+    further down the same text, and a global replace would give both the same number.
+    """
+    return re.sub(r"<num>\d+</num>", f"<num>{n}</num>", item, count=1)
+
+
+def renumber_nested(item, n):
+    """Set the num of the LAST nested item (used when renumbering an OR-ed criterion)."""
+    hits = list(re.finditer(r"<num>(\d+)</num>", item))
+    if len(hits) < 2:
+        return item
+    m = hits[-1]
+    return item[:m.start()] + f"<num>{n}</num>" + item[m.end():]
+
+
+def compose(donor, paths, code, name, keep_results=None):
+    """Build a form holding exactly the named items, in the order given, taken from a donor.
+
+    THE WHOLE SAFETY ARGUMENT IS HERE. Items are lifted verbatim from a form the platform
+    exported, so every one of the 54 fields, the XStream artifacts and the resolved
+    <string>entityClass.field come along untouched. What this function decides is only WHICH
+    items appear and in WHAT ORDER - so that is the only thing that can be wrong, and the diff
+    against the donor shows it.
+
+    `paths` selects criteria in screen order; `keep_results` selects result columns (default:
+    all of the donor's, in their existing order).
+
+    Numbering: eSeries orders the screen by `num`, so the criteria are numbered in the order
+    given and the results after them. A nested (OR-ed) criterion keeps its parent's position
+    and takes the next number after the whole list, which is what the donor itself does.
+    """
+    # Key by (kind, path), NOT path alone. On S-Case-Simple `location`, `caseType` and
+    # `status` are EACH both a result column and a criterion - same path, different item,
+    # different label ("Office" vs "Agency"). Keying by path alone silently hands back the
+    # result column for three of the eight criteria, and the form still builds.
+    by_path = {}
+    for it in donor["items"]:
+        sm = item_summary(it)
+        by_path.setdefault((sm["kind"], sm["path"]), []).append(it)
+
+    missing = [p for p in paths if ("criterion", p) not in by_path]
+    if missing:
+        raise ValueError(f"the donor has no item for: {missing}. Available criteria: "
+                         + ", ".join(sorted(sm['path'] for sm in donor['summaries']
+                                            if sm['kind'] == 'criterion' and sm['path'])))
+
+    crit = [by_path[("criterion", p)][0] for p in paths]
+    results = [it for it in donor["items"] if item_summary(it)["kind"] == "result"]
+    if keep_results is not None:
+        want = list(keep_results)
+        results = [it for it in results if item_summary(it)["path"] in want]
+
+    # results first (the donor numbers them 0..n-1), then criteria - matching S-Case-Simple
+    ordered, n = [], 0
+    for it in results:
+        ordered.append(renumber(it, n)); n += 1
+    nested_after = []
+    for it in crit:
+        ordered.append(renumber(it, n)); n += 1
+    # nested items take the numbers after everything else, as the donor does
+    for i, it in enumerate(ordered):
+        if item_summary(it)["nested"]:
+            ordered[i] = renumber_nested(it, n); n += 1
+
+    out = dict(donor)
+    out["items"] = ordered
+    sep = donor["seps"][1] if len(donor["seps"]) > 1 else "\n    "
+    out["seps"] = [donor["seps"][0]] + [sep] * (len(ordered) - 1) + [donor["seps"][-1]]
+    out["summaries"] = [item_summary(i) for i in ordered]
+
+    # the JSON has to say the same thing. Rebuild it from the chosen items rather than
+    # editing the donor's array, so a dropped item cannot survive in one serialization.
+    keep_paths = [item_summary(i)["path"] for i in ordered]
+    js = {j.get("path"): j for j in (donor["cfg"].get("formItems") or [])}
+    new_items = []
+    for it in ordered:
+        sm = item_summary(it)
+        j = dict(js.get(sm["path"]) or {})
+        j["num"] = sm["num"]
+        if "additionalItems" in j:
+            inner = [dict(x) for x in j["additionalItems"]]
+            for x in inner:
+                x["num"] = item_summary(it)["num"]   # placeholder, fixed below
+            j["additionalItems"] = inner
+        new_items.append(j)
+    # the JSON lists a nested item BOTH inside its parent and at top level - reproduce that
+    for it, j in zip(ordered, new_items):
+        for x in j.get("additionalItems", []):
+            nums = [int(m.group(1)) for m in re.finditer(r"<num>(\d+)</num>", it)]
+            if len(nums) > 1:
+                x["num"] = nums[-1]
+                top = dict(x)
+                new_items.append(top)
+    out["cfg"] = dict(donor["cfg"])
+    out["cfg"]["formItems"] = new_items
+
+    # the per-item validation ids are source-environment primary keys, mapped positionally to
+    # the donor's items. Subsetting them positionally is an ASSUMPTION - it has never been
+    # checked against a real import, so a composed form that drops items says so out loud.
+    rename(out, code, name)
+    return out
+
+
 # ── the gate ────────────────────────────────────────────────────────────────────────
 def check(p, member_name=None):
     """Everything that must be true of a form before anybody uploads it.
@@ -582,6 +694,8 @@ def main():
         write_zip(a.out, back["env"]["srcCode"], xml_out)
         print(f"\n  wrote {a.out}")
         return
+    if a.selftest:
+        sys.exit(0 if selftest(a.selftest) else 1)
     files = sorted(glob.glob(os.path.join(os.path.expanduser(a.selftest_all), "FORM-*.zip")))
     # Only a file the PLATFORM wrote is evidence. Our own output lands in the same folder (it
     # is where the user asked for it), and counting it would make the oracle partly circular -

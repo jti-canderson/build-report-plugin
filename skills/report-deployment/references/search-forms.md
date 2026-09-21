@@ -107,6 +107,31 @@ has its own opinion about whether a form is sound. On the baseline, **zero of 36
 on either. That is a free post-import check worth using: import, then look at whether the new
 form appears under those filters.
 
+## `validationRule ids` — count is meaningful, contents are not understood
+
+Every export carries `<validationRule ids="...">` at the top of `screen-config-root`. Across
+all 28 exports the id COUNT equals items + nested items, exceptionlessly — so there is one id
+per form item. But:
+
+- only **15 of 28** exports carry `configSourceId` on their items at all, and never on every
+  item;
+- the `configSourceId` set **never** equals the `validationRule ids` set, on any export.
+
+So these are per-item primary keys from the source environment, but NOT the ids the items
+themselves carry. What the importer does with them is unknown. Practical consequence: a
+composed form that KEEPS every donor item leaves the list consistent in length and is safe;
+one that drops or adds items leaves a list whose length no longer matches, and nothing here
+says whether that matters. Until somebody watches that import, compose by keeping all items.
+
+## Layout: `doubleColumn` alternates by `num`
+
+With `doubleColumn` (set on 36 of 36 baseline searches), criteria alternate between the two
+columns in `num` order — even to the left, odd to the right. On `S-Case-Simple` the criteria
+are numbered caseNumber 6, location 7, firstName 8, caseType 9, middleName 10, status 11,
+lastName 12, partyType 13, and the screen renders names down the left and case attributes down
+the right. **Screen position is therefore controlled by interleaving the numbering**, not by
+listing one column and then the other — which is the natural thing to assume and is wrong.
+
 ## Still not established
 
 - **How criteria reach a report rule at run time.** Nothing in any source connects a user
