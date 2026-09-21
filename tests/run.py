@@ -289,6 +289,64 @@ print(json.dumps({'badRejected': not bad['ok'], 'goodOk': good.get('ok'),
           not idle.get("watching") and not released.get("watching"),
           f"idle={idle} released={released}")
 
+    # FORM exports. A search form cannot be corrected in place after import - it has to be
+    # deleted and re-uploaded - so the writer's only acceptable proof is byte equality against
+    # exports the platform itself produced. These tests are that proof, plus one negative to
+    # show the gate actually rejects something.
+    fi = os.path.join(PLUGIN, "skills", "report-deployment", "scripts", "form_import.py")
+    import glob as _g2
+    form_zips = sorted(_g2.glob(os.path.expanduser("~/Downloads/FORM-*.zip")))
+    if form_zips:
+        rc, out = run(["python3", fi, "--selftest-all", os.path.expanduser("~/Downloads")])
+        m = re.search(r"(\d+) platform export\(s\) reproduced byte-for-byte, (\d+) failed", out)
+        check(f"form_import reproduces every FORM export byte-for-byte "
+              f"({m.group(1) if m else '?'} platform exports)",
+              rc == 0 and m is not None and m.group(2) == "0", out[-800:])
+
+        # the gate must be clean on the platform's own output - a gate that fires on a valid
+        # file is a gate people learn to ignore
+        clean = True
+        detail = ""
+        for z in form_zips:
+            rc, out = run(["python3", fi, "--check", z])
+            if rc != 0:
+                clean, detail = False, f"{os.path.basename(z)}\n{out}"
+                break
+        check("the form gate passes every platform export", clean, detail)
+
+        # rename touches exactly the fields it claims and no items
+        src = next((z for z in form_zips if "2026-09-21.zip" in z), form_zips[0])
+        dst = os.path.join(ws, "renamed.zip")
+        rc, out = run(["python3", fi, "--copy", src, "--code", "S-Probe-Renamed",
+                       "--name", "Probe Renamed", "--rehash", "--out", dst])
+        ok = rc == 0 and os.path.exists(dst)
+        if ok:
+            rc2, d = run(["python3", fi, "--diff", src, dst])
+            ok = rc2 == 0 and "Nothing else moved." in d and "item text differs" not in d
+            detail = d
+        check("renaming a form changes the code everywhere and the items nowhere", ok, detail)
+
+        # NEGATIVE: an empty srcHash must be caught. This is the fault that gets reported as
+        # "error reading zip file", which blames the container and sends you looking in the
+        # wrong place entirely.
+        import zipfile as _zf
+        broken = os.path.join(ws, "broken.zip")
+        with _zf.ZipFile(src) as zin:
+            nm = [n for n in zin.namelist() if n.endswith(".xml")][0]
+            xml = zin.read(nm).decode("utf8")
+        xml = re.sub(r"<srcHash>.*?</srcHash>", "<srcHash></srcHash>", xml, flags=re.S)
+        with _zf.ZipFile(broken, "w") as zout:
+            zout.writestr(nm, xml)
+        rc, out = run(["python3", fi, "--check", broken])
+        check("the form gate rejects an empty srcHash",
+              rc != 0 and "srcHash" in out and "error reading zip file" in out, out)
+    else:
+        for n in ("form_import reproduces every FORM export byte-for-byte",
+                  "the form gate passes every platform export",
+                  "renaming a form changes the code everywhere and the items nowhere",
+                  "the form gate rejects an empty srcHash"):
+            skip(n, "no FORM-*.zip in ~/Downloads")
+
     # the two listings that disagreed twice
     rc, out = run(["python3", "-c",
                    "import sys; sys.path.insert(0, %r); import project as P; "
