@@ -132,6 +132,60 @@ lastName 12, partyType 13, and the screen renders names down the left and case a
 the right. **Screen position is therefore controlled by interleaving the numbering**, not by
 listing one column and then the other — which is the natural thing to assume and is wrong.
 
+## The item schema, measured — what synthesising an item requires
+
+Derived from all 841 top-level items in the 28 exports, not from reading one file.
+
+**Field order is canonical and total.** One ordering explains all 1,051 `<default>` blocks with
+zero cycles: nine unboxed primitives alphabetically (`grid, hidden, link, noHoliday, noWeekend,
+num, readonly, required, type`), then the remaining 89 alphabetically. Per-class blocks follow
+the same rule — `SearchCriteriaFormItem` has 9 fields of its own, `SearchResultFormItem` 4.
+
+**But the emitted field SET is not canonical.** For a type-0 search criterion there are **47
+distinct field sets** across 107 items; for a result column, 36 across 106. They cluster at two
+extremes:
+
+| Shape | Fields | Example |
+|---|---|---|
+| minimal | 25–28 | `S-Deposit-Listing-DD.depositDate` (9 items share it) |
+| rich | 53–58 | `S-VoucherReconcile.cf_itemGroup` (58 fields) |
+
+The core present on **every** type-0 criterion is 25 fields:
+
+```
+associatedForm carryOver conditionalFormats conditions existingEntityConditions
+filterConditions grid hidden link multiSelectLookup newColumn newRow noHoliday
+noWeekend num parameters path readonly required showIfValues showIfValues2 type
+userSelectedList widgetInMassType xrefConditions
+```
+
+**Consequence for generation.** Byte-equality against an arbitrary existing item is NOT an
+available oracle for synthesis — the platform itself does not emit a consistent set, so there
+is no single right answer to reproduce. Emit the **minimal** shape: the 25-field core plus only
+the fields the described search actually needs. It is the smallest surface to be right about,
+and real exports demonstrably ship items at that size, so the importer must already be filling
+the rest with defaults.
+
+The oracle that IS available: take the real items whose field set equals the minimal shape,
+re-synthesise each from its semantic content alone, and require byte equality. That validates
+the emitter against real files without pretending the format is more determinate than it is.
+
+**Structural values that must be emitted exactly** (constant on all 855 blocks):
+
+| Field | Value |
+|---|---|
+| `associatedForm` | `<associatedForm reference="../../../../.."/>` — and the `../` DEPTH grows with nesting (9 levels for an item inside `additionalItems`) |
+| `showIfValues`, `showIfValues2` | `<... class="sorted-set"/>` |
+| `existingEntityConditions`, `filterConditions`, `xrefConditions`, `parameters` | self-closing |
+| `widgetInMassType` | `NEVER_SHOW` |
+| `noHoliday`, `noWeekend` | `false` |
+
+**The one thing not derivable from the corpus.** Each item's `FormItem` block is followed by
+`<string>com.sustain.cases.model.Case.caseNumber</string>` — the resolved terminal
+`entityClass.field` for its path — then `<null/>`. For a path no export contains, that class
+has to be resolved from the environment's own model. That is exactly what the SDK answers, and
+it is why `/build-search` must ask for one rather than treat it as optional.
+
 ## Still not established
 
 - **How criteria reach a report rule at run time.** Nothing in any source connects a user
