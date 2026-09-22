@@ -261,6 +261,16 @@ function App() {
   // A browsed folder may not be in the dropdown; show it as a real option rather than
   // silently falling back to the first project.
   const known = boot.projects.some(p => p.name === project);
+
+  // Columns can come from a typed grid OR the brief OR a picture. `realCols` counts only the
+  // columns that would actually survive submit() (header AND field filled), so the default
+  // section's two blank rows do not read as "2 columns". `needsSay` is the client mirror of
+  // the server rule: a template with nothing said about what goes on the page.
+  const realCols = sections.reduce(
+    (n, s) => n + s.cols.filter(c => c.header.trim() && c.field.trim()).length, 0);
+  const hasBrief = intent.trim().length > 0;
+  const needsSay = tpl && tpl !== PICTURE && realCols === 0 && !hasBrief;
+
   const submit = () => {
     setBusy(true); setRes(null);
     fetch('/api/spec', {
@@ -376,13 +386,19 @@ function App() {
           <label>What should it show? Plain words — this is the brief, not a spec.</label>
           <textarea value=${intent} onInput=${e => setIntent(e.target.value)}
             placeholder="Every case filed in a date range, one row each, with its type and jurisdiction."></textarea>
+          <div class="hint">If you leave the columns below blank, Claude builds them from this
+            — so a clear sentence here can be the whole report. Fill the columns in only when
+            you already know the exact fields you want.</div>
         </div>
 
         <button type="button" class="h2btn" onClick=${() => setSecOpen(o => !o)}>
-          <h2>Sections and columns</h2>
+          <h2>Sections and columns <span class="opt">\u2014 optional</span></h2>
           <span class="chev">${secOpen ? '\u2212' : '+'}</span>
-          <span class="h2sum">${sections.length} section${sections.length === 1 ? '' : 's'},
-            ${sections.reduce((n, s) => n + s.cols.length, 0)} column(s)${secOpen ? '' : ' \u2014 click to edit'}</span>
+          <span class="h2sum">${realCols > 0
+            ? `${sections.length} section${sections.length === 1 ? '' : 's'}, ${realCols} column${realCols === 1 ? '' : 's'}${secOpen ? '' : ' \u2014 click to edit'}`
+            : hasBrief
+              ? 'none typed \u2014 Claude will build them from your brief'
+              : 'none yet \u2014 type them here, or describe the report in the brief above'}</span>
         </button>
         ${secOpen && html`<${React.Fragment}>
           <div class="hint">One section per grid. Widths are relative — they get scaled to
@@ -416,7 +432,7 @@ function App() {
         <button class="mini" onClick=${() => setParams(xs => [...xs, newParam()])}>+ input</button>
 
         <div class="foot2">
-          <button class="go" disabled=${busy || !tpl || (tpl === PICTURE && !look)}
+          <button class="go" disabled=${busy || !tpl || (tpl === PICTURE && !look) || needsSay}
                   onClick=${submit}>
             ${busy ? 'Writing…' : 'Write spec.json'}</button>
           <span class=${'watch' + (watching ? ' on' : '')}>
@@ -426,6 +442,8 @@ function App() {
           ${!tpl && html`<span class="hint ml12">Pick a template first.</span>`}
           ${tpl === PICTURE && !look && html`
             <span class="hint ml12">Attach the picture you want it to look like.</span>`}
+          ${needsSay && html`<span class="hint ml12">Add columns, or describe the report in
+            the brief above — one of the two.</span>`}
           ${res && html`
             <div class=${'out ' + (res.ok ? 'ok' : 'err')}>
               ${res.ok ? html`

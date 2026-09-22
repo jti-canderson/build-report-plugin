@@ -391,9 +391,19 @@ def write_spec(payload):
                            "restarted. Attach it again.")
     if not payload.get("template") and not look:
         return False, ("Pick a template, or attach a picture of what it should look like.")
-    if not payload.get("sections"):
-        return False, "Add at least one section with at least one column."
-    for s in payload["sections"]:
+    # Columns can come from THREE places, so require one of them - not columns specifically.
+    # A hand-typed grid, a picture Claude reads them off, or a plain-English brief Claude
+    # derives them from (the same thing the chat interview does). Demanding a hand-typed grid
+    # here was stricter than the interview for no reason, and it made a picture upload - whose
+    # whole point is that Claude reads the columns - impossible to submit.
+    has_sections = bool(payload.get("sections"))
+    has_brief = bool((payload.get("intent") or "").strip())
+    if not (has_sections or look or has_brief):
+        return False, ("Say what goes on the page: add a section with a column, describe the "
+                       "report in the brief, or attach a picture. One of the three is enough.")
+    # A section that IS listed must carry columns. The form filters empty ones out before it
+    # posts, so this only bites a hand-posted spec - but a section with no columns is a hole.
+    for s in payload.get("sections") or []:
         if not s.get("cols"):
             return False, f"Section {s.get('key') or '?'} has no columns."
 

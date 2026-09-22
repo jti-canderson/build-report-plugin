@@ -87,6 +87,39 @@ Go straight from there to the SDK check (question 2, the only one a spec cannot 
 and then to the build. **The gates are unchanged** — a spec skips the questions, never the
 verification.
 
+### A spec with a brief but no columns — derive them, don't send it back
+
+A spec can carry `"template"` and an `"intent"` brief with **`"sections": []`**. That is
+someone who picked a template, wrote what the report should show in plain words, and left the
+columns for you — exactly what the four-question interview does when nobody types a grid. It
+is not an error and it is not a half-finished form to reject. `scaffold.py` refuses it on
+purpose (it will not invent columns), and the refusal names this branch.
+
+**Derive the sections from the brief, the same way you would from a spoken answer to question
+4.** Read `intent`, map it to real field paths using the SDK and `model-facts.md` and the
+corpus — this is where the SDK earns its place, because there are no user-typed paths to
+anchor on, so a blank column is likelier than usual and the handoff must say against which
+environment (if any) the fields were checked. Then write the sections back into the spec so
+the folder is self-describing and a re-run does not re-derive them:
+
+```bash
+python3 - "<the spec.json>" <<'EOF'
+import json, sys
+p = sys.argv[1]; s = json.load(open(p))
+s['sections'] = [
+    {"key": "ROWS", "title": "Cases",
+     "cols": [["Case Number", 20, "Left", "caseNumber"],
+              ["Type", 20, "Left", "caseType"]]},   # the columns YOU derived from intent
+]
+json.dump(s, open(p, 'w'), indent=2)
+EOF
+```
+
+Confirm the derived columns with the user in one line before building — *"From your brief I'm
+showing case number, type and jurisdiction, one row per case. Good?"* — because you chose the
+fields and they could not see you do it. Then scaffold and build as normal. **The gates are
+unchanged**; deriving the columns is the only added step.
+
 ### `look_like` — the spec says "match this picture"
 
 A spec with `"template": ""` and `"look_like": "reference/<file>"` is someone who did not

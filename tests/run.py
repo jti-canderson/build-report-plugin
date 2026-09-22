@@ -227,6 +227,42 @@ print(json.dumps({'badRejected': not bad['ok'], 'goodOk': good.get('ok'),
     check("a spec with neither a template nor a picture is refused",
           bool(d.get("refusedNoTemplate")) and "picture" in (d.get("why") or ""), out)
 
+    # BRIEF-ONLY. A template plus a plain-English brief and NO typed columns must be accepted
+    # (Claude derives the columns downstream, as the chat interview does), a template with
+    # neither columns nor a brief must be refused, and scaffold must refuse the brief-only
+    # spec with a message that names build-report rather than "missing 'sections'".
+    brief_probe = """
+import json, os, sys, subprocess
+sys.path.insert(0, %r)
+import serve_builder as B
+brief = B.write_spec({'name': 'Brief_Ok', 'project': 'Probe Project',
+                      'template': 'tabular_list', 'intent': 'every case in a date range',
+                      'sections': []})
+empty = B.write_spec({'name': 'Empty_No', 'project': 'Probe Project',
+                      'template': 'tabular_list', 'intent': '', 'sections': []})
+folder = os.path.join(os.environ['JTI_PROJECT_ROOT'], 'Probe Project', 'Brief_Ok')
+spec = json.load(open(os.path.join(folder, 'spec.json')))
+sc = subprocess.run([sys.executable, os.path.join(%r, 'scaffold.py'),
+                     os.path.join(folder, 'spec.json'), '--out', os.path.join(folder, 'x')],
+                    capture_output=True, text=True)
+print(json.dumps({'briefAccepted': brief[0], 'intentKept': bool(spec.get('intent')),
+                  'noSections': spec.get('sections') == [],
+                  'emptyRefused': not empty[0], 'emptyWhy': empty[1],
+                  'scaffoldRefused': sc.returncode != 0,
+                  'scaffoldNamesBuildReport': 'build-report' in (sc.stdout + sc.stderr)}))
+""" % (os.path.join(PLUGIN, "scripts"), os.path.join(PLUGIN, "scripts"))
+    rc, out = run(["python3", "-c", brief_probe], env={"JTI_PROJECT_ROOT": ws})
+    try:
+        b = json.loads(out.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        b = {}
+    check("a brief-only spec (template + words, no typed columns) is accepted and keeps intent",
+          rc == 0 and b.get("briefAccepted") and b.get("intentKept") and b.get("noSections"), out)
+    check("a spec with a template but nothing said about the page is refused",
+          bool(b.get("emptyRefused")) and "page" in (b.get("emptyWhy") or ""), out)
+    check("scaffold refuses a brief-only spec and names build-report (not 'missing sections')",
+          bool(b.get("scaffoldRefused")) and bool(b.get("scaffoldNamesBuildReport")), out)
+
     # THE LISTENER. Two things have to hold or the Write button lies to the user: a spec
     # written while Claude is parked must reach it, and the "Claude is watching" flag must
     # go FALSE when the client hangs up. The second one was broken on 09/18 - curl's

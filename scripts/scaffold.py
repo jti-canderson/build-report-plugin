@@ -374,6 +374,16 @@ def main():
               f"  A picture has to be read before a starting template can be named, so run\n"
               f"  /jti-reports:build-report on it instead of scaffolding it directly.")
         sys.exit(2)
+    # A brief-only spec: a template is chosen but the columns were left to the brief rather
+    # than typed. The columns do not exist yet, so scaffolding would emit an empty grid. Say
+    # so plainly - the same shape of message as look_like - rather than "missing 'sections'",
+    # which reads like a corrupt file. /build-report derives the columns from `intent`.
+    if spec.get('template') and not spec.get('sections') and (spec.get('intent') or '').strip():
+        print(f"  this spec has a brief but no columns yet:\n"
+              f"    \"{spec['intent'].strip()[:72]}\"\n"
+              f"  The columns come from that brief, and something has to derive them first, so\n"
+              f"  run /jti-reports:build-report on it instead of scaffolding it directly.")
+        sys.exit(2)
     for k in ('name', 'title', 'template', 'sections'):
         if not spec.get(k):
             print(f"  spec is missing '{k}'"); sys.exit(2)
