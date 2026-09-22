@@ -383,6 +383,57 @@ print(json.dumps({'briefAccepted': brief[0], 'intentKept': bool(spec.get('intent
                   "the form gate rejects an empty srcHash"):
             skip(n, "no FORM-*.zip in ~/Downloads")
 
+    # FROM-SCRATCH item synthesis. The proof that /build-search can emit items for paths no
+    # export contains: re-synthesise real CLEAN (no-configSourceId) items from their semantics
+    # alone and require byte equality. If the emitter drifts, this count drops.
+    if form_zips:
+        probe = """
+import sys, re, glob, os
+sys.path.insert(0, %r)
+import form_import as F
+def fid(it):
+    m=re.search(r'<com\\.sustain\\.form\\.model\\.FormItem>\\s*<default>',it); s=m.end(); d=1
+    for mm in re.finditer(r'</?default>',it[s:]):
+        d+=1 if mm.group(0)=='<default>' else -1
+        if d==0: return it[s:s+mm.start()]
+CRIT={"grid","hidden","link","noHoliday","noWeekend","num","readonly","required","type","associatedForm","carryOver","conditionalFormats","conditions","existingEntityConditions","filterConditions","lookupItemFormat","multiSelectLookup","newColumn","newRow","operator","panelAutoCompleteMinChars","parameters","path","showIfValues","showIfValues2","userSelectedList","widgetInMassType","xrefConditions"}
+RES=CRIT|{"autoFillNullValue","carryOverWhenRepeated","displayInactive","dropdown","exactMatchToCode","existingSelectAll","fillPanelOnSelect","filterListByUser","forceDefaultValue","freeFormLookup","inPlaceEditable","includeNulls","innerJoin","label","labelIsTemplate","lookupDefaultValues","noLabel","onlyAutoFillEmptyField","openInNewTab","panelAutoCompleteWithAllData","preventPanelLookups","previewSummary","readonlyIfEmpty","readonlyIfNotEmpty","repeatPanelsOnPanelLookup","requiredTime","runLookup","showIfNullValueWhenHidden","useCommaDisplayMask"}
+c_ok=r_ok=0
+for z in glob.glob(os.path.expanduser("~/Downloads/FORM-*.zip")):
+    if not F.PLATFORM_EXPORT.match(os.path.basename(z)): continue
+    for nm,x in F.members(z):
+        for it in F.parse(x)["items"]:
+            sm=F.item_summary(it); b=fid(it) or ""
+            if "<configSourceId>" in it or sm["nested"]: continue
+            term=re.search(r'<string>(.*?)</string>',it)
+            if not term: continue
+            if sm["kind"]=="criterion" and not (set(re.findall(r'<(\\w+)',b))-CRIT):
+                op=re.search(r'<operator>(.*?)</operator>',b)
+                got=F.synth_criterion(sm["num"],sm["path"],term.group(1),lookup="<lookupItemFormat>" in b,operator=op.group(1) if op else None,allow_range="<allowRange>true</allowRange>" in it)
+                c_ok+= got==it
+            if sm["kind"]=="result" and not (set(re.findall(r'<(\\w+)',b))-RES) and re.search(r'<displayRowTotals>false.*?<hqlExpression></hqlExpression>',it,re.S) and "<aggregateFunction>" not in it and "<compoundCriteriaField>" not in it:
+                lab=re.search(r'<label>(.*?)</label>',b)
+                got=F.synth_result(sm["num"],sm["path"],term.group(1),lab.group(1) if lab else None,link="<link>true</link>" in b,lookup="<lookupItemFormat>" in b)
+                r_ok+= got==it
+# and build_search produces a gate-clean, round-tripping form
+(nm,x),=F.members(sorted(glob.glob(os.path.expanduser("~/Downloads/FORM-*2026-09-21.zip")))[0])[:1]
+d=F.parse(x)
+built,flags=F.build_search(d,"S-Probe-Scratch","Probe",[("caseNumber","com.sustain.cases.model.Case.caseNumber",{})],[("caseName","com.sustain.cases.model.Case.caseName",{"link":True,"label":None})])
+xml=F.wrap(built["env"]); back=F.parse(xml); faults,_=F.check(back,"FORM=S-Probe-Scratch.xml")
+rt = F.rebuild(back)==xml
+print("SCRATCH", c_ok, r_ok, len(faults), rt)
+""" % os.path.join(PLUGIN, "skills", "report-deployment", "scripts")
+        rc, out = run(["python3", "-c", probe])
+        m = re.search(r"SCRATCH (\d+) (\d+) (\d+) (\w+)", out)
+        check("from-scratch item synthesis reproduces real clean items byte-for-byte "
+              f"({m.group(1) if m else '?'} criteria, {m.group(2) if m else '?'} results)",
+              bool(m) and int(m.group(1)) >= 11 and int(m.group(2)) >= 6, out[-600:])
+        check("build_search assembles a gate-clean, round-tripping from-scratch form",
+              bool(m) and m.group(3) == "0" and m.group(4) == "True", out[-600:])
+    else:
+        skip("from-scratch item synthesis byte-equality", "no FORM-*.zip in ~/Downloads")
+        skip("build_search assembles a gate-clean from-scratch form", "no FORM-*.zip in ~/Downloads")
+
     # the two listings that disagreed twice
     rc, out = run(["python3", "-c",
                    "import sys; sys.path.insert(0, %r); import project as P; "

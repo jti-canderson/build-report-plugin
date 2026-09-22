@@ -221,3 +221,42 @@ because it is per-environment: `cf_*` fields and lookup lists differ between cli
 - The populated form of `hqlExpression`, `compoundCriteriaField`, `split`, `userSelectedList`,
   `existingEntityConditions`, `filterConditions`, `xrefConditions` — present in the schema,
   empty in all 28 exports.
+
+## From-scratch synthesis — proven, and the two surfaces that are not
+
+Building a search from a DESCRIPTION means emitting items for paths no export contains. Proven
+2026-09-22 by re-synthesising real CLEAN (no-`configSourceId`) items from their semantics alone
+and requiring byte equality:
+
+- **criteria: 11/11** clean simple criteria reproduced byte-for-byte (plain, date-range, lookup).
+- **result columns: both clean shapes** reproduced (`link=true`→`panelAutoCompleteWithAllData`
+  present, `link=false`→absent; the `link=true`+pac-absent variant is a config toggle the
+  emitter does not offer, not a defect).
+
+A from-scratch item omits `configSourceId` (a source-environment primary key a new item never
+had) and carries only the minimal-shape field set. `synth_criterion` / `synth_result` in
+`form_import.py` are the emitters; `build_search` assembles a whole form by swapping synthesised
+items into a real donor's envelope (head/tail/settings), same root entity.
+
+**Two surfaces cannot be validated offline** and are flagged by `build_search`, because every
+example on disk is already provisioned:
+
+1. **form-level `<validationRule ids>`** — one per item, source-env pks, never empty in any
+   export, no fresh-form example. `build_search` keeps the count consistent by reusing donor
+   values; whether a new form needs real ids, a blank list, or a matching count is UNKNOWN.
+2. **`srcContent` sparse-JSON key order** — the payload is `srcImportContent` (the XStream, built
+   from proven items); `srcContent` is rebuilt to agree on paths and counts but its key order is
+   canonical and may differ from the platform serializer.
+
+**Therefore the safe first import is a CLONE** (`--copy`, byte-identical envelope to a real
+form), which proves the pipeline imports at all and — imported twice — answers the
+update-vs-duplicate question, before any from-scratch form is trusted. A from-scratch form
+should follow only once an observed import has settled surfaces (1) and (2).
+
+## SDK stub omits some derived getters — the DD is the fallback resolver
+
+Resolving a path to its terminal `entityClass.field` via `javap` works for direct and most
+traversal segments (6/7 in a Case search, including custom `cf_courtNum`), but the stub jar
+omits some derived getters — `Party.person` has `setPerson(Person)` and no `getPerson()`, so
+`parties.person.<field>` cannot be walked from the jar alone. The Data Dictionary carries that
+relation and is the resolver of record for traversals; the SDK jar is the cross-check.

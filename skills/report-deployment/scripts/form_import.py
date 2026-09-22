@@ -403,6 +403,98 @@ def diff_forms(a_path, b_path):
           "Read the item list above before uploading."))
 
 
+# ── synthesising items FROM SCRATCH ───────────────────────────────────────────────────
+# Proven by byte-equality against real clean (no-configSourceId) platform items, 2026-09-22:
+# 11/11 clean simple criteria, and result columns for both clean shapes (link on/off). These
+# emit the MINIMAL shape a freshly-created item has - no configSourceId (a source-env pk a
+# new item never had), and only the fields that shape carries. See references/search-forms.md.
+
+def synth_criterion(num, path, terminal, *, lookup=False, operator=None, allow_range=False):
+    """A search CRITERION item, from a path + its resolved terminal entityClass.field."""
+    d, a = [], None
+    out = []
+    a = lambda t: d.append(" " * 10 + t)
+    a("<grid>false</grid>"); a("<hidden>false</hidden>"); a("<link>true</link>")
+    a("<noHoliday>false</noHoliday>"); a("<noWeekend>false</noWeekend>")
+    a(f"<num>{num}</num>"); a("<readonly>false</readonly>"); a("<required>false</required>")
+    a("<type>0</type>"); a('<associatedForm reference="../../../../.."/>')
+    a("<carryOver>false</carryOver>"); a("<conditionalFormats/>"); a("<conditions/>")
+    a("<existingEntityConditions/>"); a("<filterConditions/>")
+    if lookup: a("<lookupItemFormat>LABEL</lookupItemFormat>")
+    a("<multiSelectLookup>true</multiSelectLookup>")
+    a("<newColumn>false</newColumn>"); a("<newRow>false</newRow>")
+    if operator: a(f"<operator>{esc(operator)}</operator>")
+    a("<panelAutoCompleteMinChars>1</panelAutoCompleteMinChars>")
+    a("<parameters/>"); a(f"<path>{esc(path)}</path>")
+    a('<showIfValues class="sorted-set"/>'); a('<showIfValues2 class="sorted-set"/>')
+    a("<userSelectedList/>"); a("<widgetInMassType>NEVER_SHOW</widgetInMassType>")
+    a("<xrefConditions/>")
+    crit = ["          <additionalItems/>"]
+    if allow_range: crit.append("          <allowRange>true</allowRange>")
+    crit.append("          <split>false</split>")
+    return "\n".join(
+        ['<com.sustain.form.model.SearchCriteriaFormItem serialization="custom">',
+         "      <com.sustain.DomainObject>", "        <default/>",
+         "      </com.sustain.DomainObject>", "      <com.sustain.form.model.FormItem>",
+         "        <default>"] + d + ["        </default>",
+         f"        <string>{esc(terminal)}</string>", "        <null/>",
+         "      </com.sustain.form.model.FormItem>",
+         "      <com.sustain.form.model.SearchCriteriaFormItem>", "        <default>"] + crit +
+        ["        </default>", "      </com.sustain.form.model.SearchCriteriaFormItem>",
+         "    </com.sustain.form.model.SearchCriteriaFormItem>"])
+
+
+def synth_result(num, path, terminal, label, *, link=True, lookup=False):
+    """A result COLUMN. panelAutoCompleteWithAllData is emitted iff link=true - the only
+    combination the corpus shows for link=false is pac absent, so the two travel together."""
+    d = []
+    a = lambda t: d.append(" " * 10 + t)
+    a("<grid>false</grid>"); a("<hidden>false</hidden>")
+    a(f"<link>{'true' if link else 'false'}</link>")
+    a("<noHoliday>false</noHoliday>"); a("<noWeekend>false</noWeekend>")
+    a(f"<num>{num}</num>"); a("<readonly>true</readonly>"); a("<required>false</required>")
+    a("<type>0</type>"); a('<associatedForm reference="../../../../.."/>')
+    a("<autoFillNullValue>false</autoFillNullValue>"); a("<carryOver>false</carryOver>")
+    a("<carryOverWhenRepeated>false</carryOverWhenRepeated>")
+    a("<conditionalFormats/>"); a("<conditions/>"); a("<displayInactive>false</displayInactive>")
+    a("<dropdown>false</dropdown>"); a("<exactMatchToCode>false</exactMatchToCode>")
+    a("<existingEntityConditions/>"); a("<existingSelectAll>false</existingSelectAll>")
+    a("<fillPanelOnSelect>false</fillPanelOnSelect>"); a("<filterConditions/>")
+    a("<filterListByUser>false</filterListByUser>"); a("<forceDefaultValue>false</forceDefaultValue>")
+    a("<freeFormLookup>false</freeFormLookup>"); a("<inPlaceEditable>false</inPlaceEditable>")
+    a("<includeNulls>false</includeNulls>"); a("<innerJoin>false</innerJoin>")
+    if lookup: a("<lookupItemFormat>LABEL</lookupItemFormat>")
+    if label is not None: a(f"<label>{esc(label)}</label>")
+    a("<labelIsTemplate>false</labelIsTemplate>"); a("<lookupDefaultValues></lookupDefaultValues>")
+    a("<multiSelectLookup>false</multiSelectLookup>"); a("<newColumn>false</newColumn>")
+    a("<newRow>false</newRow>"); a("<noLabel>false</noLabel>")
+    a("<onlyAutoFillEmptyField>false</onlyAutoFillEmptyField>"); a("<openInNewTab>false</openInNewTab>")
+    if link: a("<panelAutoCompleteWithAllData>false</panelAutoCompleteWithAllData>")
+    a("<parameters/>"); a(f"<path>{esc(path)}</path>")
+    a("<preventPanelLookups>false</preventPanelLookups>"); a("<previewSummary>false</previewSummary>")
+    a("<readonlyIfEmpty>false</readonlyIfEmpty>"); a("<readonlyIfNotEmpty>false</readonlyIfNotEmpty>")
+    a("<repeatPanelsOnPanelLookup>false</repeatPanelsOnPanelLookup>")
+    a("<requiredTime>false</requiredTime>"); a("<runLookup>false</runLookup>")
+    a("<showIfNullValueWhenHidden>false</showIfNullValueWhenHidden>")
+    a('<showIfValues class="sorted-set"/>'); a('<showIfValues2 class="sorted-set"/>')
+    a("<useCommaDisplayMask>false</useCommaDisplayMask>"); a("<userSelectedList/>")
+    a("<widgetInMassType>NEVER_SHOW</widgetInMassType>"); a("<xrefConditions/>")
+    return "\n".join(
+        ['<com.sustain.form.model.SearchResultFormItem serialization="custom">',
+         "      <com.sustain.DomainObject>", "        <default/>",
+         "      </com.sustain.DomainObject>", "      <com.sustain.form.model.FormItem>",
+         "        <default>"] + d + ["        </default>",
+         f"        <string>{esc(terminal)}</string>", "        <null/>",
+         "      </com.sustain.form.model.FormItem>",
+         "      <com.sustain.form.model.SearchResultFormItem>", "        <default>",
+         "          <displayRowTotals>false</displayRowTotals>",
+         "          <displayTotals>false</displayTotals>",
+         "          <hideForLookup>false</hideForLookup>",
+         "          <hqlExpression></hqlExpression>", "        </default>",
+         "      </com.sustain.form.model.SearchResultFormItem>",
+         "    </com.sustain.form.model.SearchResultFormItem>"])
+
+
 # ── composing a form ────────────────────────────────────────────────────────────────
 def item_num(item):
     m = re.search(r"<num>(\d+)</num>", item)
@@ -513,6 +605,72 @@ def compose(donor, paths, code, name, keep_results=None):
     # checked against a real import, so a composed form that drops items says so out loud.
     rename(out, code, name)
     return out
+
+
+def build_search(donor, code, name, criteria, results):
+    """Assemble a from-scratch search: a REAL donor's form envelope (head/tail/settings) with
+    freshly SYNTHESISED items swapped in. Same root entity as the donor.
+
+    criteria: [(path, terminal, {lookup?, operator?, allow_range?}), ...]
+    results:  [(path, terminal, label, {link?, lookup?}), ...]
+
+    TWO SURFACES HERE ARE UNVERIFIED and cannot be settled without an observed import - both
+    flagged in the return value, neither present in the synthesised ITEMS (which are proven):
+      1. the form-level <validationRule ids="..."> - source-env pks with no from-scratch value;
+         kept count-consistent with the item total by reusing the donor's, which is a guess.
+      2. srcContent's sparse-JSON key ORDER - the payload is srcImportContent (the XStream,
+         built from proven items); srcContent is rebuilt to AGREE on paths/counts but its key
+         order is emitted canonically, which may differ from the platform's serializer.
+    """
+    out = dict(donor)
+    # results first (numbered 0..), then criteria - the S-Case-Simple ordering
+    items, n = [], 0
+    for path, terminal, opt in results:
+        items.append(synth_result(n, path, terminal, opt.get("label"),
+                                   link=opt.get("link", True), lookup=opt.get("lookup", False)))
+        n += 1
+    for path, terminal, opt in criteria:
+        items.append(synth_criterion(n, path, terminal, lookup=opt.get("lookup", False),
+                                      operator=opt.get("operator"),
+                                      allow_range=opt.get("allow_range", False)))
+        n += 1
+    out["items"] = items
+    sep = "\n      "
+    out["seps"] = [donor["seps"][0]] + [sep] * (len(items) - 1) + [donor["seps"][-1]]
+    out["summaries"] = [item_summary(i) for i in items]
+
+    flags = []
+    # (1) validationRule ids: make the count match; reuse donor values, flag it
+    m = re.search(r'<validationRule ids="([^"]*)"', out["head"])
+    if m:
+        donor_ids = [i for i in m.group(1).split(",") if i]
+        newids = (donor_ids * ((len(items) // max(len(donor_ids), 1)) + 1))[:len(items)]
+        out["head"] = out["head"][:m.start(1)] + ",".join(newids) + out["head"][m.end(1):]
+        flags.append(f"validationRule ids set to {len(newids)} donor-reused values "
+                     f"(source-env pks; correct value for a new form is unknown)")
+
+    # (2) srcContent rebuilt to agree on items; key order canonical, flagged
+    js_items = []
+    for it in items:
+        sm = item_summary(it)
+        j = {"type": 0, "path": sm["path"], "num": sm["num"],
+             "widgetInMassType": "NEVER_SHOW"}
+        if sm["kind"] == "result":
+            j["readonly"] = True
+        js_items.append(j)
+    out["cfg"] = dict(donor["cfg"])
+    out["cfg"]["formItems"] = js_items
+    out["cfg"].pop("drilldownForm", None)
+    flags.append("srcContent JSON rebuilt to match item paths/counts; sparse-key ORDER is "
+                 "canonical and may differ from the platform serializer (payload is the XStream)")
+
+    rename(out, code, name)
+    set_drilldown(out, None)
+    reproject_json(out)
+    out["env"]["srcImportContent"] = (out["head"] +
+        "".join(a + b for a, b in zip(out["seps"], out["items"])) + out["seps"][-1] + out["tail"])
+    rehash(out)
+    return out, flags
 
 
 # ── the gate ────────────────────────────────────────────────────────────────────────
