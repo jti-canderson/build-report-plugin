@@ -180,11 +180,32 @@ the emitter against real files without pretending the format is more determinate
 | `widgetInMassType` | `NEVER_SHOW` |
 | `noHoliday`, `noWeekend` | `false` |
 
-**The one thing not derivable from the corpus.** Each item's `FormItem` block is followed by
-`<string>com.sustain.cases.model.Case.caseNumber</string>` — the resolved terminal
-`entityClass.field` for its path — then `<null/>`. For a path no export contains, that class
-has to be resolved from the environment's own model. That is exactly what the SDK answers, and
-it is why `/build-search` must ask for one rather than treat it as optional.
+**The one thing not in the search corpus — but fully available from the model.** Each item's
+`FormItem` block is followed by `<string>com.sustain.cases.model.Case.caseNumber</string>` —
+the resolved terminal `entityClass.field` for its path — then `<null/>`. A path no export
+contains has no string to copy, so it must be resolved from the environment's model. This is
+NOT a gap in what can be known; it is metadata both model exports carry, proven 2026-09-22:
+
+- **SDK jar** (`javap` against `ecourt-sdk-local-2026-09-17.jar`): resolves every path in
+  `S-Case-Simple` to exactly the string the export carries, including the CUSTOM field
+  (`Case.cf_courtNum`) and the deep traversal — `getParties()` returns `Set<Party>`,
+  `getPartyType()` on `Party` → `Party.partyType`; `parties.person.firstName` walks to
+  `PersonComponent.getFirstName()`. TRAP: the export names the CONCRETE entity
+  (`person.model.Person.firstName`) while the getter is declared on the superclass
+  `PersonComponent` — so the terminal must be the concrete relation target, not the getter's
+  declaring class. This is the same field-owner vs getter-owner split `sdk_fields.py` handles.
+  There is no bundled JVM on the host by default; `javap` lives at
+  `/Applications/jasperreports-server-*/java/bin/javap`.
+- **Data Dictionary `.xlsx`** is the RICHER source and the better ask: per field it gives the
+  type as `Collection (Party)` (the relation target that lets a traversal be walked) and
+  `Lookup List (CASE_STATUS)` — which is **the lookup-list name the search export never carries
+  and which otherwise has to be read off the admin screen**. It needs no inheritance walk and
+  no field-owner/getter-owner reconciliation.
+
+So `/build-search` should ask for a Data Dictionary export (SDK jar as fallback/cross-check),
+and with one in hand a novel path is fully resolvable — terminal class, relation targets, and
+lookup list names all included. It is required, not because the metadata is unknowable, but
+because it is per-environment: `cf_*` fields and lookup lists differ between clients.
 
 ## Still not established
 
