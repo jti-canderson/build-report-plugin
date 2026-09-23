@@ -527,6 +527,70 @@ print("REVIEW", ident, false, caught_json, caught_ref, proj_ok, proj_bad)
     check("usage.py counts one API response once, not once per content-block line",
           rc == 0 and du.get("turns") == 3 and du.get("out") == 300 and du.get("bash"), out)
 
+    # /build-search, end to end: the resolver never names a wrong class, refuses what does not
+    # exist in THIS environment, and the builder writes a gate-clean form or nothing at all.
+    sb_dir = os.path.join(PLUGIN, "skills", "report-deployment", "scripts")
+    dd_eh = os.path.expanduser("~/Downloads/DataDictionary-TheEhTeamConfig-2026-08-20.xlsx")
+    dd_ok = os.path.expanduser("~/Downloads/DataDictionary-local-2026-09-02.xlsx")
+    if form_zips and os.path.exists(dd_ok):
+        probe = """
+import sys, glob, os, re
+sys.path.insert(0, %r)
+import dd_resolve as R, form_import as F
+fq = R.learn_fqcn(glob.glob(os.path.expanduser("~/Downloads/FORM-*.zip")), glob.glob(os.path.expanduser("~/Downloads/ecourt-sdk-*.jar")))
+jar = next(iter(sorted(glob.glob(os.path.expanduser("~/Downloads/ecourt-sdk-local-*.jar")))), None)
+dd = R.load_dd(%r)
+same = wrong = refused = 0
+for z in glob.glob(os.path.expanduser("~/Downloads/FORM-local-*.zip")):
+    if not F.PLATFORM_EXPORT.match(os.path.basename(z)): continue
+    for nm, x in F.members(z):
+        p = F.parse(x)
+        for it in p["items"]:
+            if F.is_ref(it): continue
+            sm = F.item_summary(it); terms = re.findall(r"<string>(com\\.sustain\\.[\\w.]+)</string>", it)
+            if not sm["path"] or not terms or sm["type"] == "7": continue
+            r = R.resolve(dd, fq, p["root_json"], sm["path"], jar=jar)
+            if not r["ok"]: refused += 1
+            elif r["terminal"] == terms[0]: same += 1
+            else: wrong += 1
+typo = R.resolve(dd, fq, "Case", "parties.person.lastNmae", jar=jar)["ok"]
+print("RESOLVE", same, wrong, refused, typo)
+""" % (sb_dir, dd_ok)
+        rc, out = run(["python3", "-c", probe])
+        m = re.search(r"RESOLVE (\d+) (\d+) (\d+) (\w+)", out)
+        check(f"the field resolver names the platform's own class for every path "
+              f"({m.group(1) if m else '?'} identical, {m.group(2) if m else '?'} wrong)",
+              bool(m) and int(m.group(1)) > 100 and m.group(2) == "0", out[-500:])
+        check("the field resolver refuses a misspelt field",
+              bool(m) and m.group(4) == "False", out[-500:])
+    else:
+        skip("the field resolver names the platform's own class for every path", "no OKDAC dictionary")
+        skip("the field resolver refuses a misspelt field", "no OKDAC dictionary")
+
+    if form_zips and os.path.exists(dd_eh):
+        sb = os.path.join(sb_dir, "search_build.py")
+        rc, ex = run(["python3", sb, "--example"])
+        spec = json.loads(ex)
+        spec["code"] = "S-Probe-Built"
+        sp = os.path.join(ws, "search_spec.json"); json.dump(spec, open(sp, "w"))
+        outdir = os.path.join(ws, "search_out"); os.makedirs(outdir, exist_ok=True)
+        rc, out = run(["python3", sb, sp, "--out", outdir])
+        built = os.path.join(outdir, "FORM-S-Probe-Built.zip")
+        check("search_build writes a gate-clean, round-tripping form from a spec",
+              rc == 0 and os.path.exists(built) and "gate: CLEAN" in out
+              and "round-trip: identical" in out, out[-700:])
+        # a form from another environment's field must be refused - and nothing written
+        spec["code"] = "S-Probe-Refused"
+        spec["results"].append({"path": "cf_courtNum"})     # OKDAC custom field, not in Eh Team
+        sp2 = os.path.join(ws, "search_spec_bad.json"); json.dump(spec, open(sp2, "w"))
+        rc, out = run(["python3", sb, sp2, "--out", outdir])
+        check("search_build refuses a field that does not exist in the target environment",
+              rc != 0 and "REFUSED" in out and not os.path.exists(os.path.join(outdir, "FORM-S-Probe-Refused.zip")),
+              out[-500:])
+    else:
+        skip("search_build writes a gate-clean form from a spec", "no Eh Team dictionary")
+        skip("search_build refuses a field from another environment", "no Eh Team dictionary")
+
     # the two listings that disagreed twice
     rc, out = run(["python3", "-c",
                    "import sys; sys.path.insert(0, %r); import project as P; "

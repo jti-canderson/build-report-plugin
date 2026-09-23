@@ -260,3 +260,52 @@ traversal segments (6/7 in a Case search, including custom `cf_courtNum`), but t
 omits some derived getters — `Party.person` has `setPerson(Person)` and no `getPerson()`, so
 `parties.person.<field>` cannot be walked from the jar alone. The Data Dictionary carries that
 relation and is the resolver of record for traversals; the SDK jar is the cross-check.
+
+## Corrections from the 2026-09-22 review — read before trusting anything above
+
+**The formItems list includes reference entries.** A form with an OR-ed criterion has one
+more list entry than it has full items: a self-closing XStream back-reference at the end of
+`<formItems>` (`<SearchCriteriaFormItem reference="../SearchCriteriaFormItem/.../additionalItems/SearchCriteriaFormItem"/>`)
+that puts the nested criterion into the list without serialising it twice. The earlier claim
+"14 items in the XStream, 15 in the JSON" was wrong: the list has 15 entries in BOTH halves,
+and **list length == JSON length == validationRule id count on every export (28/28)**. The
+reference picks its target by POSITION among criterion siblings, so reordering items silently
+repoints it; removing its parent leaves it dangling. `compose` rebuilds it; the gate follows
+every reference and faults on one that dangles.
+
+**The JSON half is a projection of the XStream, and is now checked item by item.** One total
+key order explains all 869 JSON items (declaration order, subclass fields first). A field
+surfaces iff its value is non-default; multi-line strings become arrays of lines;
+`parameters`/`conditions`/`conditionalFormats`/`userSelectedList` become structures;
+`FORM=`/`CONDITION=` prefixes drop; sets come out sorted, `conditionalFormats` in hash order;
+a condition's `hash` is not in the XStream at all. **Type comes from the field, not the text** —
+`conditionalFormat.value` stays the string `"false"`, `includeNulls` is a boolean. The
+projection reproduces 220 of 220 comparable search-form items byte-for-byte, and the gate's
+XStream↔JSON agreement check has zero false faults on all 28 exports.
+
+**A labelled criterion is always the full shape.** Every criterion with a custom label is
+written in 54–56 fields, never the minimal ~26 — setting a label makes the admin write
+everything. The constant part was extracted from the 6 clean labelled type-0 criteria
+(identical on all of them); `synth_criterion_labelled` reproduces all 6 byte-for-byte. Two
+semantic extras: `forceCreateObject=false` on a criterion whose path ends at an ENTITY (a
+person picker), and a `memo` (an admin note, e.g. a ticket number) on the DomainObject block.
+
+**Field resolution: the Data Dictionary first, the SDK jar for what it omits.** `dd_resolve.py`
+walks a path hop by hop through the DD (`Collection (X)` = to-many, a bare entity name =
+to-one, `Lookup List (X)` = picker, `Date` = range). The DD export leaves the financial
+module out entirely — `TillDef`, `AssessmentGroup`, `PMInstrumentItem`, `Restitution`,
+`AgencyAccount`, `CreditAuthorization` and root `CheckBatch` are in no dictionary on this
+machine — so those hops, and base fields like `id` that no DD lists, fall back to the jar,
+returning to the DD as soon as it covers the entity again (the jar lacks `getPerson`). Against
+what the platform itself recorded: **OKDAC 410 identical (295 dictionary, 115 jar), Eh Team
+65 identical, 0 wrong, 0 refused.** The DD is read with the standard library — identical to
+openpyxl on all three dictionaries — so nothing needs installing.
+
+**Generated forms carry synthetic identity; copies carry the source's.** `srcId` and the
+validationRule ids look like the keys a later re-import matches on (an imported item stores
+the source id as `configSourceId`). So a copy — like any cross-environment promotion — keeps
+the source form's ids and must NOT be imported into the environment that holds the source
+form; a generated form gets deterministic ids above 900,000,000 (max real id seen ~26,000)
+and `srcActionUrl` on `generated.invalid`, so the worst case of an unaccepted identity is a
+clean rejection rather than a collision.
+

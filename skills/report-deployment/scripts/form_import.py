@@ -478,6 +478,70 @@ def synth_criterion(num, path, terminal, *, lookup=False, operator=None, allow_r
          "    </com.sustain.form.model.SearchCriteriaFormItem>"])
 
 
+# The platform's canonical FormItem field order - one total order explains all 1,051 <default>
+# blocks in the corpus with zero cycles (measured 2026-09-21).
+CANON_FIELDS = ['grid', 'hidden', 'link', 'noHoliday', 'noWeekend', 'num', 'readonly', 'required', 'type', 'addPanelCopy', 'addable', 'associatedForm', 'autoFillNullValue', 'carryOver', 'carryOverWhenRepeated', 'clearable', 'color', 'columnHeaders', 'columnStyles', 'condValue', 'conditionalFormats', 'conditions', 'configSourceId', 'customFormat', 'customListQuery', 'customListType', 'dateFormat', 'defaultCollapsed', 'defaultValue', 'displayInactive', 'dropdown', 'emptyPanelMessage', 'escapeHtml', 'exactMatchToCode', 'existingEntityConditions', 'existingSelectAll', 'expandIfCondition', 'fillPanelOnSelect', 'filterConditions', 'filterListByUser', 'filterable', 'footerText', 'forceCreateObject', 'forceDefaultValue', 'freeFormLookup', 'inPlaceEditable', 'includeNulls', 'innerJoin', 'label', 'labelIsTemplate', 'linkForm', 'lookupDefaultValues', 'lookupItemFormat', 'lookupSearchType', 'monthsToShow', 'multiSelectLookup', 'nested', 'newColumn', 'newRow', 'noLabel', 'numberFormat', 'numberMask', 'onlyAutoFillEmptyField', 'openInNewTab', 'operator', 'pageSize', 'panelAutoCompleteMinChars', 'panelAutoCompleteWithAllData', 'parameters', 'path', 'preventPanelLookups', 'preventParentPanelLookups', 'previewSummary', 'promptForMultiple', 'readonlyIfEmpty', 'readonlyIfNotEmpty', 'removeable', 'repeatPanelsOnPanelLookup', 'repeatable', 'requiredTime', 'rootPanel', 'runLookup', 'showIfNullValueWhenHidden', 'showIfValues', 'showIfValues2', 'sort', 'sortable', 'staticFieldText', 'style', 'styleClass', 'supervisorAuthority', 'title', 'treeTable', 'useCommaDisplayMask', 'userInterface', 'userSelectedList', 'widgetInMassType', 'xrefConditions']
+
+# The FULL shape a criterion takes once it has a custom label: in every export a labelled
+# criterion is written out in full (54-56 fields), never in the minimal shape - setting a label
+# apparently makes the admin write everything. The constant part below was EXTRACTED from the
+# 6 clean labelled type-0 criteria in the corpus (identical on all of them),
+# not typed by hand; the semantic fields are filled in by synth_criterion_labelled.
+RICH_CRITERION_BASE = {'grid': '          <grid>false</grid>', 'hidden': '          <hidden>false</hidden>', 'link': '          <link>true</link>', 'noHoliday': '          <noHoliday>false</noHoliday>', 'noWeekend': '          <noWeekend>false</noWeekend>', 'readonly': '          <readonly>false</readonly>', 'required': '          <required>false</required>', 'associatedForm': '          <associatedForm reference="../../../../.."/>', 'autoFillNullValue': '          <autoFillNullValue>false</autoFillNullValue>', 'carryOver': '          <carryOver>false</carryOver>', 'carryOverWhenRepeated': '          <carryOverWhenRepeated>false</carryOverWhenRepeated>', 'conditionalFormats': '          <conditionalFormats/>', 'conditions': '          <conditions/>', 'displayInactive': '          <displayInactive>false</displayInactive>', 'dropdown': '          <dropdown>false</dropdown>', 'exactMatchToCode': '          <exactMatchToCode>false</exactMatchToCode>', 'existingEntityConditions': '          <existingEntityConditions/>', 'existingSelectAll': '          <existingSelectAll>false</existingSelectAll>', 'fillPanelOnSelect': '          <fillPanelOnSelect>false</fillPanelOnSelect>', 'filterConditions': '          <filterConditions/>', 'filterListByUser': '          <filterListByUser>false</filterListByUser>', 'forceDefaultValue': '          <forceDefaultValue>false</forceDefaultValue>', 'freeFormLookup': '          <freeFormLookup>false</freeFormLookup>', 'inPlaceEditable': '          <inPlaceEditable>false</inPlaceEditable>', 'includeNulls': '          <includeNulls>false</includeNulls>', 'innerJoin': '          <innerJoin>false</innerJoin>', 'labelIsTemplate': '          <labelIsTemplate>false</labelIsTemplate>', 'lookupDefaultValues': '          <lookupDefaultValues></lookupDefaultValues>', 'newColumn': '          <newColumn>false</newColumn>', 'newRow': '          <newRow>false</newRow>', 'noLabel': '          <noLabel>false</noLabel>', 'onlyAutoFillEmptyField': '          <onlyAutoFillEmptyField>false</onlyAutoFillEmptyField>', 'openInNewTab': '          <openInNewTab>false</openInNewTab>', 'parameters': '          <parameters/>', 'preventPanelLookups': '          <preventPanelLookups>false</preventPanelLookups>', 'readonlyIfEmpty': '          <readonlyIfEmpty>false</readonlyIfEmpty>', 'readonlyIfNotEmpty': '          <readonlyIfNotEmpty>false</readonlyIfNotEmpty>', 'repeatPanelsOnPanelLookup': '          <repeatPanelsOnPanelLookup>false</repeatPanelsOnPanelLookup>', 'requiredTime': '          <requiredTime>false</requiredTime>', 'runLookup': '          <runLookup>false</runLookup>', 'showIfNullValueWhenHidden': '          <showIfNullValueWhenHidden>false</showIfNullValueWhenHidden>', 'showIfValues': '          <showIfValues class="sorted-set"/>', 'showIfValues2': '          <showIfValues2 class="sorted-set"/>', 'useCommaDisplayMask': '          <useCommaDisplayMask>true</useCommaDisplayMask>', 'userSelectedList': '          <userSelectedList/>', 'widgetInMassType': '          <widgetInMassType>NEVER_SHOW</widgetInMassType>', 'xrefConditions': '          <xrefConditions/>'}
+RICH_CRITERION_BLOCK = '<com.sustain.form.model.SearchCriteriaFormItem>\n        <default>\n          <additionalItems/>\n          <allowRange>false</allowRange>\n          <extraCriteria>false</extraCriteria>\n          <searchLookupItemLabel>false</searchLookupItemLabel>\n          <split>false</split>\n          <subQueryIdentifier></subQueryIdentifier>\n        </default>\n      </com.sustain.form.model.SearchCriteriaFormItem>'
+
+
+def synth_criterion_labelled(num, path, terminal, label, *, operator=None, lookup=False,
+                             multi=False, default_value=None, allow_range=False,
+                             relation=False, memo=None, pac=False):
+    """A labelled search criterion in the platform's full shape.
+
+    lookup=True adds the pair every labelled lookup criterion carries: lookupItemFormat LABEL
+    and lookupSearchType CONTAINS. Inline HQL pickers (customListType QUERY) are NOT offered:
+    they carry live Velocity and have not been reproduced.
+    """
+    sem = {
+        "num": f"          <num>{num}</num>",
+        "type": "          <type>0</type>",
+        "label": f"          <label>{esc(label)}</label>",
+        "path": f"          <path>{esc(path)}</path>",
+        "multiSelectLookup": f"          <multiSelectLookup>{'true' if multi else 'false'}</multiSelectLookup>",
+        "previewSummary": "          <previewSummary>false</previewSummary>",
+    }
+    if operator:
+        sem["operator"] = f"          <operator>{esc(operator)}</operator>"
+    if lookup:
+        sem["lookupItemFormat"] = "          <lookupItemFormat>LABEL</lookupItemFormat>"
+        sem["lookupSearchType"] = "          <lookupSearchType>CONTAINS</lookupSearchType>"
+    if default_value is not None:
+        sem["defaultValue"] = f"          <defaultValue>{esc(str(default_value))}</defaultValue>"
+    # a criterion whose path ends at an ENTITY (a person picker, say) rather than a value
+    # carries forceCreateObject=false - derivable from the dictionary's type for the terminal
+    if relation:
+        sem["forceCreateObject"] = "          <forceCreateObject>false</forceCreateObject>"
+    if pac:
+        sem["panelAutoCompleteWithAllData"] = ("          <panelAutoCompleteWithAllData>false"
+                                               "</panelAutoCompleteWithAllData>")
+    lines = [sem.get(t) or RICH_CRITERION_BASE.get(t) for t in CANON_FIELDS]
+    lines = [l for l in lines if l]
+    blk = RICH_CRITERION_BLOCK
+    if allow_range:
+        blk = blk.replace("<allowRange>false</allowRange>", "<allowRange>true</allowRange>")
+    # an admin note on the item lives on the DomainObject block, not the FormItem one
+    dom = (["      <com.sustain.DomainObject>", "        <default>",
+            f"          <memo>{esc(memo)}</memo>", "        </default>",
+            "      </com.sustain.DomainObject>"] if memo else
+           ["      <com.sustain.DomainObject>", "        <default/>",
+            "      </com.sustain.DomainObject>"])
+    return "\n".join(
+        ['<com.sustain.form.model.SearchCriteriaFormItem serialization="custom">'] + dom +
+        ["      <com.sustain.form.model.FormItem>",
+         "        <default>"] + lines + ["        </default>",
+         f"        <string>{esc(terminal)}</string>", "        <null/>",
+         "      </com.sustain.form.model.FormItem>", "      " + blk,
+         "    </com.sustain.form.model.SearchCriteriaFormItem>"])
+
+
 def synth_result(num, path, terminal, label, *, link=True, lookup=False):
     """A result COLUMN. panelAutoCompleteWithAllData is emitted iff link=true - the only
     combination the corpus shows for link=false is pac absent, so the two travel together."""
@@ -633,7 +697,23 @@ def compose(donor, paths, code, name, keep_results=None):
     return out
 
 
-def build_search(donor, code, name, criteria, results):
+def synthetic_ids(code, n):
+    """Deterministic, unique-looking ids for a generated form: (srcId, [n item ids]).
+
+    A generated form must NOT carry its donor's identity. srcId and the validationRule ids are
+    the SOURCE environment's primary keys - the ones a later re-import appears to match on (an
+    imported item stores the source id as configSourceId). Reusing S-Case-Simple's would give a
+    test form the real form's identity, so a later import of either could land on the other.
+    Synthetic ids fail SAFE: if the importer rejects them, nothing changes; if it stores them,
+    they collide with nothing. Derived from the code so a rebuild is stable, and kept in the
+    900,000,000+ range, far above any real id seen (max observed ~26,000).
+    """
+    h = int(hashlib.sha1(code.encode("utf8")).hexdigest()[:7], 16)
+    base = 900_000_000 + (h % 90_000_000)
+    return str(base), [str(base + 1 + i) for i in range(n)]
+
+
+def build_search(donor, code, name, criteria, results, root=None, root_fqcn=None):
     """Assemble a from-scratch search: a REAL donor's form envelope (head/tail/settings) with
     freshly SYNTHESISED items swapped in. Same root entity as the donor.
 
@@ -653,12 +733,20 @@ def build_search(donor, code, name, criteria, results):
     items, n = [], 0
     for path, terminal, opt in results:
         items.append(synth_result(n, path, terminal, opt.get("label"),
-                                   link=opt.get("link", True), lookup=opt.get("lookup", False)))
+                                   link=opt.get("link", False), lookup=opt.get("lookup", False)))
         n += 1
     for path, terminal, opt in criteria:
-        items.append(synth_criterion(n, path, terminal, lookup=opt.get("lookup", False),
-                                      operator=opt.get("operator"),
-                                      allow_range=opt.get("allow_range", False)))
+        if opt.get("label"):
+            # a labelled criterion is always written in the full shape - see RICH_CRITERION_BASE
+            items.append(synth_criterion_labelled(
+                n, path, terminal, opt["label"], operator=opt.get("operator"),
+                lookup=opt.get("lookup", False), multi=opt.get("multi", False),
+                default_value=opt.get("default"), allow_range=opt.get("allow_range", False),
+                relation=opt.get("relation", False)))
+        else:
+            items.append(synth_criterion(n, path, terminal, lookup=opt.get("lookup", False),
+                                          operator=opt.get("operator"),
+                                          allow_range=opt.get("allow_range", False)))
         n += 1
     out["items"] = items
     # the donor's own between-item separator (4 spaces), and a whitespace-only tail - the
@@ -670,20 +758,30 @@ def build_search(donor, code, name, criteria, results):
     out["summaries"] = [item_summary(i) for i in items]
 
     flags = []
-    # (1) validationRule ids: make the count match; reuse donor values, flag it
+    # (1) identity: synthetic, unique, deterministic - never the donor's (see synthetic_ids)
+    src_id, item_ids = synthetic_ids(code, len(items))
     m = re.search(r'<validationRule ids="([^"]*)"', out["head"])
     if m:
-        donor_ids = [i for i in m.group(1).split(",") if i]
-        newids = (donor_ids * ((len(items) // max(len(donor_ids), 1)) + 1))[:len(items)]
-        out["head"] = out["head"][:m.start(1)] + ",".join(newids) + out["head"][m.end(1):]
-        flags.append(f"validationRule ids: {len(newids)} donor-reused values (count matches "
-                     f"the list, as on every export; the correct VALUES for a new form are "
-                     f"unknown until one is imported and exported back)")
+        out["head"] = out["head"][:m.start(1)] + ",".join(item_ids) + out["head"][m.end(1):]
+    out["env"] = dict(out["env"])
+    out["env"]["srcId"] = src_id
+    out["env"]["srcActionUrl"] = f"https://generated.invalid/ecms/admin/forms/edit?id={src_id}"
+    flags.append(f"identity is synthetic: srcId {src_id}, {len(item_ids)} validationRule ids "
+                 f"from {item_ids[0]}, srcActionUrl on generated.invalid. Non-empty values are "
+                 f"PROVEN accepted for RULE imports, not yet for FORM - the first import settles "
+                 f"it, and a rejection there changes nothing")
+
+    # (1b) root entity: the envelope may come from a donor with a different root
+    if root and root_fqcn:
+        out["head"] = re.sub(r"<rootEntity>.*?</rootEntity>", f"<rootEntity>{root_fqcn}</rootEntity>",
+                             out["head"], count=1)
 
     # (2) srcContent: the PROJECTION of the synthesised items - the same function the gate
     # verifies against every search-form item in the corpus, so the two halves agree by
     # construction rather than by a hand-written approximation.
     out["cfg"] = dict(donor["cfg"])
+    if root:
+        out["cfg"]["rootEntity"] = root
     out["cfg"]["formItems"] = [project(it) for it in items]
     out["cfg"].pop("drilldownForm", None)
 
@@ -1103,6 +1201,12 @@ def main():
         print(f"  adapted {origin} -> {back['code']}")
         for c in changed:
             print(f"    {c}")
+        # a copy keeps the SOURCE form's identity (srcId + per-item ids) - which is exactly
+        # how a normal cross-environment promotion works, and exactly what could collide if it
+        # is imported back into the environment the source form lives in
+        print(f"    IDENTITY: carries {origin}'s source ids (srcId {back['env']['srcId']}). Import "
+              f"it only into an environment that does NOT hold {origin}; for a new search in the "
+              f"same environment, build it with search_build.py, which uses synthetic ids.")
         for x in faults:
             print(f"    FAULT  {x}")
         for x in notes:
