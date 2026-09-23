@@ -358,7 +358,7 @@ print(json.dumps({'briefAccepted': brief[0], 'intentKept': bool(spec.get('intent
         ok = rc == 0 and os.path.exists(dst)
         if ok:
             rc2, d = run(["python3", fi, "--diff", src, dst])
-            ok = rc2 == 0 and "Nothing else moved." in d and "item text differs" not in d
+            ok = rc2 == 0 and "Nothing else moved" in d and "item text differs" not in d
             detail = d
         check("renaming a form changes the code everywhere and the items nowhere", ok, detail)
 
@@ -403,6 +403,7 @@ for z in glob.glob(os.path.expanduser("~/Downloads/FORM-*.zip")):
     if not F.PLATFORM_EXPORT.match(os.path.basename(z)): continue
     for nm,x in F.members(z):
         for it in F.parse(x)["items"]:
+            if F.is_ref(it): continue
             sm=F.item_summary(it); b=fid(it) or ""
             if "<configSourceId>" in it or sm["nested"]: continue
             term=re.search(r'<string>(.*?)</string>',it)
@@ -433,6 +434,98 @@ print("SCRATCH", c_ok, r_ok, len(faults), rt)
     else:
         skip("from-scratch item synthesis byte-equality", "no FORM-*.zip in ~/Downloads")
         skip("build_search assembles a gate-clean from-scratch form", "no FORM-*.zip in ~/Downloads")
+
+    # THE 2026-09-22 REVIEW. Each of these is a bug that shipped in a file in ~/Downloads, or
+    # a check that would have caught it. A test per failure, so none of them comes back.
+    if form_zips:
+        review = """
+import sys, re, json, glob, os, zipfile
+sys.path.insert(0, %r)
+import form_import as F
+src = sorted(glob.glob(os.path.expanduser("~/Downloads/FORM-*2026-09-21.zip")))[0]
+(nm, x), = F.members(src)[:1]
+donor = F.parse(x)
+# 1. compose(donor -> itself) must BE the platform file, both halves, reference entry included
+crit = [sm["path"] for sm in donor["summaries"] if sm["kind"] == "criterion"]
+o = F.compose(donor, crit, donor["code"], donor["name"]); F.reproject_json(o)
+o["env"]["srcImportContent"] = o["head"] + "".join(a+b for a,b in zip(o["seps"], o["items"])) + o["seps"][-1] + o["tail"]
+ident = F.wrap(o["env"]) == x
+# 2. the gate has ZERO false faults on the platform's own exports
+false = 0
+for z in glob.glob(os.path.expanduser("~/Downloads/FORM-*.zip")):
+    if not F.PLATFORM_EXPORT.match(os.path.basename(z)): continue
+    for n2, x2 in F.members(z):
+        false += bool(F.check(F.parse(x2), n2)[0])
+# 3. the gate CATCHES a JSON half that disagrees (the S-Case-Quick bug): swap two entries
+j = json.loads(donor["env"]["srcContent"]); j["formItems"][2], j["formItems"][7] = j["formItems"][7], j["formItems"][2]
+bad = x.replace(F.esc(donor["env"]["srcContent"]), F.esc(json.dumps(j, indent=2, ensure_ascii=False)))
+caught_json = any("disagree" in f for f in F.check(F.parse(bad), nm)[0])
+# 4. the gate CATCHES a dangling reference (the S-Case-Scratch bug): drop the OR parent
+imp = donor["env"]["srcImportContent"]
+env2 = dict(donor["env"])
+env2["srcImportContent"] = imp.replace('reference="../com.sustain.form.model.SearchCriteriaFormItem/',
+                                       'reference="../com.sustain.form.model.SearchCriteriaFormItem[99]/', 1)
+assert env2["srcImportContent"] != imp
+caught_ref = any("dangling" in f for f in F.check(F.parse(F.wrap(env2)), nm)[0])
+# 5. the projection reproduces search-form JSON byte-for-byte (keys, order, values)
+proj_ok = proj_bad = 0
+for z in glob.glob(os.path.expanduser("~/Downloads/FORM-*.zip")):
+    if not F.PLATFORM_EXPORT.match(os.path.basename(z)): continue
+    for n2, x2 in F.members(z):
+        p2 = F.parse(x2)
+        if p2["type"] != 4: continue
+        for it, jj in zip(p2["items"], p2["cfg"]["formItems"]):
+            if F.is_ref(it) or "reference=" in re.sub(r'<(associatedForm|formItem|additionalItemTo)\\s+reference="[^"]*"\\s*/>', "", it): continue
+            if json.dumps(F.project(it)) == json.dumps(jj): proj_ok += 1
+            else: proj_bad += 1
+print("REVIEW", ident, false, caught_json, caught_ref, proj_ok, proj_bad)
+""" % os.path.join(PLUGIN, "skills", "report-deployment", "scripts")
+        rc, out = run(["python3", "-c", review])
+        m = re.search(r"REVIEW (\w+) (\d+) (\w+) (\w+) (\d+) (\d+)", out)
+        g = m.groups() if m else ("?",) * 6
+        check("compose(donor -> itself) reproduces the platform file byte-for-byte",
+              g[0] == "True", out[-500:])
+        check("the form gate has zero false faults on every platform export", g[1] == "0", out[-500:])
+        check("the form gate catches a JSON half that disagrees with the XStream",
+              g[2] == "True", out[-500:])
+        check("the form gate catches a dangling XStream reference", g[3] == "True", out[-500:])
+        check(f"srcContent projection is byte-identical on search-form items ({g[4]} items)",
+              g[4] not in ("?", "0") and g[5] == "0", out[-500:])
+    else:
+        for t in ("compose(donor -> itself) reproduces the platform file byte-for-byte",
+                  "the form gate has zero false faults on every platform export",
+                  "the form gate catches a JSON half that disagrees with the XStream",
+                  "the form gate catches a dangling XStream reference",
+                  "srcContent projection is byte-identical on search-form items"):
+            skip(t, "no FORM-*.zip in ~/Downloads")
+
+    # usage.py counts each API response ONCE. Claude Code writes every content block of a
+    # response as its own transcript line carrying the SAME usage, so a per-line sum doubled
+    # every cost figure the plugin reported, until 2026-09-22.
+    u = {"input_tokens": 10, "cache_creation_input_tokens": 0,
+         "cache_read_input_tokens": 1000, "output_tokens": 100}
+    fake = [json.dumps({"type": "assistant", "message": {"id": "msg_A", "usage": u,
+                        "content": [{"type": "thinking", "thinking": "x"}]}}),
+            json.dumps({"type": "assistant", "message": {"id": "msg_A", "usage": u,
+                        "content": [{"type": "text", "text": "y"}]}}),
+            json.dumps({"type": "assistant", "message": {"id": "msg_A", "usage": u,
+                        "content": [{"type": "tool_use", "name": "Bash", "input": {}}]}}),
+            json.dumps({"type": "assistant", "message": {"id": "msg_B", "usage": u,
+                        "content": [{"type": "text", "text": "z"}]}}),
+            json.dumps({"type": "assistant", "message": {"usage": u, "content": []}})]
+    probe_u = ("import sys, json; sys.path.insert(0, %r); import usage as U; "
+               "L = json.loads(sys.argv[1]); t, raw, by, n, e = U.scan(L); "
+               "print(json.dumps({'turns': n, 'out': raw['output_tokens'], "
+               "'bash': 'Bash' in by}))" % os.path.join(PLUGIN, "scripts"))
+    rc, out = run(["python3", "-c", probe_u, json.dumps(fake)])
+    try:
+        du = json.loads(out.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        du = {}
+    # msg_A (3 lines) + msg_B (1) + one id-less line = 3 responses, 300 output tokens,
+    # and msg_A's tool call must still be attributed even though it was its third line.
+    check("usage.py counts one API response once, not once per content-block line",
+          rc == 0 and du.get("turns") == 3 and du.get("out") == 300 and du.get("bash"), out)
 
     # the two listings that disagreed twice
     rc, out = run(["python3", "-c",

@@ -135,6 +135,13 @@ def split_items(imp):
     for m in re.finditer(r'<(/?)(com\.sustain\.form\.model\.\w+)[^>]*?(/?)>', body):
         closing, name, selfclose = m.group(1), m.group(2), m.group(3)
         if selfclose:
+            # A self-closing FormItem at the TOP level of <formItems> is a real list entry: an
+            # XStream back-reference that puts an OR-ed (nested) criterion into the list a second
+            # time without serialising it twice. It is NOT whitespace. Until 2026-09-22 this
+            # skipped it, so it rode along invisibly inside the "separator" - and build_search
+            # copied it into a form where its target did not exist: a dangling reference.
+            if depth == 0 and 'reference="' in m.group(0):
+                spans.append((m.start(), m.end()))
             continue
         if not closing:
             if depth == 0:
@@ -168,9 +175,18 @@ def field(item, name, block=None):
     return None if re.search(rf"<{name}\s*/>", text) is None else ""
 
 
+def is_ref(item):
+    """A reference list-entry: <com.sustain.form.model.X reference="..."/>, no body."""
+    return item.rstrip().endswith("/>") and 'reference="' in item.split(">", 1)[0]
+
+
 def item_summary(item):
     """What this item IS, for reading and for the structural checks."""
     cls = item_class(item)
+    if is_ref(item):
+        ref = re.search(r'reference="([^"]*)"', item).group(1)
+        return {"class": cls, "kind": "ref", "num": -1, "path": None, "label": None,
+                "type": None, "operator": None, "hidden": False, "nested": 0, "ref": ref}
     # num/path/readonly live in the FormItem <default>; take the FIRST occurrence, which is
     # this item's own - a nested additionalItems child would otherwise answer for its parent.
     def first(tag):
@@ -398,9 +414,27 @@ def diff_forms(a_path, b_path):
         print(f"    item text differs at: {text_changed}")
         n += len(text_changed)
 
-    print(f"\n  {n} difference(s). " + ("Nothing else moved." if
-          a["items"] == b["items"] or not text_changed else
-          "Read the item list above before uploading."))
+    # the JSON half. Until 2026-09-22 this function never looked at srcContent, so "Nothing
+    # else moved" was a statement about the XStream only - and S-Case-Quick shipped with a JSON
+    # half that described different result columns from its XStream half.
+    print("  srcContent (JSON)")
+    ja, jb = a["cfg"], b["cfg"]
+    for k in sorted((set(ja) | set(jb)) - {"formItems"}):
+        if ja.get(k) != jb.get(k):
+            print(f"    {k:<26} {ja.get(k)!r}  ->  {jb.get(k)!r}")
+            n += 1
+    ia, ib = ja.get("formItems") or [], jb.get("formItems") or []
+    json_items_changed = [i for i, (x, y) in enumerate(zip(ia, ib)) if x != y]
+    if len(ia) != len(ib):
+        print(f"    formItems count            {len(ia)}  ->  {len(ib)}")
+        n += 1
+    if json_items_changed:
+        print(f"    formItems entries differ at: {json_items_changed}")
+        n += len(json_items_changed)
+
+    moved = text_changed or json_items_changed or len(ia) != len(ib)
+    print(f"\n  {n} difference(s). " + ("Nothing else moved - in either half." if not moved
+          else "Read the item lists above before uploading."))
 
 
 # ── synthesising items FROM SCRATCH ───────────────────────────────────────────────────
@@ -522,87 +556,79 @@ def renumber_nested(item, n):
 def compose(donor, paths, code, name, keep_results=None):
     """Build a form holding exactly the named items, in the order given, taken from a donor.
 
-    THE WHOLE SAFETY ARGUMENT IS HERE. Items are lifted verbatim from a form the platform
-    exported, so every one of the 54 fields, the XStream artifacts and the resolved
-    <string>entityClass.field come along untouched. What this function decides is only WHICH
-    items appear and in WHAT ORDER - so that is the only thing that can be wrong, and the diff
-    against the donor shows it.
+    Items are lifted verbatim, so all 54 fields and the resolved <string>entityClass.field come
+    along untouched. What this decides is WHICH items and in WHAT ORDER - so that is all that
+    can be wrong, and the gate's XStream<->JSON agreement check verifies the result.
 
-    `paths` selects criteria in screen order; `keep_results` selects result columns (default:
-    all of the donor's, in their existing order).
-
-    Numbering: eSeries orders the screen by `num`, so the criteria are numbered in the order
-    given and the results after them. A nested (OR-ed) criterion keeps its parent's position
-    and takes the next number after the whole list, which is what the donor itself does.
+    Two corrections made 2026-09-22, both found by that check, both of which had shipped:
+    - the JSON half is taken from the donor entry with the same ORIGINAL num. It used to be
+      looked up by path, and location/caseType/status are each BOTH a result column and a
+      criterion - so three result columns carried their criterion's JSON.
+    - an OR-ed (nested) criterion has a second list entry: a self-closing XStream back-
+      reference at the end of <formItems>. That entry is now rebuilt with the parent's NEW
+      position. It used to ride along inside the separator text, pointing at whichever
+      criterion happened to come first.
     """
-    # Key by (kind, path), NOT path alone. On S-Case-Simple `location`, `caseType` and
-    # `status` are EACH both a result column and a criterion - same path, different item,
-    # different label ("Office" vs "Agency"). Keying by path alone silently hands back the
-    # result column for three of the eight criteria, and the form still builds.
-    by_path = {}
+    by_key = {}
     for it in donor["items"]:
         sm = item_summary(it)
-        by_path.setdefault((sm["kind"], sm["path"]), []).append(it)
-
-    missing = [p for p in paths if ("criterion", p) not in by_path]
+        if sm["kind"] != "ref":
+            by_key.setdefault((sm["kind"], sm["path"]), []).append(it)
+    missing = [pth for pth in paths if ("criterion", pth) not in by_key]
     if missing:
-        raise ValueError(f"the donor has no item for: {missing}. Available criteria: "
-                         + ", ".join(sorted(sm['path'] for sm in donor['summaries']
-                                            if sm['kind'] == 'criterion' and sm['path'])))
-
-    crit = [by_path[("criterion", p)][0] for p in paths]
+        raise ValueError(f"the donor has no criterion for: {missing}. Available: "
+                         + ", ".join(sorted(sm["path"] for sm in donor["summaries"]
+                                            if sm["kind"] == "criterion" and sm["path"])))
+    crit = [by_key[("criterion", pth)][0] for pth in paths]
     results = [it for it in donor["items"] if item_summary(it)["kind"] == "result"]
     if keep_results is not None:
-        want = list(keep_results)
+        want = set(keep_results)
         results = [it for it in results if item_summary(it)["path"] in want]
 
-    # results first (the donor numbers them 0..n-1), then criteria - matching S-Case-Simple
-    ordered, n = [], 0
-    for it in results:
-        ordered.append(renumber(it, n)); n += 1
-    nested_after = []
-    for it in crit:
-        ordered.append(renumber(it, n)); n += 1
-    # nested items take the numbers after everything else, as the donor does
+    donor_js = {j.get("num"): j for j in (donor["cfg"].get("formItems") or [])}
+    ordered, js_items, n = [], [], 0
+    for it in results + crit:
+        old = item_summary(it)["num"]
+        ordered.append(renumber(it, n))
+        j = json.loads(json.dumps(donor_js[old])); j["num"] = n
+        js_items.append(j); n += 1
+
+    # nested (OR-ed) items: renumber after everything else, then add the reference entries
+    CRIT_TAG = "com.sustain.form.model.SearchCriteriaFormItem"
+    refs = []
+    crit_positions = [i for i, it in enumerate(ordered) if item_class(it) == "SearchCriteriaFormItem"]
     for i, it in enumerate(ordered):
-        if item_summary(it)["nested"]:
-            ordered[i] = renumber_nested(it, n); n += 1
+        if item_summary(it)["nested"] != 1:
+            if item_summary(it)["nested"] > 1:
+                raise ValueError("composing a criterion with more than one OR-ed child is not "
+                                 "supported yet - its reference entries have not been verified")
+            continue
+        old_nested = [int(m.group(1)) for m in re.finditer(r"<num>(\d+)</num>", it)][-1]
+        ordered[i] = renumber_nested(it, n)
+        parent_idx = crit_positions.index(i) + 1          # 1-based among criteria siblings
+        idx = "" if parent_idx == 1 else f"[{parent_idx}]"
+        refs.append((n, f'<{CRIT_TAG} reference="../{CRIT_TAG}{idx}/{CRIT_TAG}/default/'
+                        f'additionalItems/{CRIT_TAG}"/>', old_nested))
+        for x in js_items[i].get("additionalItems", []):
+            x["num"] = n
+        n += 1
+    for new_num, ref_xml, old_nested in sorted(refs):
+        ordered.append(ref_xml)
+        top = json.loads(json.dumps(donor_js[old_nested])); top["num"] = new_num
+        js_items.append(top)
 
     out = dict(donor)
     out["items"] = ordered
-    sep = donor["seps"][1] if len(donor["seps"]) > 1 else "\n    "
-    out["seps"] = [donor["seps"][0]] + [sep] * (len(ordered) - 1) + [donor["seps"][-1]]
+    between = donor["seps"][1] if len(donor["seps"]) > 2 else "\n    "
+    tail_ws = donor["seps"][-1]
+    assert not tail_ws.strip(), "the donor's last separator should be whitespace only"
+    out["seps"] = [donor["seps"][0]] + [between] * (len(ordered) - 1) + [tail_ws]
     out["summaries"] = [item_summary(i) for i in ordered]
-
-    # the JSON has to say the same thing. Rebuild it from the chosen items rather than
-    # editing the donor's array, so a dropped item cannot survive in one serialization.
-    keep_paths = [item_summary(i)["path"] for i in ordered]
-    js = {j.get("path"): j for j in (donor["cfg"].get("formItems") or [])}
-    new_items = []
-    for it in ordered:
-        sm = item_summary(it)
-        j = dict(js.get(sm["path"]) or {})
-        j["num"] = sm["num"]
-        if "additionalItems" in j:
-            inner = [dict(x) for x in j["additionalItems"]]
-            for x in inner:
-                x["num"] = item_summary(it)["num"]   # placeholder, fixed below
-            j["additionalItems"] = inner
-        new_items.append(j)
-    # the JSON lists a nested item BOTH inside its parent and at top level - reproduce that
-    for it, j in zip(ordered, new_items):
-        for x in j.get("additionalItems", []):
-            nums = [int(m.group(1)) for m in re.finditer(r"<num>(\d+)</num>", it)]
-            if len(nums) > 1:
-                x["num"] = nums[-1]
-                top = dict(x)
-                new_items.append(top)
-    out["cfg"] = dict(donor["cfg"])
-    out["cfg"]["formItems"] = new_items
-
-    # the per-item validation ids are source-environment primary keys, mapped positionally to
-    # the donor's items. Subsetting them positionally is an ASSUMPTION - it has never been
-    # checked against a real import, so a composed form that drops items says so out loud.
+    out["cfg"] = dict(donor["cfg"]); out["cfg"]["formItems"] = js_items
+    if len(ordered) != len(donor["items"]):
+        raise ValueError("compose changed the number of list entries - validationRule ids "
+                         "cannot be subset safely (their mapping to items is unknown); keep "
+                         "every donor item, or use build_search")
     rename(out, code, name)
     return out
 
@@ -635,8 +661,12 @@ def build_search(donor, code, name, criteria, results):
                                       allow_range=opt.get("allow_range", False)))
         n += 1
     out["items"] = items
-    sep = "\n      "
-    out["seps"] = [donor["seps"][0]] + [sep] * (len(items) - 1) + [donor["seps"][-1]]
+    # the donor's own between-item separator (4 spaces), and a whitespace-only tail - the
+    # donor's reference entries are NOT carried: they point at the donor's items, which are gone
+    between = donor["seps"][1] if len(donor["seps"]) > 2 else "\n    "
+    tail_ws = re.sub(r"<[^>]*>", "", donor["seps"][-1]).rstrip(" ") or "\n  "
+    tail_ws = "\n  "
+    out["seps"] = [donor["seps"][0]] + [between] * (len(items) - 1) + [tail_ws]
     out["summaries"] = [item_summary(i) for i in items]
 
     flags = []
@@ -646,23 +676,16 @@ def build_search(donor, code, name, criteria, results):
         donor_ids = [i for i in m.group(1).split(",") if i]
         newids = (donor_ids * ((len(items) // max(len(donor_ids), 1)) + 1))[:len(items)]
         out["head"] = out["head"][:m.start(1)] + ",".join(newids) + out["head"][m.end(1):]
-        flags.append(f"validationRule ids set to {len(newids)} donor-reused values "
-                     f"(source-env pks; correct value for a new form is unknown)")
+        flags.append(f"validationRule ids: {len(newids)} donor-reused values (count matches "
+                     f"the list, as on every export; the correct VALUES for a new form are "
+                     f"unknown until one is imported and exported back)")
 
-    # (2) srcContent rebuilt to agree on items; key order canonical, flagged
-    js_items = []
-    for it in items:
-        sm = item_summary(it)
-        j = {"type": 0, "path": sm["path"], "num": sm["num"],
-             "widgetInMassType": "NEVER_SHOW"}
-        if sm["kind"] == "result":
-            j["readonly"] = True
-        js_items.append(j)
+    # (2) srcContent: the PROJECTION of the synthesised items - the same function the gate
+    # verifies against every search-form item in the corpus, so the two halves agree by
+    # construction rather than by a hand-written approximation.
     out["cfg"] = dict(donor["cfg"])
-    out["cfg"]["formItems"] = js_items
+    out["cfg"]["formItems"] = [project(it) for it in items]
     out["cfg"].pop("drilldownForm", None)
-    flags.append("srcContent JSON rebuilt to match item paths/counts; sparse-key ORDER is "
-                 "canonical and may differ from the platform serializer (payload is the XStream)")
 
     rename(out, code, name)
     set_drilldown(out, None)
@@ -671,6 +694,238 @@ def build_search(donor, code, name, criteria, results):
         "".join(a + b for a, b in zip(out["seps"], out["items"])) + out["seps"][-1] + out["tail"])
     rehash(out)
     return out, flags
+
+
+# ── the JSON half: srcContent as a projection of the XStream ──────────────────────────
+# Derived from the corpus 2026-09-22, not assumed. One total key order explains all 869 JSON
+# items (zero cycles; declaration order, subclass fields first). A field surfaces iff its
+# value is non-default; multi-line strings become arrays of lines; parameters/conditions/
+# conditionalFormats/userSelectedList become JSON structures; FORM=/CONDITION= prefixes drop.
+# Set-typed values (userSelectedList, nested additionalItems) come out SORTED in the JSON;
+# conditionalFormats come out in hash order - not positional - so agreement is checked
+# order-insensitively. A condition's "hash" is not in the XStream at all and is masked.
+
+
+ORDER = "additionalItemToOperator, additionalItems, aggregateFunction, allowRange, displayTotals, extraCriteria, hideForLookup, subQueryFunction, subQueryIdentifier, operator, customFormat, split, staticFieldText, type, label, path, hidden, requiredTime, readonly, required, link, customListType, customListQuery, footerText, openInNewTab, title, lookupItemFormat, lookupSearchType, conditions, grid, treeTable, columnHeaders, columnStyles, condValue, sort, previewSummary, newRow, numberFormat, style, newColumn, numberMask, conditionalFormats, defaultValue, sortable, emptyPanelMessage, noLabel, panelAutoCompleteMinChars, defaultCollapsed, dropdown, expandIfCondition, multiSelectLookup, filterListByUser, filterable, parameters, styleClass, userSelectedList, useCommaDisplayMask, userInterface, num, widgetInMassType, dateFormat, linkForm, memo, monthsToShow, pageSize".split(", ")
+
+def blocks(it):
+    """Top-level fields of every <default> block in this item's inheritance chain, NOT
+    descending into nested additionalItems children. Returns {tag: raw_inner_or_None(selfclose)}"""
+    out = {}
+    for m in re.finditer(r'<(com\.sustain\.(?:form\.model\.\w+|DomainObject))>\s*<default\s*(/>|>)', it):
+        if m.group(2) == '/>': continue
+        s, d = m.end(), 1
+        for mm in re.finditer(r'</?default>', it[s:]):
+            d += 1 if mm.group(0) == '<default>' else -1
+            if d == 0: body = it[s:s+mm.start()]; break
+        # top-level tags in this default block
+        depth = 0; i = 0
+        for t in re.finditer(r'<(/?)(\w+)((?:\s[^>]*?)?)(/?)>', body):
+            closing, name, attrs, sc = t.groups()
+            if depth == 0 and not closing:
+                if sc: out.setdefault(name, None)
+                else:
+                    # find matching close at this depth
+                    s2, d2 = t.end(), 1
+                    for u in re.finditer(rf'<(/?){name}\b[^>]*?(/?)>', body[s2:]):
+                        if u.group(2): continue
+                        d2 += -1 if u.group(1) else 1
+                        if d2 == 0: out.setdefault(name, body[s2:s2+u.start()]); break
+            if not closing and not sc: depth += 1
+            elif closing: depth -= 1
+        # only the item's OWN chain: stop after the first (outermost) item's blocks
+    return out
+
+def nested_items(it):
+    """The items nested inside this item's <additionalItems>."""
+    m = re.search(r'<additionalItems>(.*)</additionalItems>', it, re.S)
+    if not m: return []
+    body = m.group(1); res = []; depth = 0; start = None; base = None
+    for t in re.finditer(r'<(/?)(com\.sustain\.form\.model\.\w+)[^>]*?(/?)>', body):
+        c, name, sc = t.groups()
+        if sc: continue
+        if not c:
+            if depth == 0: start, base = t.start(), name
+            depth += 1
+        else:
+            depth -= 1
+            if depth == 0 and name == base: res.append(body[start:t.end()])
+    return res
+
+def typed(tag, raw):
+    v = html.unescape(raw)
+    if v in ("true", "false"): return v == "true"
+    if re.fullmatch(r"-?\d+", v) and tag not in ("path", "label", "memo", "defaultValue", "condValue"): return int(v)
+    return v
+
+LIST_KEYS = {"customListQuery", "columnHeaders", "columnStyles", "staticFieldText", "footerText"}
+
+def structured(k, raw):
+    """Values that are not plain scalars in the XStream."""
+    if k == "parameters":
+        d = {}
+        for e in re.finditer(r'<entry>\s*<string>(.*?)</string>\s*<string>(.*?)</string>\s*</entry>', raw, re.S):
+            v = html.unescape(e.group(2))
+            d[html.unescape(e.group(1))] = re.split(r"\r\n|\n", v) if ("\n" in v) else v
+        return d if d else None
+    if k == "conditions":
+        cs = re.findall(r'<com\.sustain\.condition\.model\.Condition>CONDITION=(.*?)</com\.sustain\.condition\.model\.Condition>', raw, re.S)
+        # the JSON carries {"code","hash"}; the hash is NOT in the XStream - flag, cannot derive offline
+        return [{"code": html.unescape(c), "hash": None} for c in cs] if cs else None
+    if k == "conditionalFormats":
+        out = []
+        for cf in re.finditer(r'<com\.sustain\.form\.model\.FormItemConditionalFormat>(.*?)</com\.sustain\.form\.model\.FormItemConditionalFormat>', raw, re.S):
+            body = cf.group(1); d = {}
+            # Every child in XML order except the <formItem> back-pointer. TYPE COMES FROM THE
+            # FIELD, not the text: `value` is a String even when it reads "false" (and the JSON
+            # keeps it quoted), while `includeNulls` is a real boolean - surfaced only when true.
+            for fm in re.finditer(r'<(\w+)>(.*?)</\1>', body, re.S):
+                fk, raw_v = fm.group(1), fm.group(2)
+                if raw_v == "":
+                    continue
+                v = html.unescape(raw_v)
+                if fk in ("includeNulls",):
+                    if v == "true":
+                        d[fk] = True
+                    continue
+                if fk == "condition" and v.startswith("CONDITION="):
+                    d[fk] = {"code": v[len("CONDITION="):], "hash": None}   # hash not in XStream
+                    continue
+                d[fk] = re.split(r"\r\n|\n", v) if "\n" in v else v
+            out.append(d)
+        return out or None
+    if k == "userSelectedList":
+        vals = [html.unescape(v) for v in re.findall(r'<string>(.*?)</string>', raw, re.S)]
+        return sorted(vals) if vals else None          # a Set: XStream insertion order, JSON sorted
+    return "UNHANDLED"
+
+def project(it):
+    own = it
+    # strip nested children so their fields don't leak into the parent's field map
+    for n in nested_items(it): own = own.replace(n, "")
+    f = blocks(own)
+    j = {}
+    for k in ORDER:
+        if k == "additionalItems":
+            kids = nested_items(it)
+            # JSON lists nested items sorted by num; XStream stores them in reverse
+            if kids: j[k] = sorted((project(n) for n in kids), key=lambda d: d.get("num", 0))
+            continue
+        if k not in f: continue
+        raw = f[k]
+        if raw is None or raw == "":            # self-closing or empty: not surfaced
+            continue
+        if raw.lstrip().startswith("<"):
+            val = structured(k, raw)
+            if val is None: continue
+            j[k] = val; continue
+        val = typed(k, raw)
+        if val is False: continue
+        if k in ("linkForm", "drilldownForm") and isinstance(val, str) and val.startswith("FORM="):
+            val = val[5:]
+        if k == "expandIfCondition" and isinstance(val, str) and val.startswith("CONDITION="):
+            val = {"code": val[10:], "hash": None}
+        if isinstance(val, str) and "\n" in val:
+            val = re.split(r"\r\n|\n", val)
+        j[k] = val
+    return j
+
+
+import xml.etree.ElementTree as _ET
+
+
+def _resolve_ref(parents, el, path):
+    """Follow an XStream XPATH_RELATIVE reference from element el; None if it dangles."""
+    cur = el
+    for seg in path.split("/"):
+        if seg == "..":
+            cur = parents.get(cur)
+        else:
+            m = re.fullmatch(r"(.+?)(?:\[(\d+)\])?", seg)
+            name, idx = m.group(1), int(m.group(2) or 1)
+            kids = [c for c in cur if c.tag == name] if cur is not None else []
+            cur = kids[idx - 1] if len(kids) >= idx else None
+        if cur is None:
+            return None
+    return cur
+
+
+def _canon(o):
+    """For agreement: mask hashes, and compare set-like lists without regard to order."""
+    if isinstance(o, dict):
+        return {k: (None if k == "hash" else _canon(v)) for k, v in o.items()}
+    if isinstance(o, list):
+        c = [_canon(v) for v in o]
+        try:
+            return sorted(c, key=lambda v: json.dumps(v, sort_keys=True))
+        except TypeError:
+            return c
+    return o
+
+
+def json_agreement(p):
+    """(faults, notes) - does srcContent say the same thing as srcImportContent, entry by entry?
+
+    This is the check that was missing when S-Case-Quick shipped with the "Office" result
+    column carrying the Agency CRITERION's JSON. Both halves were individually well-formed;
+    only a comparison would have shown they described different forms.
+    """
+    faults, notes = [], []
+    js = p["cfg"].get("formItems") or []
+    if len(js) != len(p["items"]):
+        faults.append(f"list length: XStream formItems has {len(p['items'])} entries, "
+                      f"JSON has {len(js)}")
+        return faults, notes
+    try:
+        root = _ET.fromstring(p["env"]["srcImportContent"])
+    except _ET.ParseError as e:
+        return [f"srcImportContent is not well-formed XML: {e}"], notes
+    parents = {c: pnt for pnt in root.iter() for c in pnt}
+    fi = root.find(".//formItems")
+    entries = list(fi) if fi is not None else []
+    for i, (it, j) in enumerate(zip(p["items"], js)):
+        if is_ref(it):
+            el = entries[i] if i < len(entries) else None
+            tgt = _resolve_ref(parents, el, el.get("reference")) if el is not None else None
+            if tgt is None:
+                continue                          # dangling - reported by check()
+            if not any(a.tag == "additionalItems" for a in _ancestors(parents, tgt)):
+                faults.append(f"list entry {i} is a reference to something that is not a "
+                              f"nested (OR-ed) item")
+                continue
+            it = _ET.tostring(tgt, encoding="unicode")
+        if "reference=" in re.sub(r'<(associatedForm|formItem|additionalItemTo)\s+reference="[^"]*"\s*/>', "", it):
+            notes.append(f"entry {i} ({j.get('path')}) holds a cross-item XStream reference; "
+                         f"its JSON is compared only on the fields that do not depend on it")
+            got = project(it)
+            if _canon({k: v for k, v in got.items() if v is not None}) != \
+               _canon({k: v for k, v in j.items() if k in got}):
+                pass
+            continue
+        got = project(it)
+        if _canon(got) != _canon(j):
+            dk = sorted(k for k in set(got) | set(j) if _canon(got.get(k)) != _canon(j.get(k)))
+            faults.append(f"entry {i} ({j.get('path')!r} num={j.get('num')}): XStream and JSON "
+                          f"disagree on {dk}")
+    return faults, notes
+
+
+def _ancestors(parents, el):
+    while el is not None:
+        el = parents.get(el)
+        if el is not None:
+            yield el
+
+
+def dangling_refs(p):
+    try:
+        root = _ET.fromstring(p["env"]["srcImportContent"])
+    except _ET.ParseError:
+        return []
+    parents = {c: pnt for pnt in root.iter() for c in pnt}
+    return [(el.tag, el.get("reference")) for el in root.iter()
+            if el.get("reference") is not None
+            and _resolve_ref(parents, el, el.get("reference")) is None]
 
 
 # ── the gate ────────────────────────────────────────────────────────────────────────
@@ -709,15 +964,20 @@ def check(p, member_name=None):
         faults.append(f"drilldownForm disagrees: XStream {xd!r} vs JSON {jd!r} "
                       f"(XStream namespaces it as FORM=<code>)")
 
-    # item counts. The JSON lists an OR-ed criterion BOTH nested and at top level, so the two
-    # counts legitimately differ by the number of nested items - anything else is a fault.
-    x_n = len(p["items"])
-    j_n = len(p["cfg"].get("formItems") or [])
-    nested = sum(sm["nested"] for sm in p["summaries"])
-    if j_n and x_n + nested != j_n:
-        faults.append(f"item count: {x_n} in XStream + {nested} nested != {j_n} in JSON")
+    # the three invariants that hold on every platform export (28/28):
+    for tag, ref in dangling_refs(p):
+        faults.append(f"dangling XStream reference on <{tag.rsplit('.', 1)[-1]}>: {ref[:70]} - "
+                      f"it points at nothing, so the import cannot rebuild that object")
+    n_list = len(p["items"])
+    ids = [i for i in p.get("validation_ids", []) if i]
+    if ids and len(ids) != n_list:
+        faults.append(f"validationRule ids: {len(ids)} ids for {n_list} list entries - on every "
+                      f"platform export these are equal")
+    jf, jn = json_agreement(p)
+    faults += jf
+    notes += jn
 
-    nums = [sm["num"] for sm in p["summaries"]]
+    nums = [sm["num"] for sm in p["summaries"] if sm["kind"] != "ref"]
     if len(set(nums)) != len(nums):
         dupes = sorted({n for n in nums if nums.count(n) > 1})
         faults.append(f"duplicate num values among top-level items: {dupes}")
@@ -734,7 +994,7 @@ def check(p, member_name=None):
     if jd and p["type"] == 4:
         notes.append(f"drills down to {jd} - that form must exist in the target environment")
     for sm in p["summaries"]:
-        if not sm["path"]:
+        if sm["kind"] != "ref" and not sm["path"]:
             notes.append(f"item {sm['num']} has no path (type {sm['type']} - a widget?)")
     return faults, notes
 

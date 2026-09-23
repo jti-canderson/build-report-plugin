@@ -111,8 +111,22 @@ def prompt_size(u):
 
 
 def scan(lines, start=0):
+    """Sum usage ONCE PER API RESPONSE, not once per transcript line.
+
+    Claude Code writes each content block of a response - the thinking, the text, each tool
+    call - as its own line, and every one of those lines carries the SAME usage object. So a
+    per-line sum counts a three-block response three times. Measured 2026-09-22 across 45
+    transcripts: 12,843 usage lines for 6,568 distinct responses, identical on every repeat.
+    Until then this script, and the cost line at the end of every build, reported roughly
+    DOUBLE the real figure - and `turns` was doubled with it, which doubled the
+    inherited-context estimate too (it multiplies by turns).
+
+    Keyed on message.id. A line without one (an older transcript format) is counted on its
+    own, which is what this did before - so the fix cannot under-count, only stop over-counting.
+    """
     tot, turns, entry = 0.0, 0, None
     raw, bytool = collections.Counter(), collections.Counter()
+    order, where = [], {}
     for ln in lines[start:]:
         try:
             d = json.loads(ln)
@@ -122,15 +136,27 @@ def scan(lines, start=0):
         u = m.get("usage")
         if not u:
             continue
+        tools = [c.get("name", "") for c in (m.get("content") or [])
+                 if isinstance(c, dict) and c.get("type") == "tool_use"]
+        mid = m.get("id")
+        if mid and mid in where:
+            # another block of a response already counted: same usage, attach the tool only
+            rec = order[where[mid]]
+            if not rec["tools"] and tools:
+                rec["tools"] = tools
+            continue
+        if mid:
+            where[mid] = len(order)
+        order.append({"u": u, "tools": tools})
+    for rec in order:
+        u = rec["u"]
         # The first turn in range: what this build INHERITED, before it read anything.
         if entry is None:
             entry = prompt_size(u)
         e = eff(u); tot += e; turns += 1
         for k in W:
             raw[k] += u.get(k, 0)
-        ts = [c.get("name", "") for c in (m.get("content") or [])
-              if isinstance(c, dict) and c.get("type") == "tool_use"]
-        bytool[ts[0] if ts else "(thinking and writing)"] += e
+        bytool[rec["tools"][0] if rec["tools"] else "(thinking and writing)"] += e
     return tot, raw, bytool, turns, (entry or 0)
 
 
