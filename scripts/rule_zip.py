@@ -55,10 +55,9 @@ def rule_reads(path):
     """The _Name parameters the rule actually reads. Comments stripped first - a _Name that
     only appears in the header comment block is documentation, not a parameter."""
     src = open(path, encoding='utf8').read()
-    src = re.sub(r'/\*.*?\*/', ' ', src, flags=re.S)
-    src = re.sub(r'//[^\n]*', ' ', src)
-    # _data is the OUTPUT; it is declared separately and is not a launch input.
-    return {n for n in re.findall(r'\b_([A-Za-z][A-Za-z0-9_]*)', src)} - {'data'}
+    sys.path.insert(0, os.path.join(HERE, '..', 'templates'))
+    from contract_check import param_reads   # one parser, so the two gates cannot disagree
+    return param_reads(src)
 
 
 def main():

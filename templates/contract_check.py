@@ -28,6 +28,23 @@ import re
 import sys
 
 
+
+def param_reads(src):
+    """The <parameter> names a rule reads, as the names the jrxml must declare.
+
+    Two spellings. `_Foo` as an identifier is <parameter name="Foo">. A QUOTED '_Start Date'
+    - how a rule reads a spaced name through binding.getVariable()/param() - is the whole
+    string, spaces and all; tokenising it as an identifier splits it into 'Start' and fails
+    every readable name. Comments are stripped first: a header that documents `_Start Date`
+    is not a read. _data is the output, never an input.
+    """
+    src = re.sub(r'/\*.*?\*/', ' ', src, flags=re.S)
+    src = re.sub(r'(?<![:"\'])//[^\n]*', ' ', src)
+    quoted = re.compile(r"""(['"])_([A-Za-z][A-Za-z0-9 _-]*)\1""")
+    names = {m.group(2) for m in quoted.finditer(src)}
+    names |= set(re.findall(r'\b_([A-Za-z][A-Za-z0-9_]*)\b', quoted.sub(' ', src)))
+    return names - {"data"}
+
 def check(rule_path, jrxml_path):
     rule = pathlib.Path(rule_path).read_text()
     jr = pathlib.Path(jrxml_path).read_text()
@@ -44,8 +61,7 @@ def check(rule_path, jrxml_path):
     emits |= set(re.findall(r'\b[a-z]\w*\.([A-Za-z][A-Za-z0-9_]*)\s*=[^=]', rule))
     # _Foo in the rule is <parameter name="Foo"> in the jrxml. Underscore-lowercase
     # names (_data, _startDate) are matched too - the corpus is inconsistent about case.
-    reads = {m for m in re.findall(r'\b_([A-Za-z][A-Za-z0-9_]*)\b', rule)
-             if m != "data"}
+    reads = param_reads(rule)
     decl = set(re.findall(r'<field name="([^"]+)"', jr))
     placed = set(re.findall(r'\$F\{([A-Za-z0-9_]+)\}', jr))
     prm = set(re.findall(r'<parameter name="([^"]+)"', jr)) - {"journalLogo"}
