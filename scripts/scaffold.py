@@ -356,7 +356,10 @@ def gen_run(s):
          'done',
          'echo "output in verification/"',
          '']
-    return "\n".join(L)
+    # Stamped, so the fast verifier can prove this harness is exactly what was generated
+    # (scripts/harness_marker.py). Any later edit breaks the hash and sends it to legacy.
+    import harness_marker
+    return harness_marker.stamp("\n".join(L))
 
 
 def main():

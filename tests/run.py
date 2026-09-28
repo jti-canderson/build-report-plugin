@@ -917,16 +917,42 @@ print("RESOLVE", same, wrong, refused, typo)
           rc == 0 and pngs and all(os.path.getsize(os.path.join(ff, "verification", p)) > 0
                                    for p in pngs), pngs)
 
-    # A harness the fast path does not understand must go to the legacy gates, SAYING so -
-    # never a guess, never a silent downgrade.
-    fl = mutate(good, ws, "fast_fallback", lambda f: edit(
-        os.path.join(f, "verification", "run.sh"), 'WANT="${2:-', 'VARIANTS="${2:-'))
-    rc, out = run([os.path.join(PLUGIN, "scripts", "finish.sh"), "Probe_Report_V1.groovy",
-                   "Probe_Report.jrxml", "--code", "Probe_Report", "--name", "Probe Report"],
-                  cwd=fl, env=fast_env)
-    check("fast mode hands an unreadable harness to the legacy gates and says why",
-          "running the legacy gates instead" in out and "cannot read the variant list" in out
-          and "mode: fast" not in out, out[:400])
+    # HARNESS MARKER. Fast mode may take the one-JVM path ONLY for an exact, unmodified,
+    # supported scaffold harness. Everything else falls back to legacy, saying why.
+    fin_cmd = [os.path.join(PLUGIN, "scripts", "finish.sh"), "Probe_Report_V1.groovy",
+               "Probe_Report.jrxml", "--code", "Probe_Report", "--name", "Probe Report"]
+    check("a marked, unmodified scaffold harness takes the one-JVM path",
+          "mode: fast" in (run(fin_cmd, cwd=ff, env=fast_env)[1]), "")
+    # a custom FAILING step, with every string the old detection looked for still present
+    fc = mutate(good, ws, "fast_custom", lambda f: edit(
+        os.path.join(f, "verification", "run.sh"), "python3 gen_jrxml.py\n",
+        "python3 gen_jrxml.py\necho '  CUSTOM CHECK FAILED - site-specific step'; exit 7\n"))
+    rs_txt = open(os.path.join(fc, "verification", "run.sh")).read()
+    rcL, outL = run(fin_cmd, cwd=fc, env={"JTI_REPORT_BUILD_MODE": "legacy"})
+    rcF, outF = run(fin_cmd, cwd=fc, env=fast_env)
+    check("a customised run.sh with a failing step: fast falls back and FAILS exactly as legacy",
+          all(x in rs_txt for x in ("render_check.groovy", "--variant", 'WANT="${2:-'))
+          and rcL != 0 and rcF != 0 and "CUSTOM CHECK FAILED" in outF and "GATE 2 FAILED" in outF
+          and "modified after scaffold.py wrote it" in outF and "mode: fast" not in outF,
+          f"legacy rc={rcL} fast rc={rcF}\n{outF[:500]}")
+    import hashlib as _hl
+    def restamp(f, ver):
+        path = os.path.join(f, "verification", "run.sh")
+        lines = open(path).read().split("\n")
+        body = lines[:1] + lines[2:]
+        lines[1] = (f"# JTI_SCAFFOLD_HARNESS_VERSION={ver} sha256="
+                    + _hl.sha256("\n".join(body).encode()).hexdigest())
+        open(path, "w").write("\n".join(lines))
+    fv = mutate(good, ws, "fast_v2", lambda f: restamp(f, 2))
+    out = run(fin_cmd, cwd=fv, env=fast_env)[1]
+    check("an unsupported (newer) harness version falls back to legacy and says so",
+          "version '2' is not supported" in out and "mode: fast" not in out, out[:300])
+    fu = mutate(good, ws, "fast_unmarked", lambda f: edit(
+        os.path.join(f, "verification", "run.sh"),
+        open(os.path.join(f, "verification", "run.sh")).read().split("\n")[1] + "\n", ""))
+    out = run(fin_cmd, cwd=fu, env=fast_env)[1]
+    check("an unmarked harness (every pre-marker report) falls back to legacy and says so",
+          "no JTI_SCAFFOLD_HARNESS_VERSION marker" in out and "mode: fast" not in out, out[:300])
 
     rc, out = run([os.path.join(PLUGIN, "scripts", "finish.sh"), "Probe_Report_V1.groovy",
                    "Probe_Report.jrxml", "--code", "Probe_Report", "--name", "Probe Report"],

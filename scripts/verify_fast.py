@@ -161,8 +161,13 @@ def main():
     if not os.path.isfile(runsh):
         legacy("no verification/run.sh")
     rs = open(runsh, encoding="utf8").read()
-    if "render_check.groovy" not in rs or "--variant" not in rs:
-        legacy("verification/run.sh is not the scaffold's one-JVM render_check harness")
+    # EXACT, versioned, unmodified scaffold output only - never inferred from substrings. A
+    # customised run.sh can keep render_check/--variant/WANT and add a required step; fast
+    # mode would skip that step. harness_marker.check() proves the file is untouched.
+    import harness_marker
+    ok, why = harness_marker.check(rs)
+    if not ok:
+        legacy(why)
     if not os.path.isfile(os.path.join("verification", "fixture.py")):
         legacy("no verification/fixture.py to write the render fixtures")
     # The variant list is READ from the harness, never assumed. Two existing reports use
