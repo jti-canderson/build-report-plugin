@@ -824,6 +824,75 @@ print("RESOLVE", same, wrong, refused, typo)
     check("a failed render is not reported as success",
           rc != 0 and "CONTRACT FAIL" in out, out)
 
+    # ---- phase 5: build-plan.json and the one orchestration command ----------------
+    # Needs an SDK jar to resolve against; uses the newest registered one in the real
+    # workspace, copied into a temp project. Skips loudly when none exists.
+    import glob as _g5
+    jars = sorted(_g5.glob(os.path.join(os.path.dirname(PLUGIN), "*", "sdk", "*.jar")),
+                  key=os.path.getmtime)
+    bp = os.path.join(PLUGIN, "scripts", "build_plan.py")
+    if jars:
+        pw = os.path.join(ws, "planws")
+        os.makedirs(os.path.join(pw, "Proj", "sdk"))
+        open(os.path.join(pw, ".jti-root"), "w").close()
+        run(["python3", os.path.join(PLUGIN, "scripts", "project.py"), "sdk-register",
+             os.path.join(pw, "Proj"), jars[-1]], env={"JTI_PROJECT_ROOT": pw})
+        spec = json.load(open(os.path.join(FIX, "good_spec.json")))
+        plan = {"plan_version": 1, "lane": "fast",
+                "report": {"folder": "Proj/Plan_Probe", "name": "Plan_Probe", "title": "Plan Probe",
+                           "code": "Plan_Probe", "subtitle": "every case type", "slug": "probe"},
+                "template": spec["template"], "root": "Case", "rule": "Plan_Probe_V1.groovy",
+                "strategy": {"kind": "query-list", "entity": "Case"},
+                "params": [{"name": n, "class": c} for n, c in spec["params"]],
+                "sections": spec["sections"],
+                "traversals": {"caseNumber": "Case.caseNumber", "caseType": "Case.caseType"},
+                "fixture": {"rows": [{"caseNumber": "CF-2026-00184", "caseType": "Felony"}]},
+                "assumptions": ["one row per case"], "unverified": ["labels"],
+                "flags": {"financial_calc": False, "custom_layout": False,
+                          "conflicting_sources": False, "unusual_grouping": False}}
+        def plan_run(p, cmd="run"):
+            path = os.path.join(pw, f"plan-{abs(hash(json.dumps(p))) % 10**8}.json")
+            json.dump(p, open(path, "w"))
+            rc, out = run(["python3", bp, cmd, path], env={"JTI_PROJECT_ROOT": pw})
+            m = re.search(r"^BUILD-RESULT (\{.*\})$", out, re.M)
+            return rc, out, (json.loads(m.group(1)) if m else {})
+        rc, out, d = plan_run(plan)
+        check("build_plan run stops at the rule (exit 3) - it never generates one",
+              rc == 3 and d.get("stage") == "rule" and d.get("lane") == "fast", out[-400:])
+        shutil.copy(os.path.join(FIX, "good_rule.groovy"),
+                    os.path.join(pw, "Proj", "Plan_Probe", "Plan_Probe_V1.groovy"))
+        rc, out, d = plan_run(plan)
+        a = d.get("artifacts") or {}
+        check("build_plan run builds and verifies a fast-lane plan in one call",
+              rc == 0 and d.get("ok") and a.get("zip") and a.get("pdfs") and a.get("pages")
+              and (d.get("perf") or {}).get("jvms") == 1, out[-600:])
+        notes = open(os.path.join(pw, "Proj", "Plan_Probe", "JRXML_CONTRACT.txt")).read()
+        check("build_plan fills the untouched NOTES seed from the plan",
+              "ASSUMPTIONS - decisions made without asking" in notes
+              and "TODO before this ships" not in notes, notes[-400:])
+        bad = json.loads(json.dumps(plan)); bad["traversals"]["ghost"] = "Case.notARealFieldAtAll"
+        bad["report"]["folder"] = "Proj/Plan_Ghost"; bad["report"]["name"] = "Plan_Ghost"
+        rc, out, d = plan_run(bad)
+        check("an unresolvable field sends the plan to the expert lane (exit 20), naming it",
+              rc == 20 and any(u.get("field") == "ghost" for u in d.get("unresolved", []))
+              and not os.path.exists(os.path.join(pw, "Proj", "Plan_Ghost")), out[-400:])
+        fin = json.loads(json.dumps(plan)); fin["flags"]["financial_calc"] = True
+        rc1, _, d1 = plan_run(fin, "validate")
+        tpl = json.loads(json.dumps(plan)); tpl["template"] = "grouped_summary"
+        rc2, _, d2 = plan_run(tpl, "validate")
+        check("computed money and an unscaffoldable template both go to the expert lane",
+              rc1 == 20 and rc2 == 20 and d1.get("lane") == "expert" and d2.get("lane") == "expert",
+              f"{d1.get('reasons')} {d2.get('reasons')}")
+        broken = {k: v for k, v in plan.items() if k != "sections"}
+        rc, out, d = plan_run(broken, "validate")
+        check("a malformed plan is rejected (exit 2) with the reason",
+              rc == 2 and any("sections" in e for e in d.get("errors", [])), out[-300:])
+    else:
+        for n in ("build_plan run stops at the rule", "build_plan run builds a fast-lane plan",
+                  "build_plan fills the NOTES seed", "an unresolvable field -> expert lane",
+                  "money / unscaffoldable template -> expert lane", "malformed plan rejected"):
+            skip(n, "no SDK jar registered anywhere in the workspace")
+
     # ---- phase 2: the one-JVM fast verifier ---------------------------------------
     # These run whatever mode the suite itself is in; they set the mode per call.
     fast_env = {"JTI_REPORT_BUILD_MODE": "fast"}

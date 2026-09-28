@@ -609,6 +609,23 @@ Skill(jasper-reports)
 
 Everything lands in `<project folder>/<Report Name>/`.
 
+### Fast mode: write a build plan, then ONE command does the mechanics
+
+In fast mode, after the lookups: write the rule, write `build-plan.json` into the report folder
+(`build_plan.py --example` shows every key; see `docs/perf/BUILD_PLAN.md`), then:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/build_plan.py" run "<report folder>/build-plan.json"
+```
+
+One call validates, decides the lane, checks the SDK, batch-resolves every traversal, scaffolds,
+fills the fixtures, runs every gate in one JVM, fills the untouched NOTES seeds from the plan and
+inventories the files. Its last line is `BUILD-RESULT {json}`. Exit **20** = expert lane: use the
+steps below instead. Exit **3** = the rule or real fixture rows are missing. Exit **1** = a gate
+failed; fix it and run the same command again. Then look at every page, as always.
+
+**Legacy mode:** the steps below, as written.
+
 ### Scaffold the boilerplate — do not type it
 
 Write a short `spec.json`, then generate the three files that carry no decisions:
