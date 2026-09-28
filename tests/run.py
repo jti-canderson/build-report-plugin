@@ -15,6 +15,20 @@ copies it, breaks ONE thing, and asserts the RIGHT gate rejects it. A test that 
 because the fixture drifted would fail the baseline first, so the signal stays readable.
 
 Tests needing JasperReports SKIP loudly when it is absent. A skip is not a pass.
+
+TWO TIERS, counted separately:
+  core         self-contained and deterministic: everything it reads is in tests/fixtures or
+               is built in a temp workspace (including a fake SDK jar). Needs only the local
+               JasperReports install.
+  integration  reads private material that is NOT in this repo - platform FORM/RULE exports
+               and data dictionaries in ~/Downloads, the newest SDK jar registered in the real
+               workspace. Skips when it is absent; what it proves depends on what is there.
+
+Both tiers need the local TOOLS: JasperReports (its JDK too) and PyMuPDF.
+
+    python3 tests/run.py --core-only   HOME is pointed at an empty temp dir first, so no
+                                       integration input can be reached, and those tests are
+                                       reported as not run
 """
 import json
 import os
@@ -28,6 +42,27 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 PLUGIN = os.path.dirname(HERE)
 FIX = os.path.join(HERE, "fixtures")
 VERBOSE = "-v" in sys.argv
+CORE_ONLY = "--core-only" in sys.argv
+if CORE_ONLY:
+    # Nothing under the real home is reachable - ~/Downloads included - so a core test that
+    # quietly depended on private material fails here instead of passing by luck.
+    _home = tempfile.mkdtemp(prefix="jti-nohome-")
+    # The ONE thing a scaffolded report reaches through HOME: gen_jrxml.py and run.sh load
+    # the templates from ~/JaspersoftWorkspace/MyReports/jti-reports-plugin. Point that at
+    # the plugin under test, explicitly, and nothing else.
+    os.makedirs(os.path.join(_home, "JaspersoftWorkspace", "MyReports"))
+    os.symlink(PLUGIN, os.path.join(_home, "JaspersoftWorkspace", "MyReports", "jti-reports-plugin"))
+    # Tools, not data: keep the user's Python packages (PyMuPDF lives in the per-user
+    # site-packages, which is found through HOME) - without it the render gate fails.
+    import site as _site
+    os.environ.setdefault("PYTHONUSERBASE", _site.getuserbase())
+    os.environ["HOME"] = _home
+TIER = "core"
+
+
+def tier(name):
+    global TIER
+    TIER = name
 
 JRS = os.environ.get("JRS") or next(
     (p for p in sorted(__import__("glob").glob("/Applications/jasperreports-server-*"))
@@ -49,7 +84,7 @@ def run(cmd, cwd=None, env=None):
 
 
 def check(name, ok, detail=""):
-    results.append((name, ok, detail))
+    results.append((name, ok, detail, TIER))
     print(f"  {'PASS' if ok else 'FAIL'}  {name}")
     if not ok and detail:
         for line in str(detail).strip().splitlines()[:8]:
@@ -60,7 +95,9 @@ def check(name, ok, detail=""):
 
 
 def skip(name, why):
-    results.append((name, None, why))
+    if TIER == "integration" and CORE_ONLY:
+        why = "not run: --core-only"
+    results.append((name, None, why, TIER))
     print(f"  SKIP  {name}  ({why})")
 
 
@@ -351,6 +388,8 @@ print(json.dumps({'briefAccepted': brief[0], 'intentKept': bool(spec.get('intent
           not idle.get("watching") and not released.get("watching"),
           f"idle={idle} released={released}")
 
+    # ======== INTEGRATION: platform FORM exports in ~/Downloads ========
+    tier("integration")
     # FORM exports. A search form cannot be corrected in place after import - it has to be
     # deleted and re-uploaded - so the writer's only acceptable proof is byte equality against
     # exports the platform itself produced. These tests are that proof, plus one negative to
@@ -525,6 +564,7 @@ print("REVIEW", ident, false, caught_json, caught_ref, proj_ok, proj_bad)
                   "srcContent projection is byte-identical on search-form items"):
             skip(t, "no FORM-*.zip in ~/Downloads")
 
+    tier("core")
     # usage.py counts each API response ONCE. Claude Code writes every content block of a
     # response as its own transcript line carrying the SAME usage, so a per-line sum doubled
     # every cost figure the plugin reported, until 2026-09-22.
@@ -553,6 +593,8 @@ print("REVIEW", ident, false, caught_json, caught_ref, proj_ok, proj_bad)
     check("usage.py counts one API response once, not once per content-block line",
           rc == 0 and du.get("turns") == 3 and du.get("out") == 300 and du.get("bash"), out)
 
+    # ======== INTEGRATION: data dictionaries + FORM exports in ~/Downloads ========
+    tier("integration")
     # /build-search, end to end: the resolver never names a wrong class, refuses what does not
     # exist in THIS environment, and the builder writes a gate-clean form or nothing at all.
     sb_dir = os.path.join(PLUGIN, "skills", "report-deployment", "scripts")
@@ -617,6 +659,7 @@ print("RESOLVE", same, wrong, refused, typo)
         skip("search_build writes a gate-clean form from a spec", "no Eh Team dictionary")
         skip("search_build refuses a field from another environment", "no Eh Team dictionary")
 
+    tier("core")
     # ---- phase 3: no pause for a current SDK - decided in code ---------------------
     # sdk-decide exits 0 only for a current AND readable SDK; anything the user would have to
     # fix (none, gone, stale, unreadable) exits 10 so the build asks. Each case is built here.
@@ -748,6 +791,8 @@ print("RESOLVE", same, wrong, refused, typo)
           rc == 0 and rc2 == 0 and all(n.split("  ")[0] in out2 for n in names),
           out + out2)
 
+    # ======== INTEGRATION: platform RULE / FORM exports in ~/Downloads ========
+    tier("integration")
     # the RULE writer still reproduces the platform byte for byte
     exports = [p for p in (os.path.expanduser("~/Downloads/RULE-local-2026-08-21.zip"),
                            os.path.expanduser("~/Downloads/RULE-local-2026-09-03.zip"))
@@ -815,12 +860,15 @@ print("RESOLVE", same, wrong, refused, typo)
     else:
         skip("formexport --spec on a non-folder-view export", "no RULE-*.zip on hand")
 
+    tier("core")
     # ---- the ones that need a JVM ---------------------------------------------
     if not JRS:
         for n in ("a rule that does not compile is rejected",
                   "a GString value is rejected",
                   "a truncated value is rejected",
-                  "a failed render is not reported as success"):
+                  "a failed render is not reported as success",
+                  "ALL build-plan tests (the fake SDK jar needs javac/javap)",
+                  "ALL fast-verifier and harness-marker tests"):
             skip(n, "no JasperReports install")
         return report()
 
@@ -1037,6 +1085,43 @@ print("RESOLVE", same, wrong, refused, typo)
     if rc_j == 0:
         _plan_tests()
 
+    # ======== INTEGRATION: the newest SDK jar registered in the real workspace ========
+    # The fake jar proves the mechanics; this proves javap output from a real, much larger
+    # client jar still parses the way the fake one does.
+    tier("integration")
+    real = sorted(_g5.glob(os.path.join(os.path.dirname(PLUGIN), "*", "sdk", "*.jar")),
+                  key=os.path.getmtime)
+    if real and not CORE_ONLY:
+        rw = os.path.join(ws, "realws")
+        os.makedirs(os.path.join(rw, "Proj"))
+        open(os.path.join(rw, ".jti-root"), "w").close()
+        run(["python3", os.path.join(PLUGIN, "scripts", "project.py"), "sdk-register",
+             os.path.join(rw, "Proj"), real[-1]], env={"JTI_PROJECT_ROOT": rw})
+        rp = json.load(open(os.path.join(PLUGIN, "tests", "fixtures", "good_spec.json")))
+        rplan = {"plan_version": 1, "lane": "fast",
+                 "report": {"folder": "Proj/Real", "name": "Real", "title": "Real", "code": "Real",
+                            "subtitle": "s", "slug": "s"},
+                 "template": rp["template"], "root": "Case", "rule": "Real_V1.groovy",
+                 "strategy": {"kind": "query-list"}, "params": [], "sections": rp["sections"],
+                 "outputs": {"caseNumber": "x", "caseType": "x"},
+                 "traversals": {"caseNumber": "Case.caseNumber", "caseType": "Case.caseType"},
+                 "provenance": {"caseNumber": {"kind": "sdk"}, "caseType": {"kind": "sdk"}},
+                 "fixture": {"rows": [{"caseNumber": "a", "caseType": "b"}]},
+                 "assumptions": [], "unverified": [],
+                 "flags": {"financial_calc": False, "custom_layout": False,
+                           "conflicting_sources": False, "unusual_grouping": False}}
+        rpath = os.path.join(rw, "plan.json")
+        json.dump(rplan, open(rpath, "w"))
+        rc, out = run(["python3", bp, "resolve", rpath],
+                      env={"JTI_PROJECT_ROOT": rw, "JTI_BUILD_PLAN": "opt-in"})
+        check(f"build_plan resolves Case.caseNumber / caseType in the real SDK "
+              f"({os.path.basename(real[-1])})", rc == 0 and "2 resolved, 0 unresolved" in out,
+              out[-300:])
+    else:
+        skip("build_plan resolves against a real client SDK jar",
+             "no SDK jar registered in the real workspace")
+    tier("core")
+
     # ---- phase 2: the one-JVM fast verifier ---------------------------------------
     # These run whatever mode the suite itself is in; they set the mode per call.
     fast_env = {"JTI_VERIFIER": "fast"}
@@ -1114,11 +1199,18 @@ print("RESOLVE", same, wrong, refused, typo)
 
 
 def report():
-    p = sum(1 for _, ok, _ in results if ok is True)
-    f = sum(1 for _, ok, _ in results if ok is False)
-    s = sum(1 for _, ok, _ in results if ok is None)
-    print(f"\n  {p} passed, {f} failed, {s} skipped\n")
-    return 1 if f else 0
+    print()
+    f_all = 0
+    for t in ("core", "integration"):
+        rs = [r for r in results if r[3] == t]
+        p = sum(1 for r in rs if r[1] is True)
+        f = sum(1 for r in rs if r[1] is False)
+        s = sum(1 for r in rs if r[1] is None)
+        f_all += f
+        print(f"  {t:<12} {p} passed, {f} failed, {s} skipped")
+    print(f"  verifier     {SWITCHES['verifier']}"
+          + ("   (core only: HOME was an empty temp dir)" if CORE_ONLY else "") + "\n")
+    return 1 if f_all else 0
 
 
 if __name__ == "__main__":

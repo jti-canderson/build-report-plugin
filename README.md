@@ -158,6 +158,10 @@ Set them before starting Claude Code (`export JTI_VERIFIER=fast`), or in Claude 
 build plan; `build_mode.py` prints exactly that whenever it is set. A switch set explicitly
 overrides the alias. A misspelt value of any switch warns and uses the default.
 
+Tests: `python3 tests/run.py --core-only` is the self-contained suite (HOME pointed at an
+empty temp dir); plain `python3 tests/run.py` adds the integration tier, which reads private
+exports in `~/Downloads`. Totals are printed per tier.
+
 Only the fast verifier reads `JTI_JVM_OPTS` (default `-XX:TieredStopAtLevel=1`; `""` turns it
 off). Measurements: `docs/perf/BASELINE.md` and `docs/perf/RESULTS.md`. Plan design:
 `docs/perf/BUILD_PLAN.md`. Benchmark any report on a temp copy: `python3 scripts/bench.py <folder>

@@ -1,8 +1,18 @@
 # Report build performance — results
 
 Branch `perf/report-build-speed`, measured 28 September 2026 on the same machine as
-[BASELINE.md](BASELINE.md). Legacy = `JTI_REPORT_BUILD_MODE` unset. Fast = `JTI_REPORT_BUILD_MODE=fast`.
-Every run is on a temporary copy (`scripts/bench.py`); no real report folder was modified.
+[BASELINE.md](BASELINE.md). Legacy = `JTI_REPORT_BUILD_MODE` unset. Fast = `JTI_REPORT_BUILD_MODE=fast`
+(today: `JTI_VERIFIER=fast`; see the README's rollout switches). Every run is on a temporary copy
+(`scripts/bench.py`); no real report folder was modified.
+
+> **Measured BEFORE the harness marker (`d4529a9`).** The fast verifier now takes the one-JVM
+> path only for a `verification/run.sh` carrying an exact, unmodified
+> `JTI_SCAFFOLD_HARNESS_VERSION=1` marker, which only a scaffold run on this branch writes.
+> **Every existing report is unmarked and now falls back to the legacy gates** (with the JIT flag
+> passed through, so roughly the "fast fallback" figure in case 4, not cases 1–2). Cases 1 and 2
+> were existing reports; their fast figures apply once a report is re-scaffolded, and were not
+> re-measured after the marker. The regression suite does exercise the marked one-JVM path on a
+> freshly scaffolded report on every run (1 JVM, 1 compile, 2 rule runs, counted).
 
 ## Verification wall time (median of 3)
 
@@ -46,9 +56,11 @@ Fast counts are exact (counted inside the JVM); legacy counts are derived from t
 | 5b | GString value | gate 1.5, rc 1 | gate 1.5, rc 1 | yes |
 | 6 | Broken rule/JRXML contract | gate 1, rc 1 | gate 1, rc 1 | yes |
 | 7 | Overlong fixture value | gate 3, rc 1 (16.1 s) | gate 3, rc 1 (8.2 s) | yes |
-| 8 | Unknown field | **passes every gate** (ships a blank column) | plan path: refused at `resolve`, exit 20, nothing written | — |
+| 8 | Unknown field | **passes every gate** (ships a blank column) | plan path: exit 2 if any declaration is missing; exit 20 at `resolve` if fully declared but absent from the SDK; nothing written | — |
 
 Case 8 is not a regression: legacy has never caught it, because the fixture answers every property.
+The verifier alone (either mode) still does not catch it — only the build plan does, and the build
+plan is opt-in.
 
 ## Artifact equivalence
 
@@ -75,9 +87,28 @@ a fresh session loading this branch, and one run per mode would not be a meaning
 
 ## Tests
 
-`python3 tests/run.py` → **63 passed, 0 failed, 0 skipped**, in legacy mode and in fast mode
-(`JTI_REPORT_BUILD_MODE=fast python3 tests/run.py` runs every gate test through the fast verifier).
-Baseline before the branch: 41 passed.
+The suite has two tiers, counted separately (see the docstring of `tests/run.py`):
+**core** is self-contained (fixtures, a temp workspace, a fake SDK jar compiled on the fly) and
+**integration** reads private platform exports in `~/Downloads` and the real workspace's SDK jar.
+Both need the local tools: JasperReports and PyMuPDF.
+
+Recorded 28 September 2026, at the commit that introduced the tiers:
+
+| Command | core | integration |
+|---|---|---|
+| `env -u JTI_REPORT_BUILD_MODE JTI_VERIFIER=legacy python3 tests/run.py --core-only` | 70 passed, 0 failed, 0 skipped | not run (19) |
+| `env -u JTI_REPORT_BUILD_MODE JTI_VERIFIER=fast python3 tests/run.py --core-only` | 70 passed, 0 failed, 0 skipped | not run (19) |
+| `env -u JTI_REPORT_BUILD_MODE JTI_VERIFIER=legacy python3 tests/run.py` | 70 passed, 0 failed, 0 skipped | 19 passed, 0 failed, 0 skipped |
+| `env -u JTI_REPORT_BUILD_MODE JTI_VERIFIER=fast python3 tests/run.py` | 70 passed, 0 failed, 0 skipped | 19 passed, 0 failed, 0 skipped |
+
+`--core-only` points HOME at an empty temp directory, so no integration input is reachable
+(HOME only keeps a link to the plugin under test, which scaffolded reports load their templates
+through, and `PYTHONUSERBASE` for PyMuPDF). The integration counts depend on what is in
+`~/Downloads` on this machine and are not reproducible elsewhere.
+
+An earlier version of this page claimed "63 passed, 0 failed, 0 skipped" in both modes; that
+figure mixed in the `~/Downloads` tests without saying so, and is superseded by the table above.
+Baseline before the branch: 41 passed (also mixed).
 
 ## Experiments that did not make it, or made little difference
 
