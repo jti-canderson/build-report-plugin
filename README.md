@@ -176,7 +176,9 @@ one (`git revert <commit>`):
 
 | Commit | What | Switch that disables it | Reverting it removes |
 |---|---|---|---|
-| (switches) | separate switches | — | `build_mode.py`; `JTI_REPORT_BUILD_MODE` goes back to driving everything |
+| `67a2a74` | core / integration test tiers | — (tests only) | the tier split and `--core-only`; the "63 passed" claim was mixed |
+| `53a46cd` | plan field provenance | `JTI_BUILD_PLAN=off` | provenance, cross-checks, safe traversals, fake-SDK plan tests (do not revert alone: the plan would again ship blank columns) |
+| `10ecb61` | separate switches | — | `build_mode.py`; `JTI_REPORT_BUILD_MODE` goes back to driving everything, the plan loses its opt-in gate |
 | `d4529a9` | harness marker | `JTI_VERIFIER=legacy` | the marker; fast mode goes back to a substring check (do not) |
 | `e23d27f` | 5 build plan | `JTI_BUILD_PLAN=off` | `build_plan.py`, the plan design, the command's plan section |
 | `ff1298b` | 4 lookups | `JTI_LOOKUP=full` | `facts.py`, `precedents.py`, the command's lookup text |
