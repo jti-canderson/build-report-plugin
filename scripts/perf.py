@@ -56,7 +56,10 @@ def record(a):
         "rc": a.rc,
         "ok": a.rc == 0,
         "failed_stage": failed if a.rc else None,
-        "wall": round((marks[-1][1] if marks else time.time()) - marks[0][1], 3) if marks else None,
+        # a failed run has no `end` mark: its wall clock runs to NOW, not to the moment the
+        # failing stage began - the first cut reported a 5.8s failed rule gate as 0.1s
+        "wall": round((marks[-1][1] if marks[-1][0] == "end" else time.time()) - marks[0][1], 3)
+                if marks else None,
         "stages": stages,
         "jvms": a.jvms, "compiles": a.compiles, "rule_evals": a.rule_evals,
         "report": hashlib.sha1(os.getcwd().encode()).hexdigest()[:8],

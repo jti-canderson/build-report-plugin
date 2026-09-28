@@ -137,10 +137,15 @@ def main():
         # and still exits non-zero with the same "GATE n FAILED" message as before.
         pj = os.path.join(good, "verification", "perf.jsonl")
         last = json.loads(open(pj).read().strip().splitlines()[-1]) if os.path.exists(pj) else {}
+        # The suite runs in either mode (JTI_REPORT_BUILD_MODE=fast python3 tests/run.py
+        # proves the fast path against every gate test below); each mode names its stages.
+        mode = os.environ.get("JTI_REPORT_BUILD_MODE", "legacy")
         want = {"regenerate", "contract", "rule", "render", "truncation", "package", "verdict"}
-        check("finish.sh records a perf line with every stage on a passing run",
+        if mode == "fast":
+            want |= {"fixtures", "jvm_startup", "raster"}
+        check(f"finish.sh records a perf line with every stage on a passing run ({mode})",
               last.get("ok") is True and want <= set(last.get("stages") or {})
-              and last.get("mode") == "legacy", json.dumps(last)[:300])
+              and last.get("mode") == mode, json.dumps(last)[:300])
         bf = mutate(good, ws, "perf_fail", lambda f: edit(rule(f), "_data = rows", "data = rows"))
         rc_f, out_f = gates(bf)
         lf = json.loads(open(os.path.join(bf, "verification", "perf.jsonl")).read()
@@ -754,6 +759,48 @@ print("RESOLVE", same, wrong, refused, typo)
     rc, out = run(["./verification/run.sh", "render", "full"], cwd=b)
     check("a failed render is not reported as success",
           rc != 0 and "CONTRACT FAIL" in out, out)
+
+    # ---- phase 2: the one-JVM fast verifier ---------------------------------------
+    # These run whatever mode the suite itself is in; they set the mode per call.
+    fast_env = {"JTI_REPORT_BUILD_MODE": "fast"}
+    ff = mutate(good, ws, "fast_ok", lambda f: None)
+    rc, out = run([os.path.join(PLUGIN, "scripts", "finish.sh"), "Probe_Report_V1.groovy",
+                   "Probe_Report.jrxml", "--code", "Probe_Report", "--name", "Probe Report"],
+                  cwd=ff, env=fast_env)
+    st = re.search(r"^VERIFY-STATS (\{.*\})$", out, re.M)
+    st = json.loads(st.group(1)) if st else {}
+    check("fast mode: one JVM, one JRXML compile, and the rule run exactly twice (counted)",
+          rc == 0 and st == {"jvms": 1, "compiles": 1, "rule_evals": 2}
+          and "All gates passed" in out, out[-600:])
+    # Output ORDER under a pipe: each child process's lines under its own header. Block
+    # buffering printed rule_zip's lines ahead of "== 4/4 rule zip", so the log read as if
+    # packaging had printed nothing.
+    hz, wz = out.find("== 4/4  rule zip"), out.find("wrote ", out.find("== 3/4"))
+    check("fast mode prints each gate's output under its own header (piped)",
+          rc == 0 and 0 <= hz < out.find("RULE-", hz) and out.find("RULE-", hz) < out.find("== verdict"),
+          out[max(0, hz - 200):hz + 300])
+    pngs = sorted(x for x in os.listdir(os.path.join(ff, "verification")) if x.endswith(".png"))
+    check("fast mode still leaves a page image for every rendered page",
+          rc == 0 and pngs and all(os.path.getsize(os.path.join(ff, "verification", p)) > 0
+                                   for p in pngs), pngs)
+
+    # A harness the fast path does not understand must go to the legacy gates, SAYING so -
+    # never a guess, never a silent downgrade.
+    fl = mutate(good, ws, "fast_fallback", lambda f: edit(
+        os.path.join(f, "verification", "run.sh"), 'WANT="${2:-', 'VARIANTS="${2:-'))
+    rc, out = run([os.path.join(PLUGIN, "scripts", "finish.sh"), "Probe_Report_V1.groovy",
+                   "Probe_Report.jrxml", "--code", "Probe_Report", "--name", "Probe Report"],
+                  cwd=fl, env=fast_env)
+    check("fast mode hands an unreadable harness to the legacy gates and says why",
+          "running the legacy gates instead" in out and "cannot read the variant list" in out
+          and "mode: fast" not in out, out[:400])
+
+    rc, out = run([os.path.join(PLUGIN, "scripts", "finish.sh"), "Probe_Report_V1.groovy",
+                   "Probe_Report.jrxml", "--code", "Probe_Report", "--name", "Probe Report"],
+                  cwd=ff, env={"JTI_REPORT_BUILD_MODE": "fsat"})
+    check("an unrecognised JTI_REPORT_BUILD_MODE warns and runs legacy",
+          "is not legacy or fast - using legacy" in out and rc == 0
+          and "mode: fast" not in out, out[:300])
 
     return report()
 

@@ -25,8 +25,14 @@ def jrxml = new File(args[0])
 // ---- argument parsing: batch form iff at least one --variant is present ----------
 def variants = []      // [name, tsvFile, emptyFlag]
 def outDir = null
+// --no-raster: skip the AWT page images below. The build re-rasters every PDF with
+// pdfraster.py under the SAME names anyway (these AWT images show glyphs the PDF drops),
+// so drawing them here is work that is always overwritten. Opt-in: a caller that does not
+// pass it gets exactly the old behaviour, PNGs included.
+def noRaster = false
 for (int i = 1; i < args.length; i++) {
     if (args[i] == "--out") { outDir = new File(args[++i]) }
+    else if (args[i] == "--no-raster") { noRaster = true }
     else if (args[i] == "--variant") {
         def spec = args[++i]
         def eq = spec.indexOf('=')
@@ -108,7 +114,7 @@ variants.each { v ->
     // The callers re-raster from the PDF afterwards with pdfraster.py, overwriting these
     // under the same names. Do not treat these as the page that ships.
     def stem = out.name.replace(".pdf", "")
-    print_.pages.size().times { i ->
+    if (!noRaster) print_.pages.size().times { i ->
         def img = JasperPrintManager.printPageToImage(print_, i, 1.0f)
         def buf = new BufferedImage(img.getWidth(null), img.getHeight(null), BufferedImage.TYPE_INT_RGB)
         def g = buf.createGraphics(); g.drawImage(img, 0, 0, null); g.dispose()

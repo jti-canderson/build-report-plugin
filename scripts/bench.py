@@ -127,26 +127,30 @@ def mutate(folder, kind, d):
         assert n, "no plain string literal to turn into a GString"
         open(rule, "w", encoding="utf8").write(new)
     elif kind == "clip":
+        # Lengthen EVERY value in the first fixture row. Lengthening only the first one did
+        # nothing on Cases By Type: that column wraps (correct - it is not a truncation), so
+        # the mutation proved nothing in either mode. Some column in a real layout has a
+        # fixed height; with every value long, at least one must be cut, and the gate has to
+        # notice.
         fx = os.path.join(folder, "verification", "fixture.py")
         t = open(fx, encoding="utf8").read()
         i = t.index("ROWS")
-        m = re.search(r'"([A-Za-z][^"\n]{3,40})"', t[i:])
-        assert m, "no string value in fixture ROWS to lengthen"
-        a, b = i + m.start(1), i + m.end(1)
-        long = t[a:b] + " Extended Far Beyond Any Reasonable Column Width Whatsoever Indeed Truly"
-        open(fx, "w", encoding="utf8").write(t[:a] + long + t[b:])
+        row = re.search(r"\(([^()\n]*)\)", t[i:])
+        assert row, "no tuple row in fixture ROWS to lengthen"
+        a, b = i + row.start(1), i + row.end(1)
+        tail = " Extended Far Beyond Any Reasonable Column Width Whatsoever Indeed Truly"
+        new_row = re.sub(r'"([^"\n]+)"', lambda m: f'"{m.group(1)}{tail}"', t[a:b])
+        open(fx, "w", encoding="utf8").write(t[:a] + new_row + t[b:])
     else:
         raise SystemExit(f"  unknown mutation {kind}")
 
 
 # ── the two pipelines ───────────────────────────────────────────────────────────────────
 def pipeline_cmd(mode, d):
-    if mode == "legacy":
-        cmd = [os.path.join(PLUGIN, "scripts", "finish.sh"), d["rule"], d["jrxml"],
-               "--code", d["code"], "--name", d["name"]]
-    else:
-        cmd = [sys.executable, os.path.join(PLUGIN, "scripts", "verify_fast.py"),
-               d["rule"], d["jrxml"], "--code", d["code"], "--name", d["name"]]
+    # BOTH modes go through finish.sh: the mode is chosen by JTI_REPORT_BUILD_MODE, exactly
+    # as a real build selects it, so the switch itself is exercised on every fast run.
+    cmd = [os.path.join(PLUGIN, "scripts", "finish.sh"), d["rule"], d["jrxml"],
+           "--code", d["code"], "--name", d["name"]]
     if d["template"]:
         cmd += ["--template", d["template"]]
     return cmd
@@ -214,7 +218,12 @@ def manifest(folder, d):
     m = {"params": sorted(set(re.findall(r'<parameter name="([^"]+)"', jr))),
          "fields_declared": sorted(set(re.findall(r'<field name="([^"]+)"', jr))),
          "fields_placed": sorted(set(re.findall(r"\$F\{([A-Za-z0-9_]+)\}", jr))),
-         "jrxml_sha": hashlib.sha1(jr.encode()).hexdigest()[:12]}
+         # uuid attributes are masked, and ONLY those: jti_style mints a fresh random uuid
+         # per element on every generator run, so two back-to-back gen_jrxml.py runs with no
+         # gates at all already differ there. Everything else - geometry, expressions, fonts,
+         # element order - is compared byte for byte.
+         "jrxml_sha": hashlib.sha1(re.sub(r'uuid="[^"]*"', 'uuid=""', jr).encode()).hexdigest()[:12],
+         "jrxml_elements": jr.count("<reportElement")}
     for doc in ("RULE_REGISTRATION.txt", "JRXML_CONTRACT.txt"):
         p = os.path.join(folder, doc)
         m[doc] = hashlib.sha1(open(p, "rb").read()).hexdigest()[:12] if os.path.exists(p) else None
@@ -228,8 +237,15 @@ def manifest(folder, d):
         import fitz
     except ImportError:
         fitz = None
-    vdir = os.path.join(folder, "verification")
-    for pdf in sorted(x for x in os.listdir(vdir) if x.endswith(".pdf")) if os.path.isdir(vdir) else []:
+    # verification/ for the scaffold harness; Out/ for the hand-copied asset template, which
+    # writes its pages there. Missing Out/ made a 5-variant comparison report "agree" having
+    # compared no pages at all.
+    found = []
+    for sub in ("verification", os.path.join("verification", "Out"), "Out"):
+        vd = os.path.join(folder, sub)
+        if os.path.isdir(vd):
+            found += [(vd, x) for x in sorted(os.listdir(vd)) if x.endswith(".pdf")]
+    for vdir, pdf in found:
         entry = {}
         if fitz:
             doc = fitz.open(os.path.join(vdir, pdf))
@@ -241,7 +257,7 @@ def manifest(folder, d):
                                .hexdigest()[:12] for pg in doc]
         pngs = sorted(x for x in os.listdir(vdir) if x.startswith(pdf[:-4] + "_p") and x.endswith(".png"))
         entry["pngs"] = len(pngs)
-        m["pdfs"][pdf] = entry
+        m["pdfs"][os.path.relpath(os.path.join(vdir, pdf), folder)] = entry
     return m
 
 
