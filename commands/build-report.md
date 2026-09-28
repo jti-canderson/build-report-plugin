@@ -570,6 +570,36 @@ look right and are not, the real traversals, and the traps. Checking it is free;
 that re-derives what is already written there is the most expensive mistake in this
 pipeline. Add to it whenever a model question takes more than a couple of minutes.
 
+**Fast mode: ask it, don't read all of it.** The whole file is ~12k tokens that then sit in
+the conversation for the rest of the build. Query it for what THIS report touches — the root
+entity, the entities along each path, the field names, the template, and `--domain financial`
+for any money:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/facts.py" --entity Case --entity PayPlan \
+    --field balance --template eseries_summary --domain financial
+```
+
+It prints the matching sections **verbatim and in full**, then a one-line index of every other
+section; `--section N` opens any of them. It reads the real file every time — nothing to go
+stale. **"NO SECTION MATCHED" is a finding, not a pass**: that model question is open. Open the
+full file whenever the targeted result is not enough to decide.
+
+Then **one** precedent, not a tour of report folders:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/precedents.py" --root Case --template eseries_summary \
+    --financial --params CaseId
+```
+
+It scores every report in the workspace on root entity, template, financial logic, parameters,
+sections and environment, prefers ones verified on the current harness, and prints each
+candidate's own *not verified* warnings. Open the rule it names; open a second only if the first
+does not fit. "NO PRECEDENT" means a new shape: build from the template and model-facts rather
+than forcing one.
+
+**Legacy mode:** read the whole file first, as above.
+
 Follow the `jasper-reports` skill from step 1 of its sequence. It is bundled here, so
 invoke it rather than working from memory:
 

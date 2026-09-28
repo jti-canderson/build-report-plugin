@@ -647,6 +647,36 @@ print("RESOLVE", same, wrong, refused, typo)
           and "**Still current** / **I'll send a newer one**" in cmd_md
           and "**Legacy mode:** confirm the derived columns" in cmd_md, "command text")
 
+    # ---- phase 4: targeted knowledge retrieval --------------------------------------
+    facts = os.path.join(PLUGIN, "scripts", "facts.py")
+    mf_path = os.path.join(PLUGIN, "skills", "jasper-reports", "references", "model-facts.md")
+    mf = open(mf_path, encoding="utf8").read()
+    rc, out = run(["python3", facts, "--entity", "PayPlan", "--field", "balance",
+                   "--domain", "financial"])
+    # up to the next heading of EITHER level: facts.py indexes each ### on its own
+    fin = re.search(r"^## FINANCIALS: every dollar getter.*?(?=^#{2,3} )", mf, re.S | re.M)
+    check("facts.py returns matching sections VERBATIM, and less than the whole file",
+          rc == 0 and fin is not None and fin.group(0).strip() in out
+          and len(out) < 0.5 * len(mf) and "index of the other" in out, out[:300])
+    rc, out = run(["python3", facts, "--entity", "Zyzzogeton"])
+    check("facts.py says NO SECTION MATCHED for an unknown entity, and still lists the index",
+          rc == 0 and "NO SECTION MATCHED" in out and "index of the other" in out, out[:300])
+    # nothing cached: a section added to the source is found on the very next call
+    mf2 = os.path.join(ws, "model-facts-copy.md")
+    open(mf2, "w").write(mf + "\n## Zyzzogeton traversal is real\n\nProbe section.\n")
+    rc, out = run(["python3", facts, "--entity", "Zyzzogeton", "--file", mf2])
+    check("facts.py reads the source every call - an added section is found at once",
+          rc == 0 and "## Zyzzogeton traversal is real" in out and "NO SECTION" not in out, out[:300])
+
+    prec = os.path.join(PLUGIN, "scripts", "precedents.py")
+    rc, out = run(["python3", prec, "--root", "Case", "--template", "tabular_list"],
+                  env={"JTI_PROJECT_ROOT": ws})
+    check("precedents.py finds the matching report and names the rule to open",
+          rc == 0 and "Probe_Report" in out and "Probe_Report_V1.groovy" in out, out[:400])
+    rc, out = run(["python3", prec, "--root", "Zyzzogeton"], env={"JTI_PROJECT_ROOT": ws})
+    check("precedents.py says NO PRECEDENT rather than forcing a poor match",
+          rc == 0 and "NO PRECEDENT" in out, out[:300])
+
     # usage.activity() splits wall time into active vs waiting-on-the-user. BOTH ways of
     # waiting must count: a turn that ended (stop_reason end_turn) until the next line, and a
     # picker question, whose answer arrives as a tool_result rather than as user text - the
