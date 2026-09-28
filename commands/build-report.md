@@ -628,7 +628,10 @@ Everything lands in `<project folder>/<Report Name>/`.
 Only when `build_mode.py` prints `build_plan opt-in`. Otherwise skip this section entirely —
 `build_plan.py` refuses to run (exit 4) unless `JTI_BUILD_PLAN=opt-in`. When it is on: after the
 lookups, write the rule, write `build-plan.json` into the report folder
-(`build_plan.py --example` shows every key; see `docs/perf/BUILD_PLAN.md`), then:
+(`build_plan.py --example` shows every key; see `docs/perf/BUILD_PLAN.md`). **Every field a
+section shows needs `provenance`** — `sdk` (with a traversal), or `computed` / `constant` with a
+reason — plus an `outputs` entry and a value in every fixture row (or an entry in
+`fixture.intentional_blanks`). Anything unaccounted for is exit 2, not a blank column. Then:
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/build_plan.py" run "<report folder>/build-plan.json"

@@ -854,18 +854,28 @@ print("RESOLVE", same, wrong, refused, typo)
           rc != 0 and "CONTRACT FAIL" in out, out)
 
     # ---- phase 5: build-plan.json and the one orchestration command ----------------
-    # Needs an SDK jar to resolve against; uses the newest registered one in the real
-    # workspace, copied into a temp project. Skips loudly when none exists.
-    import glob as _g5
-    jars = sorted(_g5.glob(os.path.join(os.path.dirname(PLUGIN), "*", "sdk", "*.jar")),
-                  key=os.path.getmtime)
+    # Resolves against a FAKE SDK jar compiled here from tests/fixtures/fake_sdk, so none of
+    # this depends on a client's export. (Needs the JasperReports JDK for javac/javap, which
+    # every JVM test above already needs.)
     bp = os.path.join(PLUGIN, "scripts", "build_plan.py")
-    if jars:
-        pw = os.path.join(ws, "planws")
-        os.makedirs(os.path.join(pw, "Proj", "sdk"))
-        open(os.path.join(pw, ".jti-root"), "w").close()
+    pw = os.path.join(ws, "planws")
+    os.makedirs(os.path.join(pw, "Proj"))
+    open(os.path.join(pw, ".jti-root"), "w").close()
+    jdk = os.path.join(JRS, "java", "bin")
+    cls_dir = os.path.join(ws, "fake_sdk_classes")
+    os.makedirs(cls_dir)
+    import glob as _g5
+    rc_j, out_j = run([os.path.join(jdk, "javac"), "-d", cls_dir,
+                       *sorted(_g5.glob(os.path.join(FIX, "fake_sdk", "com", "sustain", "cases",
+                                                     "model", "*.java")))])
+    fake_jar = os.path.join(ws, "ecourt-sdk-fake.jar")
+    if rc_j == 0:
+        rc_j, out_j = run([os.path.join(jdk, "jar"), "cf", fake_jar, "com"], cwd=cls_dir)
+    check("the fake SDK jar builds", rc_j == 0, out_j)
+
+    def _plan_tests():
         run(["python3", os.path.join(PLUGIN, "scripts", "project.py"), "sdk-register",
-             os.path.join(pw, "Proj"), jars[-1]], env={"JTI_PROJECT_ROOT": pw})
+             os.path.join(pw, "Proj"), fake_jar], env={"JTI_PROJECT_ROOT": pw})
         spec = json.load(open(os.path.join(FIX, "good_spec.json")))
         plan = {"plan_version": 1, "lane": "fast",
                 "report": {"folder": "Proj/Plan_Probe", "name": "Plan_Probe", "title": "Plan Probe",
@@ -874,19 +884,32 @@ print("RESOLVE", same, wrong, refused, typo)
                 "strategy": {"kind": "query-list", "entity": "Case"},
                 "params": [{"name": n, "class": c} for n, c in spec["params"]],
                 "sections": spec["sections"],
+                "outputs": {"caseNumber": "str(c?.caseNumber)", "caseType": "str(c?.caseType)"},
                 "traversals": {"caseNumber": "Case.caseNumber", "caseType": "Case.caseType"},
+                "provenance": {"caseNumber": {"kind": "sdk"}, "caseType": {"kind": "sdk"}},
                 "fixture": {"rows": [{"caseNumber": "CF-2026-00184", "caseType": "Felony"}]},
                 "assumptions": ["one row per case"], "unverified": ["labels"],
                 "flags": {"financial_calc": False, "custom_layout": False,
                           "conflicting_sources": False, "unusual_grouping": False}}
-        def plan_run(p, cmd="run", extra=None):
-            path = os.path.join(pw, f"plan-{abs(hash(json.dumps(p))) % 10**8}.json")
-            json.dump(p, open(path, "w"))
+        def plan_run(p, cmd="run", extra=None, raw=None):
+            path = os.path.join(pw, f"plan-{abs(hash(raw or json.dumps(p))) % 10**8}.json")
+            open(path, "w").write(raw if raw is not None else json.dumps(p))
             rc, out = run(["python3", bp, cmd, path], env=dict(
                 {"JTI_PROJECT_ROOT": pw, "JTI_BUILD_PLAN": "opt-in", "JTI_VERIFIER": "fast"},
                 **(extra or {})))
             m = re.search(r"^BUILD-RESULT (\{.*\})$", out, re.M)
             return rc, out, (json.loads(m.group(1)) if m else {})
+        def variant(tag, fn):
+            v = json.loads(json.dumps(plan))
+            v["report"]["folder"] = "Proj/Plan_" + tag; v["report"]["name"] = "Plan_" + tag
+            fn(v)
+            return v
+        def invalid(p, *needles, cmd="validate", raw=None):
+            rc, out, d = plan_run(p, cmd, raw=raw)
+            errs = " | ".join(d.get("errors", []))
+            return (rc == 2 and all(n in errs for n in needles) and "Traceback" not in out,
+                    f"rc={rc} {errs or out[-300:]}")
+
         rc, out, d = plan_run(plan, extra={"JTI_BUILD_PLAN": "", "JTI_REPORT_BUILD_MODE": "fast"})
         check("build_plan refuses to run unless JTI_BUILD_PLAN=opt-in (the alias is not enough)",
               rc == 4 and d.get("stage") == "switch"
@@ -900,17 +923,105 @@ print("RESOLVE", same, wrong, refused, typo)
         a = d.get("artifacts") or {}
         check("build_plan run builds and verifies a fast-lane plan in one call",
               rc == 0 and d.get("ok") and a.get("zip") and a.get("pdfs") and a.get("pages")
-              and (d.get("perf") or {}).get("jvms") == 1, out[-600:])
+              and (d.get("perf") or {}).get("jvms") == 1
+              and {r["field"] for r in d.get("resolved", [])} == {"caseNumber", "caseType"},
+              out[-600:])
         notes = open(os.path.join(pw, "Proj", "Plan_Probe", "JRXML_CONTRACT.txt")).read()
         check("build_plan fills the untouched NOTES seed from the plan",
               "ASSUMPTIONS - decisions made without asking" in notes
               and "TODO before this ships" not in notes, notes[-400:])
-        bad = json.loads(json.dumps(plan)); bad["traversals"]["ghost"] = "Case.notARealFieldAtAll"
-        bad["report"]["folder"] = "Proj/Plan_Ghost"; bad["report"]["name"] = "Plan_Ghost"
-        rc, out, d = plan_run(bad)
-        check("an unresolvable field sends the plan to the expert lane (exit 20), naming it",
+        rc, out, d = plan_run(plan, extra={"JTI_VERIFIER": "legacy"})
+        check("the build plan runs with the LEGACY verifier too (the switches are independent)",
+              rc == 0 and d.get("ok") and "mode: fast" not in out, out[-400:])
+
+        # FIELD COVERAGE. Every field a section shows must have declared provenance, and the
+        # other lists must agree with it. A field nothing accounts for is exit 2, not a blank.
+        def ghost_col(v):
+            v["sections"][0]["cols"].append(["Ghost", 20, "Left", "ghost"])
+        ok, why = invalid(variant("G1", ghost_col), "field 'ghost' has no provenance",
+                          "field 'ghost' has no entry in outputs", "fixture row 1 omits 'ghost'")
+        check("an unknown field with NO traversal is rejected (exit 2), not shipped blank", ok, why)
+        def ghost_sdk_no_path(v):
+            ghost_col(v); v["provenance"]["ghost"] = {"kind": "sdk"}
+            v["outputs"]["ghost"] = "str(c?.ghost)"; v["fixture"]["rows"][0]["ghost"] = "x"
+        ok, why = invalid(variant("G2", ghost_sdk_no_path), "'ghost' is declared sdk but has no traversal")
+        check("omitted traversal coverage: an sdk field with no path is rejected", ok, why)
+        def ghost_full(v):
+            ghost_sdk_no_path(v); v["traversals"]["ghost"] = "Case.notARealFieldAtAll"
+        rc, out, d = plan_run(variant("G3", ghost_full))
+        check("a fully-declared field the SDK lacks sends the plan to the expert lane (exit 20)",
               rc == 20 and any(u.get("field") == "ghost" for u in d.get("unresolved", []))
-              and not os.path.exists(os.path.join(pw, "Proj", "Plan_Ghost")), out[-400:])
+              and not os.path.exists(os.path.join(pw, "Proj", "Plan_G3")), out[-400:])
+        def renamed(v):
+            v["outputs"]["caseKind"] = v["outputs"].pop("caseType")
+            v["traversals"]["caseKind"] = v["traversals"].pop("caseType")
+        ok, why = invalid(variant("M1", renamed), "field 'caseType' has no entry in outputs",
+                          "output 'caseKind', which no section shows",
+                          "traversal for 'caseKind', which no section shows",
+                          "'caseType' is declared sdk but has no traversal")
+        check("mismatched output / traversal names are rejected, each named", ok, why)
+        def short_row(v):
+            v["fixture"]["rows"].append({"caseNumber": "CM-2026-01920"})
+        ok, why = invalid(variant("F1", short_row), "fixture row 2 omits 'caseType'")
+        check("a fixture row that omits a field is rejected, not silently blanked", ok, why)
+        def declared_blank(v):
+            short_row(v); v["fixture"]["intentional_blanks"] = ["caseType"]
+        rc, out, d = plan_run(variant("F2", declared_blank), "validate")
+        check("...unless the blank is declared in fixture.intentional_blanks", rc == 0, out[-300:])
+        def extra_key(v):
+            v["fixture"]["rows"][0]["caseTyp"] = "Felony"
+        ok, why = invalid(variant("F3", extra_key), "'caseTyp' is not a field any section shows")
+        check("a fixture row key no section shows is rejected (a typo, not a column)", ok, why)
+        def computed_no_reason(v):
+            v["provenance"]["caseType"] = {"kind": "computed", "reason": "  "}
+        def computed_with_path(v):
+            v["provenance"]["caseType"] = {"kind": "computed", "reason": "label from a lookup"}
+        ok1, w1 = invalid(variant("C1", computed_no_reason), "'caseType' is computed - it needs a reason")
+        ok2, w2 = invalid(variant("C2", computed_with_path),
+                          "'caseType' is computed but also has a traversal")
+        def computed_ok(v):
+            computed_with_path(v); del v["traversals"]["caseType"]
+        rc, out, d = plan_run(variant("C3", computed_ok), "resolve")
+        check("computed/constant fields need a reason and are NEVER counted as resolved SDK paths",
+              ok1 and ok2 and rc == 0 and [r["field"] for r in d.get("resolved", [])] == ["caseNumber"]
+              and d.get("provenance", {}).get("caseType") == "computed", f"{w1}\n{w2}\n{out[-300:]}")
+        bad_kinds = [("K1", {"kind": "SDK"}), ("K2", "sdk"), ("K3", {"kind": 3}), ("K4", {})]
+        res_k = [invalid(variant(t, lambda v, x=x: v["provenance"].__setitem__("caseType", x)))
+                 for t, x in bad_kinds]
+        check("provenance that is missing a kind, not an object, or not a known kind is rejected",
+              all(r[0] for r in res_k), "\n".join(r[1] for r in res_k))
+        dup = json.dumps(plan).replace('"provenance": {', '"provenance": {"caseType": {"kind": "sdk"}, ', 1)
+        ok, why = invalid(None, "key 'caseType' is given more than once", raw=dup)
+        check("a key given twice (json would keep only the last) is rejected", ok, why)
+        bad_paths = [("P1", 42), ("P2", ""), ("P3", "Case..caseType"), ("P4", "Case.case-type"),
+                     ("P5", ["Case", "caseType"]), ("P6", "Case"), ("P7", None)]
+        res_p = [invalid(variant(t, lambda v, x=x: v["traversals"].__setitem__("caseType", x)))
+                 for t, x in bad_paths]
+        check("malformed and non-string paths are exit 2 with the reason, never a traceback",
+              all(r[0] for r in res_p), "\n".join(r[1] for r in res_p))
+        check("a path that is only the root entity is rejected",
+              "only the root entity" in res_p[5][1], res_p[5][1])
+        def deep(v):
+            v["traversals"]["caseType"] = "Case" + ".parent" * 9 + ".caseType"
+        rc, out, d = plan_run(variant("D1", deep))
+        check("a traversal past the depth limit is recorded UNRESOLVED and goes expert (exit 20)",
+              rc == 20 and any(u.get("field") == "caseType" and "depth limit" in u.get("why", "")
+                               for u in d.get("unresolved", [])), out[-400:])
+        def shallow(v):
+            v["traversals"]["caseType"] = "Case" + ".parent" * 3 + ".caseType"
+        rc, out, d = plan_run(variant("D2", shallow), "resolve")
+        check("...while a deep path inside the limit still resolves", rc == 0, out[-300:])
+        # THE RULE. An sdk path the rule never reads means the plan describes some other rule.
+        pr = variant("R1", lambda v: v["traversals"].__setitem__("caseType", "Case.caseTypeLabel"))
+        pr["rule"] = "Plan_R1_V1.groovy"
+        plan_run(pr)
+        shutil.copy(os.path.join(FIX, "good_rule.groovy"),
+                    os.path.join(pw, "Proj", "Plan_R1", "Plan_R1_V1.groovy"))
+        rc, out, d = plan_run(pr)
+        check("a plan path the rule does not read goes to the expert lane, naming the path",
+              rc == 20 and "never reads '.caseTypeLabel'" in out and d.get("lane") == "expert"
+              and not (d.get("gates") or {}).get("rc") == 0, out[-400:])
+
         fin = json.loads(json.dumps(plan)); fin["flags"]["financial_calc"] = True
         rc1, _, d1 = plan_run(fin, "validate")
         tpl = json.loads(json.dumps(plan)); tpl["template"] = "grouped_summary"
@@ -922,11 +1033,9 @@ print("RESOLVE", same, wrong, refused, typo)
         rc, out, d = plan_run(broken, "validate")
         check("a malformed plan is rejected (exit 2) with the reason",
               rc == 2 and any("sections" in e for e in d.get("errors", [])), out[-300:])
-    else:
-        for n in ("build_plan run stops at the rule", "build_plan run builds a fast-lane plan",
-                  "build_plan fills the NOTES seed", "an unresolvable field -> expert lane",
-                  "money / unscaffoldable template -> expert lane", "malformed plan rejected"):
-            skip(n, "no SDK jar registered anywhere in the workspace")
+
+    if rc_j == 0:
+        _plan_tests()
 
     # ---- phase 2: the one-JVM fast verifier ---------------------------------------
     # These run whatever mode the suite itself is in; they set the mode per call.

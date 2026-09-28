@@ -23,6 +23,17 @@ TWO LANES, and `validate` decides which in code:
           existing process applies, with the full model discovery it involves. Nothing here
           approximates logic it cannot represent.
 
+EVERY FIELD HAS DECLARED PROVENANCE. `provenance` names, for every field a section shows,
+where its value comes from - {"kind": "sdk"} (and then `traversals` gives its path),
+{"kind": "computed", "reason": ...} or {"kind": "constant", "reason": ...}. Only sdk fields
+are resolved against the jar; computed and constant ones are never counted as resolved paths.
+`outputs`, `traversals`, `provenance` and every fixture row are cross-checked against the
+section fields; a row that omits a field is an error unless `fixture.intentional_blanks`
+names it. The masthead fields (rptTitle, rptSubtitle, rptSlug) are constants taken from
+`report`, and the generated .jrxml is checked to declare nothing else. Before verifying, each
+sdk path is looked for as a property chain in the rule; one that cannot be found sends the
+plan to the expert lane, because the plan can then not be shown to describe the rule.
+
 EXIT CODES  0 built and every gate passed    1 a gate failed (diagnostics say which)
             2 invalid plan    3 a judgment file is missing (the rule, or TODO fixture rows)
             4 not enabled (JTI_BUILD_PLAN=opt-in)    20 expert lane
@@ -46,6 +57,11 @@ sys.path.insert(0, os.path.join(ROOT, "templates"))
 FAST_TEMPLATES = ("record_summary", "eseries_summary", "tabular_list")   # scaffoldable today
 STRATEGIES = ("direct-record", "query-list")
 FLAGS = ("financial_calc", "custom_layout", "conflicting_sources", "unusual_grouping")
+KINDS = ("sdk", "computed", "constant")
+MASTHEAD = ("rptTitle", "rptSubtitle", "rptSlug")      # filled from `report`, not from a row
+MAX_DEPTH = 8                                          # property hops the resolver will follow
+PATH_RE = re.compile(r"^[A-Za-z_$][\w$]*(?:\[\])?(?:\.[A-Za-z_$][\w$]*(?:\[\])?)*$")
+SCALAR = (str, int, float, bool)
 PRIMITIVE = re.compile(r"^(java\.lang\.|java\.util\.Date$|java\.math\.|java\.sql\.|"
                        r"int$|long$|double$|float$|boolean$|short$|byte$|char$)")
 
@@ -67,14 +83,16 @@ EXAMPLE = {
     "sections": [{"key": "ROWS", "title": "Cases",
                   "cols": [["Case Number", 20, "Left", "caseNumber"],
                            ["Type", 20, "Left", "caseType"]]}],
-    "outputs": {"caseNumber": "str(c.caseNumber)", "caseType": "str(c.caseTypeLabel)"},
-    "traversals": {"caseNumber": "Case.caseNumber", "caseType": "Case.caseType"},
+    "outputs": {"caseNumber": "str(c?.caseNumber)", "caseType": "str(c?.caseTypeLabel)"},
+    "traversals": {"caseNumber": "Case.caseNumber", "caseType": "Case.caseTypeLabel"},
+    "provenance": {"caseNumber": {"kind": "sdk"}, "caseType": {"kind": "sdk"}},
     "grouping": None,
     "empty": "one row, 'No rows matched' in caseNumber",
     "missing": "n/a - query-list",
     "fixture": {"rows": [{"caseNumber": "CF-2026-00184", "caseType": "Felony"},
                          {"caseNumber": "JV-2026-00042",
                           "caseType": "Juvenile Delinquent Proceeding Certified As Adult"}],
+                "intentional_blanks": [],
                 "graph": None},
     "verification": {"variants": ["full", "none"]},
     "assumptions": ["one row per case", "the date range filters filingDate"],
@@ -115,8 +133,8 @@ def validate_schema(p):
     e = []
     need = {"plan_version": int, "lane": str, "report": dict, "template": str, "root": str,
             "rule": str, "strategy": dict, "params": list, "sections": list,
-            "traversals": dict, "fixture": dict, "assumptions": list, "unverified": list,
-            "flags": dict}
+            "traversals": dict, "outputs": dict, "provenance": dict, "fixture": dict,
+            "assumptions": list, "unverified": list, "flags": dict}
     for k, t in need.items():
         if k not in p:
             e.append(f"missing '{k}'")
@@ -131,6 +149,14 @@ def validate_schema(p):
     for k in ("folder", "name", "title", "code"):
         if not p["report"].get(k):
             e.append(f"report.{k} is required")
+        elif not isinstance(p["report"][k], str):
+            e.append(f"report.{k} must be a string")
+    for k in ("subtitle", "slug"):
+        if k in p["report"] and not isinstance(p["report"][k], str):
+            e.append(f"report.{k} must be a string")
+    for k in ("template", "root", "rule"):
+        if not p[k].strip():
+            e.append(f"'{k}' must not be empty")
     if p["report"].get("name") and not re.match(r"^[A-Za-z][A-Za-z0-9_]{0,60}$", p["report"]["name"]):
         e.append("report.name must start with a letter and use letters, digits, underscores")
     if not p["sections"]:
@@ -142,6 +168,8 @@ def validate_schema(p):
         for c in s["cols"]:
             if not (isinstance(c, list) and len(c) == 4):
                 e.append(f"section {s.get('key')}: a col must be [header, width, align, field]")
+            elif not (isinstance(c[3], str) and c[3].strip()):
+                e.append(f"section {s.get('key')}: column {c[0]!r} has no field name")
     for prm in p["params"]:
         if not (isinstance(prm, dict) and prm.get("name") and prm.get("class")):
             e.append("each param needs name and class")
@@ -150,6 +178,112 @@ def validate_schema(p):
     for f in FLAGS:
         if not isinstance(p["flags"].get(f), bool):
             e.append(f"flags.{f} must be true or false")
+    if e:
+        return e
+    return e + validate_fields(p)
+
+
+def section_fields(p):
+    return [c[3] for s in p["sections"] for c in s["cols"]]
+
+
+def validate_fields(p):
+    """Every field a section shows has exactly one declared source, and outputs, traversals,
+    provenance and the fixture rows all describe the SAME set of fields. A field with no
+    path used to pass every gate - the fixture answered it - and ship as a blank column."""
+    e = []
+    fields = section_fields(p)
+    seen = set()
+    for f in fields:
+        if f in seen:
+            e.append(f"field '{f}' is shown by more than one column")
+        seen.add(f)
+    want = set(fields)
+    prov, trav, outs = p["provenance"], p["traversals"], p["outputs"]
+
+    for f in fields:
+        if f not in prov:
+            e.append(f"field '{f}' has no provenance - declare it sdk, computed or constant")
+    for f, v in prov.items():
+        if f not in want:
+            if f in MASTHEAD:
+                if not (isinstance(v, dict) and v.get("kind") == "constant"):
+                    e.append(f"provenance '{f}': a masthead field is a constant from `report`")
+                continue
+            e.append(f"provenance for '{f}', which no section shows")
+            continue
+        if not isinstance(v, dict):
+            e.append(f"provenance '{f}' must be an object like {{\"kind\": \"sdk\"}}")
+            continue
+        kind = v.get("kind")
+        if not isinstance(kind, str) or kind not in KINDS:
+            e.append(f"provenance '{f}': kind must be one of {', '.join(KINDS)}, not {kind!r}")
+            continue
+        extra = set(v) - {"kind", "reason"}
+        if extra:
+            e.append(f"provenance '{f}': unexpected key(s) {', '.join(sorted(extra))}")
+        reason = v.get("reason")
+        if kind == "sdk":
+            if "reason" in v and not isinstance(reason, str):
+                e.append(f"provenance '{f}': reason must be a string")
+            if f not in trav:
+                e.append(f"field '{f}' is declared sdk but has no traversal")
+        else:
+            if not (isinstance(reason, str) and reason.strip()):
+                e.append(f"provenance '{f}' is {kind} - it needs a reason a person can read")
+            if f in trav:
+                e.append(f"field '{f}' is {kind} but also has a traversal - it would be counted"
+                         f" as a resolved SDK path")
+
+    for f, path in trav.items():
+        if f not in want:
+            e.append(f"traversal for '{f}', which no section shows")
+            continue
+        if not isinstance(path, str) or not path.strip():
+            e.append(f"traversal '{f}' must be a non-empty string path like Case.caseNumber")
+            continue
+        if not PATH_RE.match(path):
+            e.append(f"traversal '{f}': malformed path {path!r} (Entity.property.property)")
+            continue
+        if len(path.split(".")) < 2:
+            e.append(f"traversal '{f}': {path!r} is only the root entity - name the property")
+            continue
+
+    for f in fields:
+        if f not in outs:
+            e.append(f"field '{f}' has no entry in outputs")
+    for f, v in outs.items():
+        if f not in want:
+            e.append(f"output '{f}', which no section shows")
+        elif not (isinstance(v, str) and v.strip()):
+            e.append(f"output '{f}' must be a non-empty string")
+
+    blanks = p["fixture"].get("intentional_blanks", [])
+    if not isinstance(blanks, list) or not all(isinstance(b, str) for b in blanks):
+        e.append("fixture.intentional_blanks must be a list of field names")
+        blanks = []
+    for b in blanks:
+        if b not in want:
+            e.append(f"fixture.intentional_blanks names '{b}', which no section shows")
+    for i, r in enumerate(p["fixture"]["rows"], 1):
+        if isinstance(r, dict):
+            for k in r:
+                if k not in want:
+                    e.append(f"fixture row {i}: '{k}' is not a field any section shows")
+            for f in fields:
+                if f not in r and f not in blanks:
+                    e.append(f"fixture row {i} omits '{f}' - give a value, or list it in"
+                             f" fixture.intentional_blanks if the blank is the point")
+            bad = [k for k, v in r.items() if k in want and not isinstance(v, SCALAR)]
+        elif isinstance(r, list):
+            if len(r) != len(fields):
+                e.append(f"fixture row {i} has {len(r)} values for {len(fields)} fields")
+            bad = [fields[j] for j, v in enumerate(r[:len(fields)]) if not isinstance(v, SCALAR)]
+        else:
+            e.append(f"fixture row {i} must be an object or a list")
+            continue
+        for k in bad:
+            e.append(f"fixture row {i}: '{k}' must be text or a number")
     return e
 
 
@@ -198,6 +332,10 @@ def lane_reasons(p, sdk_rc, sdk_line):
     for f in FLAGS:
         if p["flags"].get(f):
             r.append(f"flagged {f}")
+    for f, path in p["traversals"].items():
+        head = path.split(".")[0].replace("[]", "")
+        if head.rsplit(".", 1)[-1] != p["root"]:
+            r.append(f"traversal '{f}' starts at {head}, not the root {p['root']}")
     if not known_entity(p["root"]):
         r.append(f"root entity {p['root']!r} is in neither model-facts.md nor any precedent")
     return r
@@ -315,7 +453,7 @@ def resolve(p, res):
             continue
         todo.append((key, path, segs[1:], start))
     depth = 0
-    while todo and depth < 8:
+    while todo and depth < MAX_DEPTH:
         depth += 1
         model.load({c for _, _, _, c in todo})
         # the chains of every class needed this round, loaded in the same pass
@@ -339,8 +477,37 @@ def resolve(p, res):
                 continue
             nxt.append((key, path, segs[1:], el))
         todo = nxt
+    # Anything still walking when the limit is reached is NOT proven - it used to vanish
+    # from both lists, so a deep path counted as neither resolved nor unresolved.
+    for key, path, segs, cls in todo:
+        res.d["unresolved"].append({"field": key, "path": path, "at": segs[0],
+                                    "why": f"depth limit ({MAX_DEPTH} hops) reached - not proven"})
     res.d["perf"]["javap_runs"] = model.javap_runs
     return model
+
+
+# ── cross-checks against the files the plan describes ─────────────────────────────────
+def rule_misses(p, rule_text):
+    """sdk paths that cannot be found as a property chain in the rule. Only the direction
+    that can be shown safely is checked - that the rule READS what the plan says; property
+    reads in the rule that the plan does not list are not reported. A path read another way
+    (a collect over a collection, a helper, a variable in between) is not recognised, and
+    the plan then goes to the expert lane rather than being trusted."""
+    t = re.sub(r"//[^\n]*|/\*.*?\*/", " ", rule_text, flags=re.S).replace("?.", ".")
+    miss = []
+    for f, path in p["traversals"].items():
+        segs = [x.replace("[]", "") for x in path.split(".")[1:]]
+        if not re.search(r"\." + r"\s*\.\s*".join(map(re.escape, segs)) + r"\b", t):
+            miss.append((f, path, "." + ".".join(segs)))
+    return miss
+
+
+def jrxml_extras(p, jrxml_path):
+    """Fields the generated .jrxml declares that the plan gives no provenance for."""
+    t = open(jrxml_path, encoding="utf8").read()
+    declared = re.findall(r'<field\s+name="([^"]+)"', t)
+    known = set(section_fields(p)) | set(MASTHEAD)
+    return [f for f in declared if f not in known]
 
 
 # ── mechanical steps ────────────────────────────────────────────────────────────────────
@@ -372,10 +539,14 @@ def fill_fixture_py(p, folder):
     m = re.search(r"(?m)^# TODO: real, awkward rows\. Columns: (.+)$", t)
     if m and "TODO " in t[m.end():t.find("]", m.end())]:
         cols = [c.strip() for c in m.group(1).split(",")]
+        if set(cols) != set(section_fields(p)):
+            return None, [f"the scaffold's fixture columns ({', '.join(cols)}) are not the"
+                          f" plan's fields ({', '.join(section_fields(p))})"]
         rows = []
         for r in p["fixture"]["rows"]:
-            vals = [str(r.get(c, "")) if isinstance(r, dict) else str(v) for c, v in
-                    (zip(cols, cols) if isinstance(r, dict) else zip(cols, r))]
+            # validate_fields guarantees every field is present or declared blank
+            vals = ([str(r[c]) if c in r else "" for c in cols] if isinstance(r, dict)
+                    else [str(r[section_fields(p).index(c)]) for c in cols])
             rows.append("    (" + ", ".join(json.dumps(v) for v in vals) + ("," if len(vals) == 1 else "") + "),")
         start = t.index("ROWS = [", m.start())
         end = t.index("\n]", start) + 2
@@ -433,6 +604,11 @@ def fill_notes(p, folder, res):
         con.append(f"    {r['field']:<18} {r['path']:<40} {r['kind']} on {r['on']}")
     for r in res.d["unresolved"]:
         con.append(f"    {r['field']:<18} {r['path']:<40} UNRESOLVED at {r['at']}: {r['why']}")
+    notsdk = [(f, v) for f, v in p["provenance"].items() if f not in MASTHEAD and v["kind"] != "sdk"]
+    if notsdk:
+        con += ["", "NOT FROM THE SDK (never counted as a resolved path):"]
+        con += [f"    {f:<18} {v['kind']}: {v['reason']}" for f, v in notsdk]
+    con.append(f"    {'rptTitle/Subtitle/Slug':<18} constant: the masthead, from build-plan.json report")
     if p["assumptions"]:
         con += ["", "ASSUMPTIONS - decisions made without asking:"] + [f"  - {a}" for a in p["assumptions"]]
     if derived:
@@ -479,12 +655,27 @@ def inventory(p, folder):
 
 # ── commands ────────────────────────────────────────────────────────────────────────────
 def load(path, res):
+    dups = []
+
+    def pairs(kv):
+        # json.load keeps the LAST of two equal keys and says nothing - a field declared
+        # twice would silently lose one of its declarations.
+        d = {}
+        for k, v in kv:
+            if k in d:
+                dups.append(k)
+            d[k] = v
+        return d
     try:
-        p = json.load(open(path, encoding="utf8"))
+        p = json.load(open(path, encoding="utf8"), object_pairs_hook=pairs)
     except (OSError, ValueError) as e:
         res.d["errors"].append(f"cannot read the plan: {e}")
         res.finish(2)
-    errs = validate_schema(p)
+    if not isinstance(p, dict):
+        res.d["errors"].append("the plan must be a JSON object")
+        res.finish(2)
+    errs = [f"key '{k}' is given more than once" for k in dict.fromkeys(dups)]
+    errs += validate_schema(p)
     if errs:
         res.d["errors"] += errs
         for e in errs:
@@ -498,6 +689,8 @@ def cmd_validate(path, res, quiet=False):
     p = load(path, res)
     rc, line = sdk_decision(p)
     reasons = lane_reasons(p, rc, line)
+    res.d["provenance"] = {f: p["provenance"][f]["kind"] for f in section_fields(p)}
+    res.d["provenance"].update({m: "constant" for m in MASTHEAD})
     res.d["lane"] = "expert" if (reasons or p["lane"] == "expert") else "fast"
     res.d["reasons"] = reasons
     res.d["sdk"] = line
@@ -560,8 +753,24 @@ def cmd_run(path, res):
         res.d["errors"].append("scaffold.py refused the plan")
         res.finish(2)
 
+    res.stage("fields")
+    jrp = os.path.join(folder, f"{p['report']['name']}.jrxml")   # scaffold.py ran gen_jrxml.py
+    if not os.path.exists(jrp):
+        res.d["errors"].append(f"scaffold.py did not produce {os.path.basename(jrp)}")
+        res.finish(2)
+    extras = jrxml_extras(p, jrp)
+    if extras:
+        res.d["errors"].append("the .jrxml declares field(s) with no provenance: " + ", ".join(extras))
+        print("  the generated .jrxml declares fields the plan does not account for:"
+              f" {', '.join(extras)}")
+        res.finish(2)
+
     res.stage("fixtures")
     changed, left = fill_fixture_py(p, folder)
+    if changed is None:
+        res.d["errors"] += left
+        print("  " + left[0])
+        res.finish(2)
     graph = fill_fixture_groovy(p, folder)
     print(f"  fixtures  fixture.py {'filled from the plan' if changed else 'kept'}; "
           f"Fixture.groovy {'written from the plan' if graph else 'kept'}")
@@ -575,6 +784,18 @@ def cmd_run(path, res):
         res.d["errors"].append(f"{p['rule']} is not written yet - it is the judgment file")
         print(f"  write {p['rule']} (the rule is never generated), then run this again")
         res.finish(3)
+    miss = rule_misses(p, open(os.path.join(folder, p["rule"]), encoding="utf8").read())
+    if miss:
+        for f, path, chain in miss:
+            print(f"  RULE    {f}: the plan says {path}, but the rule never reads '{chain}'")
+            res.d["reasons"].append(f"the rule does not visibly read {path} ({f}) - the plan"
+                                    f" cannot be shown to describe the rule")
+        print("  -> expert lane: fix the plan or the rule so they agree, or build it the"
+              " existing way.")
+        res.d["lane"] = "expert"
+        res.finish(20)
+    res.d["unverified"].append("property reads in the rule that the plan does not list"
+                               " are not checked")
 
     res.stage("verify")
     jr = f"{p['report']['name']}.jrxml"

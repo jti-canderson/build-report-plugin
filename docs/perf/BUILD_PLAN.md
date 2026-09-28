@@ -28,14 +28,41 @@ the rule so they can drive field resolution, fixtures, verification and document
 | `strategy` | `kind`: `direct-record` or `query-list`; `entity`, `id_param`, `filters`, `sort` |
 | `params` | `name`, `class`, `coerce`, `required` |
 | `sections` | as in `spec.json`: `key`, `title`, `cols` = `[header, width, align, field]` |
-| `outputs` | output field expressions (documentation) |
-| `traversals` | `field -> Entity.path.to.value`; `[]` marks a collection hop |
+| `outputs` | **required**: one expression per section field — no more, no fewer |
+| `provenance` | **required**: one entry per section field — `{"kind": "sdk"}`, `{"kind": "computed", "reason": "..."}` or `{"kind": "constant", "reason": "..."}` |
+| `traversals` | `field -> Entity.path.to.value` for exactly the `sdk` fields; `[]` marks a collection hop |
 | `grouping`, `empty`, `missing` | grouping, empty-result and unresolvable-id behaviour |
-| `fixture` | `rows` (awkward!), optional `graph` for `Fixture.groovy` |
+| `fixture` | `rows` (awkward!) — every row gives every field; `intentional_blanks` lists fields a row may omit on purpose; optional `graph` for `Fixture.groovy` |
 | `verification` | `variants` |
 | `assumptions`, `unverified` | written into the NOTES blocks and the handoff |
 | `specialist` | e.g. `["financials"]` |
 | `flags` | `financial_calc`, `custom_layout`, `conflicting_sources`, `unusual_grouping` |
+
+## Field coverage — every field accounted for, or exit 2
+
+The unknown-field case used to pass every gate: the fixture answered any property, so a field
+with no real path rendered, packaged, and shipped as a blank column. Validation now requires:
+
+- **provenance for every section field**, and none for a field no section shows. The masthead
+  (`rptTitle`, `rptSubtitle`, `rptSlug`) is a constant taken from `report`.
+- `computed` and `constant` need a non-empty `reason`, must NOT have a traversal, and are never
+  counted as resolved SDK paths. `sdk` must have one.
+- `outputs` and `traversals` name exactly those fields; a renamed key in either is reported on
+  both sides. A key given twice anywhere in the file is rejected (JSON would keep the last).
+- every fixture row gives every field, with text or a number; an omitted field is an error
+  unless it is in `fixture.intentional_blanks`; a row key no section shows is an error.
+- paths are non-empty strings of the form `Entity.property[.property...]`; a root-only path, a
+  malformed or non-string path is exit 2 with the reason, never a traceback. A path that does not
+  start at `root` goes to the expert lane.
+
+After scaffolding, the generated `.jrxml` is checked to declare no field outside the section
+fields and the masthead (exit 2).
+
+**Against the rule**, before verifying: each `sdk` path must appear in the rule as a property
+chain (`Case.parties.person` ⇒ `.parties.person`, `?.` ignored). One that is not found sends the
+plan to the **expert lane** (exit 20) — reads through a `collect`, a helper or an intermediate
+variable are not recognised, and that is deliberately the safe direction. The reverse check
+(reads in the rule the plan does not list) cannot be done safely and is recorded as unverified.
 
 ## Lanes — decided in code
 
@@ -58,7 +85,8 @@ one bogus field: **3.6 s, 1 call** vs **6.5 s, 3 calls** with `sdk_fields.py` pe
 per-class way needs the model to work out that `parties` holds `Party` itself.
 
 A path that does not resolve prints a blank column with no error in eSeries, so it forces the
-expert lane (exit 20) and nothing is written.
+expert lane (exit 20) and nothing is written. A path longer than the depth limit (8 hops) is
+recorded **unresolved** (`depth limit ... not proven`) and goes the same way; it is never dropped.
 
 ## What it never does
 
@@ -70,4 +98,5 @@ expert lane (exit 20) and nothing is written.
 ## Exit codes
 
 `0` built, every gate passed · `1` a gate failed (`gates.failed_gate` says which) · `2` invalid plan ·
-`3` a judgment file is missing (the rule, or TODO fixture rows) · `20` expert lane
+`3` a judgment file is missing (the rule, or TODO fixture rows) · `4` not enabled
+(`JTI_BUILD_PLAN=opt-in`) · `20` expert lane
