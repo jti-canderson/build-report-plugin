@@ -133,48 +133,52 @@ Checks      = ~/JaspersoftWorkspace/MyReports/OKDAC Reports/Checks
 Nothing is read until a shortcut is clicked — the list is built with `stat`, which macOS
 does not gate, so opening the picker never triggers a file-access prompt.
 
-## Build mode: legacy (default) or fast
+## Rollout switches
 
-One environment variable selects the build path. **Legacy is the default**, and it is the
-pre-optimisation behaviour, unchanged.
+Each optimisation has its OWN switch, so any one can be turned on without the others. **Every
+default is the pre-optimisation behaviour, unchanged.** Print the current settings and where
+each came from:
 
 ```bash
-export JTI_REPORT_BUILD_MODE=fast     # before starting Claude Code
+python3 scripts/build_mode.py
 ```
 
-Or put it in Claude Code's settings (`"env": {"JTI_REPORT_BUILD_MODE": "fast"}`) so every session
-gets it.
+| Switch | Default | Other value | What the other value does |
+|---|---|---|---|
+| `JTI_VERIFIER` | `legacy` | `fast` | `finish.sh` runs the same unchanged gate scripts in **one** JVM, fast-start JIT. Falls back to legacy, saying why, for any harness that is not an exact, unmodified, supported scaffold harness (`# JTI_SCAFFOLD_HARNESS_VERSION=1 sha256=...` on line 2 of `verification/run.sh`) |
+| `JTI_INTERACTION` | `confirm` | `unattended` | SDK decided by `project.py sdk-decide` (asks only when missing, stale or unreadable); brief-only columns recorded under `"derived"` instead of confirmed in chat |
+| `JTI_LOOKUP` | `full` | `targeted` | `scripts/facts.py` and `scripts/precedents.py` instead of reading model-facts.md whole and exploring folders |
+| `JTI_BUILD_PLAN` | `off` | `opt-in` | `scripts/build_plan.py run build-plan.json` (fast lane only). **Opt-in for this release**: the script exits 4 unless this is set |
 
-| | legacy | fast |
-|---|---|---|
-| Gates | two JVMs (rule, render) | the same unchanged gate scripts in **one** JVM, fast-start JIT |
-| SDK question | asked every build | asked only when missing, stale or unreadable (`project.py sdk-decide`) |
-| Brief-only columns | confirmed in chat | recorded in `spec.json` → `"derived"` and in the handoff |
-| model-facts.md | read whole | queried: `scripts/facts.py` |
-| Precedent | explore folders | `scripts/precedents.py` |
-| Mechanics | step by step | `scripts/build_plan.py run build-plan.json` (fast lane only) |
+Set them before starting Claude Code (`export JTI_VERIFIER=fast`), or in Claude Code's settings
+(`"env": {"JTI_VERIFIER": "fast"}`).
 
-**Force legacy at any time:** `export JTI_REPORT_BUILD_MODE=legacy`, or unset it. Only fast mode
-reads `JTI_JVM_OPTS` (default `-XX:TieredStopAtLevel=1`; set it to `""` to turn the flag off).
+**`JTI_REPORT_BUILD_MODE` is a deprecated alias**, kept for this release: `fast` sets
+`JTI_VERIFIER=fast`, `JTI_INTERACTION=unattended` and `JTI_LOOKUP=targeted`, and **not** the
+build plan; `build_mode.py` prints exactly that whenever it is set. A switch set explicitly
+overrides the alias. A misspelt value of any switch warns and uses the default.
 
-Fast mode falls back to the legacy gates, and says so, for any harness it does not understand.
-Measurements: `docs/perf/BASELINE.md` and `docs/perf/RESULTS.md`. Plan design:
+Only the fast verifier reads `JTI_JVM_OPTS` (default `-XX:TieredStopAtLevel=1`; `""` turns it
+off). Measurements: `docs/perf/BASELINE.md` and `docs/perf/RESULTS.md`. Plan design:
 `docs/perf/BUILD_PLAN.md`. Benchmark any report on a temp copy: `python3 scripts/bench.py <folder>
 --mode legacy|fast --runs 3`.
 
 ### Rolling back
 
-Every phase is one commit on `perf/report-build-speed`; each can be reverted on its own
-(`git revert <commit>`), latest first if more than one:
+**Turning a switch off is the rollback** — unset it (or set its default value) and that
+component is back to the pre-optimisation behaviour, with no code change. To remove the code as
+well, every step is one commit on `perf/report-build-speed`; revert latest first if more than
+one (`git revert <commit>`):
 
-| Commit | Phase | Reverting it removes |
-|---|---|---|
-| `e23d27f` | 5 | `build_plan.py`, the plan design, the command's plan pointer |
-| `ff1298b` | 4 | `facts.py`, `precedents.py`, the command's lookup text |
-| `2cc6029` | 3 | `sdk-decide`, the command's FAST MODE section |
-| `ea0483b` | 2 | the one-JVM verifier and the mode switch in `finish.sh` |
-| `2fec819` | 1 | the perf record, `bench.py`, `usage.py --perf` |
-| `ebd9bed` | — | the quoted-parameter parser fix (independent; keep it) |
+| Commit | What | Switch that disables it | Reverting it removes |
+|---|---|---|---|
+| (switches) | separate switches | — | `build_mode.py`; `JTI_REPORT_BUILD_MODE` goes back to driving everything |
+| `d4529a9` | harness marker | `JTI_VERIFIER=legacy` | the marker; fast mode goes back to a substring check (do not) |
+| `e23d27f` | 5 build plan | `JTI_BUILD_PLAN=off` | `build_plan.py`, the plan design, the command's plan section |
+| `ff1298b` | 4 lookups | `JTI_LOOKUP=full` | `facts.py`, `precedents.py`, the command's lookup text |
+| `2cc6029` | 3 no pauses | `JTI_INTERACTION=confirm` | `sdk-decide`, the command's unattended section |
+| `ea0483b` | 2 one-JVM verifier | `JTI_VERIFIER=legacy` | the one-JVM verifier and its dispatch in `finish.sh` |
+| `2fec819` | 1 measurement | — (measures only) | the perf record, `bench.py`, `usage.py --perf` |
+| `ebd9bed` | parser fix | — | the quoted-parameter parser fix (independent; keep it) |
 
-No revert is needed to go back to legacy behaviour: leaving `JTI_REPORT_BUILD_MODE` unset already
-does that.
+With nothing set, every component is already off.

@@ -35,6 +35,10 @@ JRS = os.environ.get("JRS") or next(
 
 results = []
 
+sys.path.insert(0, os.path.join(PLUGIN, "scripts"))
+import build_mode  # noqa: E402
+SWITCHES = build_mode.resolve()[0]
+
 
 def run(cmd, cwd=None, env=None):
     e = dict(os.environ, JTI_PLUGIN=PLUGIN)
@@ -137,9 +141,9 @@ def main():
         # and still exits non-zero with the same "GATE n FAILED" message as before.
         pj = os.path.join(good, "verification", "perf.jsonl")
         last = json.loads(open(pj).read().strip().splitlines()[-1]) if os.path.exists(pj) else {}
-        # The suite runs in either mode (JTI_REPORT_BUILD_MODE=fast python3 tests/run.py
-        # proves the fast path against every gate test below); each mode names its stages.
-        mode = os.environ.get("JTI_REPORT_BUILD_MODE", "legacy")
+        # The suite runs with either verifier (JTI_VERIFIER=fast python3 tests/run.py
+        # proves the fast path against every gate test below); each one names its stages.
+        mode = SWITCHES["verifier"]
         want = {"regenerate", "contract", "rule", "render", "truncation", "package", "verdict"}
         if mode == "fast":
             want |= {"fixtures", "jvm_startup", "raster"}
@@ -642,10 +646,35 @@ print("RESOLVE", same, wrong, refused, typo)
           rc0 == 10 and rc2 == 10 and "days old" in o2 and rc3 == 10 and "cannot be read" in o3,
           f"none={rc0} stale={rc2} {o2.strip()} unreadable={rc3} {o3.strip()}")
     cmd_md = open(os.path.join(PLUGIN, "commands", "build-report.md"), encoding="utf8").read()
-    check("build-report: fast mode decides the SDK in code, legacy keeps its confirmation",
-          "sdk-decide" in cmd_md and "FAST MODE" in cmd_md and '"derived"' in cmd_md
+    check("build-report: unattended decides the SDK in code, confirm keeps its confirmation",
+          "sdk-decide" in cmd_md and "INTERACTION: unattended" in cmd_md and '"derived"' in cmd_md
           and "**Still current** / **I'll send a newer one**" in cmd_md
-          and "**Legacy mode:** confirm the derived columns" in cmd_md, "command text")
+          and "**`interaction: confirm`:** confirm the derived columns" in cmd_md
+          and "scripts/build_mode.py" in cmd_md, "command text")
+
+    # ---- rollout switches: each independent, the old variable only an alias -------------
+    bm = build_mode.resolve
+    a = bm({"JTI_REPORT_BUILD_MODE": "fast"})
+    check("JTI_REPORT_BUILD_MODE=fast enables verifier+interaction+lookup, NOT the build plan, "
+          "and says so", a[0] == {"verifier": "fast", "interaction": "unattended",
+                                  "lookup": "targeted", "build_plan": "off"}
+          and any("build plan stays OFF" in n for n in a[2]), a)
+    v = bm({"JTI_VERIFIER": "fast"})[0]
+    i = bm({"JTI_INTERACTION": "unattended"})[0]
+    check("the fast verifier and unattended sdk-decide can each be enabled alone",
+          v == {"verifier": "fast", "interaction": "confirm", "lookup": "full", "build_plan": "off"}
+          and i == {"verifier": "legacy", "interaction": "unattended", "lookup": "full",
+                    "build_plan": "off"}, f"{v} {i}")
+    o = bm({"JTI_REPORT_BUILD_MODE": "fast", "JTI_VERIFIER": "legacy", "JTI_BUILD_PLAN": "opt-in"})
+    check("an explicit switch overrides the alias; the plan needs its own opt-in",
+          o[0]["verifier"] == "legacy" and o[0]["build_plan"] == "opt-in"
+          and o[1]["verifier"] == "JTI_VERIFIER" and o[1]["interaction"] == "JTI_REPORT_BUILD_MODE", o)
+    d = bm({})
+    bad = bm({"JTI_VERIFIER": "fsat", "JTI_BUILD_PLAN": "on"})
+    check("defaults are the pre-optimisation behaviour; a misspelt value warns and uses it",
+          d[0] == {"verifier": "legacy", "interaction": "confirm", "lookup": "full",
+                   "build_plan": "off"}
+          and bad[0] == d[0] and len(bad[2]) == 2, bad)
 
     # ---- phase 4: targeted knowledge retrieval --------------------------------------
     facts = os.path.join(PLUGIN, "scripts", "facts.py")
@@ -850,12 +879,18 @@ print("RESOLVE", same, wrong, refused, typo)
                 "assumptions": ["one row per case"], "unverified": ["labels"],
                 "flags": {"financial_calc": False, "custom_layout": False,
                           "conflicting_sources": False, "unusual_grouping": False}}
-        def plan_run(p, cmd="run"):
+        def plan_run(p, cmd="run", extra=None):
             path = os.path.join(pw, f"plan-{abs(hash(json.dumps(p))) % 10**8}.json")
             json.dump(p, open(path, "w"))
-            rc, out = run(["python3", bp, cmd, path], env={"JTI_PROJECT_ROOT": pw})
+            rc, out = run(["python3", bp, cmd, path], env=dict(
+                {"JTI_PROJECT_ROOT": pw, "JTI_BUILD_PLAN": "opt-in", "JTI_VERIFIER": "fast"},
+                **(extra or {})))
             m = re.search(r"^BUILD-RESULT (\{.*\})$", out, re.M)
             return rc, out, (json.loads(m.group(1)) if m else {})
+        rc, out, d = plan_run(plan, extra={"JTI_BUILD_PLAN": "", "JTI_REPORT_BUILD_MODE": "fast"})
+        check("build_plan refuses to run unless JTI_BUILD_PLAN=opt-in (the alias is not enough)",
+              rc == 4 and d.get("stage") == "switch"
+              and not os.path.exists(os.path.join(pw, "Proj", "Plan_Probe")), out[-300:])
         rc, out, d = plan_run(plan)
         check("build_plan run stops at the rule (exit 3) - it never generates one",
               rc == 3 and d.get("stage") == "rule" and d.get("lane") == "fast", out[-400:])
@@ -895,7 +930,7 @@ print("RESOLVE", same, wrong, refused, typo)
 
     # ---- phase 2: the one-JVM fast verifier ---------------------------------------
     # These run whatever mode the suite itself is in; they set the mode per call.
-    fast_env = {"JTI_REPORT_BUILD_MODE": "fast"}
+    fast_env = {"JTI_VERIFIER": "fast"}
     ff = mutate(good, ws, "fast_ok", lambda f: None)
     rc, out = run([os.path.join(PLUGIN, "scripts", "finish.sh"), "Probe_Report_V1.groovy",
                    "Probe_Report.jrxml", "--code", "Probe_Report", "--name", "Probe Report"],
@@ -928,7 +963,7 @@ print("RESOLVE", same, wrong, refused, typo)
         os.path.join(f, "verification", "run.sh"), "python3 gen_jrxml.py\n",
         "python3 gen_jrxml.py\necho '  CUSTOM CHECK FAILED - site-specific step'; exit 7\n"))
     rs_txt = open(os.path.join(fc, "verification", "run.sh")).read()
-    rcL, outL = run(fin_cmd, cwd=fc, env={"JTI_REPORT_BUILD_MODE": "legacy"})
+    rcL, outL = run(fin_cmd, cwd=fc, env={"JTI_VERIFIER": "legacy"})
     rcF, outF = run(fin_cmd, cwd=fc, env=fast_env)
     check("a customised run.sh with a failing step: fast falls back and FAILS exactly as legacy",
           all(x in rs_txt for x in ("render_check.groovy", "--variant", 'WANT="${2:-'))
@@ -956,10 +991,15 @@ print("RESOLVE", same, wrong, refused, typo)
 
     rc, out = run([os.path.join(PLUGIN, "scripts", "finish.sh"), "Probe_Report_V1.groovy",
                    "Probe_Report.jrxml", "--code", "Probe_Report", "--name", "Probe Report"],
-                  cwd=ff, env={"JTI_REPORT_BUILD_MODE": "fsat"})
-    check("an unrecognised JTI_REPORT_BUILD_MODE warns and runs legacy",
-          "is not legacy or fast - using legacy" in out and rc == 0
-          and "mode: fast" not in out, out[:300])
+                  cwd=ff, env={"JTI_REPORT_BUILD_MODE": "fsat", "JTI_VERIFIER": ""})
+    rc2, out2 = run(fin_cmd, cwd=ff, env={"JTI_VERIFIER": "fsat"})
+    check("an unrecognised verifier value (either variable) warns and runs legacy",
+          "is not legacy or fast - ignored" in out and rc == 0 and "mode: fast" not in out
+          and "is not one of legacy/fast - using legacy" in out2 and rc2 == 0
+          and "mode: fast" not in out2, out[:300] + out2[:300])
+    rc3, out3 = run(fin_cmd, cwd=ff, env={"JTI_REPORT_BUILD_MODE": "fast", "JTI_VERIFIER": ""})
+    check("the deprecated alias still selects the fast verifier through finish.sh",
+          rc3 == 0 and "mode: fast" in out3, out3[:300])
 
     return report()
 

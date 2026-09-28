@@ -13,16 +13,17 @@
 set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# ---- build mode: legacy (default) or fast -------------------------------------------
-#   JTI_REPORT_BUILD_MODE=fast     the same gates with the rule and render in ONE JVM
-#                                  (scripts/verify_fast.py - it hands back to this file,
-#                                  unchanged, for any harness it does not understand)
-#   JTI_REPORT_BUILD_MODE=legacy   everything below, exactly as before. Also the default.
-case "${JTI_REPORT_BUILD_MODE:-legacy}" in
-  fast)   exec python3 "$ROOT/scripts/verify_fast.py" "$@" ;;
-  legacy) ;;
-  *)      echo "  JTI_REPORT_BUILD_MODE='${JTI_REPORT_BUILD_MODE}' is not legacy or fast - using legacy" ;;
-esac
+# ---- verifier: legacy (default) or fast --------------------------------------------
+#   JTI_VERIFIER=fast   the same gates with the rule and render in ONE JVM
+#                       (scripts/verify_fast.py - it hands back to this file, unchanged,
+#                       for any harness it cannot prove is unmodified scaffold output)
+#   unset / legacy      everything below, exactly as before.
+# Resolved by scripts/build_mode.py (one implementation of the switches and the deprecated
+# JTI_REPORT_BUILD_MODE alias). Nothing set = no lookup at all = no added cost.
+if [ -n "${JTI_VERIFIER:-}${JTI_REPORT_BUILD_MODE:-}" ]; then
+  VERIFIER=$(python3 "$ROOT/scripts/build_mode.py" get verifier)
+  [ "$VERIFIER" = fast ] && exec python3 "$ROOT/scripts/verify_fast.py" "$@"
+fi
 
 [ $# -ge 2 ] || { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 RULE="$1"; JRXML="$2"; shift 2

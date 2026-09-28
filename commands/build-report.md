@@ -87,19 +87,33 @@ Go straight from there to the SDK check (question 2, the only one a spec cannot 
 and then to the build. **The gates are unchanged** — a spec skips the questions, never the
 verification.
 
-### FAST MODE — a complete builder submission runs without chat
-
-Check the mode once, at the start:
+### SWITCHES — check them once, at the start
 
 ```bash
-echo "build mode: ${JTI_REPORT_BUILD_MODE:-legacy}"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/build_mode.py"
 ```
 
-**`legacy`** (the default): everything in this file applies as written, including the SDK
-confirmation and the brief-only column confirmation below.
+It prints four independent settings and where each came from. Each changes ONE thing:
 
-**`fast`**: the person clicked Write and walked away. The build runs straight through to the
-delivered files, and exactly two things change:
+| Setting | Default | Other value | What the other value changes |
+|---|---|---|---|
+| `interaction` (`JTI_INTERACTION`) | `confirm` | `unattended` | the two pauses below |
+| `lookup` (`JTI_LOOKUP`) | `full` | `targeted` | `facts.py` / `precedents.py` instead of reading whole |
+| `verifier` (`JTI_VERIFIER`) | `legacy` | `fast` | `finish.sh` runs the gates in one JVM — nothing for you to do |
+| `build_plan` (`JTI_BUILD_PLAN`) | `off` | `opt-in` | the one-command build plan (see "Build plan" below) |
+
+Follow **only** the setting that is printed. `JTI_REPORT_BUILD_MODE=fast` is a deprecated alias
+for `unattended` + `targeted` + `fast`; it does **not** turn on the build plan, and the script
+says so. Everything below that says "unattended", "targeted" or "build plan" applies only when
+that one setting says so; otherwise this file applies as written.
+
+### INTERACTION: unattended — a complete builder submission runs without chat
+
+**`confirm`** (the default): the SDK confirmation and the brief-only column confirmation below
+apply as written.
+
+**`unattended`**: the person clicked Write and walked away. The build runs straight through to
+the delivered files, and exactly two things change:
 
 1. **The SDK is decided in code, not confirmed in chat.** Instead of the question-2 picker:
 
@@ -112,7 +126,7 @@ delivered files, and exactly two things change:
    file, file gone, stale, unreadable): ask exactly as question 2 says, with the same
    where-to-get-it directions, because then the user really does have to act.
 2. **Derived columns are recorded, not confirmed.** A brief-only spec (below) still has its
-   columns derived and written back into `spec.json` — and in fast mode the derivation is also
+   columns derived and written back into `spec.json` — and when unattended the derivation is also
    recorded there, under `"derived"`, and stated in the handoff, instead of stopping to ask
    *"Good?"*:
 
@@ -140,7 +154,7 @@ record as an assumption. Asking about it costs a turn, and if the person has wal
 stalls the build.
 
 **Unchanged in both modes:** every gate, the three deliverables, looking at every rendered
-page, and the honest *not verified* list. Fast mode removes pauses; it never removes a check.
+page, and the honest *not verified* list. `unattended` removes pauses; it never removes a check.
 
 ### A spec with a brief but no columns — derive them, don't send it back
 
@@ -170,11 +184,11 @@ json.dump(s, open(p, 'w'), indent=2)
 EOF
 ```
 
-**Legacy mode:** confirm the derived columns with the user in one line before building —
+**`interaction: confirm`:** confirm the derived columns with the user in one line before building —
 *"From your brief I'm showing case number, type and jurisdiction, one row per case. Good?"* —
-because you chose the fields and they could not see you do it. **Fast mode:** do not stop;
+because you chose the fields and they could not see you do it. **`unattended`:** do not stop;
 record the columns and your assumptions under `"derived"` in the spec and in the handoff (see
-FAST MODE above). Then scaffold and build as normal. **The gates are unchanged**; deriving the
+INTERACTION above). Then scaffold and build as normal. **The gates are unchanged**; deriving the
 columns is the only added step.
 
 ### `look_like` — the spec says "match this picture"
@@ -326,9 +340,9 @@ grant; a tool that writes outside it is one you would have to supervise.
 
 ## 2. The field list (what eSeries calls the SDK)
 
-**Fast mode** (`JTI_REPORT_BUILD_MODE=fast`): run `project.py sdk-decide` instead - see
-FAST MODE above. Exit 0 means name the SDK and carry on; only exit 10 reaches the questions
-below. **Legacy mode:** as written here.
+**`interaction: unattended`**: run `project.py sdk-decide` instead - see INTERACTION above.
+Exit 0 means name the SDK and carry on; only exit 10 reaches the questions below.
+**`confirm`:** as written here.
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/project.py" sdk-status "<project folder>"
@@ -570,7 +584,7 @@ look right and are not, the real traversals, and the traps. Checking it is free;
 that re-derives what is already written there is the most expensive mistake in this
 pipeline. Add to it whenever a model question takes more than a couple of minutes.
 
-**Fast mode: ask it, don't read all of it.** The whole file is ~12k tokens that then sit in
+**`lookup: targeted`: ask it, don't read all of it.** The whole file is ~12k tokens that then sit in
 the conversation for the rest of the build. Query it for what THIS report touches — the root
 entity, the entities along each path, the field names, the template, and `--domain financial`
 for any money:
@@ -598,7 +612,7 @@ candidate's own *not verified* warnings. Open the rule it names; open a second o
 does not fit. "NO PRECEDENT" means a new shape: build from the template and model-facts rather
 than forcing one.
 
-**Legacy mode:** read the whole file first, as above.
+**`lookup: full`:** read the whole file first, as above.
 
 Follow the `jasper-reports` skill from step 1 of its sequence. It is bundled here, so
 invoke it rather than working from memory:
@@ -609,9 +623,11 @@ Skill(jasper-reports)
 
 Everything lands in `<project folder>/<Report Name>/`.
 
-### Fast mode: write a build plan, then ONE command does the mechanics
+### Build plan (`build_plan: opt-in` only): write a plan, then ONE command does the mechanics
 
-In fast mode, after the lookups: write the rule, write `build-plan.json` into the report folder
+Only when `build_mode.py` prints `build_plan opt-in`. Otherwise skip this section entirely —
+`build_plan.py` refuses to run (exit 4) unless `JTI_BUILD_PLAN=opt-in`. When it is on: after the
+lookups, write the rule, write `build-plan.json` into the report folder
 (`build_plan.py --example` shows every key; see `docs/perf/BUILD_PLAN.md`), then:
 
 ```bash
@@ -624,7 +640,7 @@ inventories the files. Its last line is `BUILD-RESULT {json}`. Exit **20** = exp
 steps below instead. Exit **3** = the rule or real fixture rows are missing. Exit **1** = a gate
 failed; fix it and run the same command again. Then look at every page, as always.
 
-**Legacy mode:** the steps below, as written.
+**`build_plan: off`:** the steps below, as written.
 
 ### Scaffold the boilerplate — do not type it
 

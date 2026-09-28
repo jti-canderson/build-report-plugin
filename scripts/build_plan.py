@@ -25,7 +25,8 @@ TWO LANES, and `validate` decides which in code:
 
 EXIT CODES  0 built and every gate passed    1 a gate failed (diagnostics say which)
             2 invalid plan    3 a judgment file is missing (the rule, or TODO fixture rows)
-            20 expert lane    (the last line is always BUILD-RESULT {json})
+            4 not enabled (JTI_BUILD_PLAN=opt-in)    20 expert lane
+            (the last line is always BUILD-RESULT {json})
 """
 import argparse
 import datetime
@@ -577,7 +578,8 @@ def cmd_run(path, res):
 
     res.stage("verify")
     jr = f"{p['report']['name']}.jrxml"
-    env = dict(os.environ, JTI_REPORT_BUILD_MODE="fast")
+    # The verifier is its OWN switch: the plan runs whichever one JTI_VERIFIER selects.
+    env = dict(os.environ)
     v = subprocess.run([os.path.join(HERE, "finish.sh"), p["rule"], jr, "--code",
                         p["report"]["code"], "--name", p["report"]["title"],
                         "--template", p["template"]], cwd=folder, env=env,
@@ -624,6 +626,14 @@ def main():
     if a.help or a.cmd not in ("validate", "resolve", "run") or not a.plan:
         print(__doc__); return 0 if a.help else 2
     res = Result()
+    # OPT-IN for the initial release, independently of every other switch.
+    import build_mode
+    if build_mode.resolve()[0]["build_plan"] != "opt-in":
+        print("  build_plan.py is OFF. It is opt-in for this release: set JTI_BUILD_PLAN=opt-in.")
+        print("  (JTI_REPORT_BUILD_MODE=fast does not enable it.)")
+        res.d["errors"].append("build plan not enabled (JTI_BUILD_PLAN=opt-in)")
+        res.stage("switch")
+        res.finish(4)
     if a.cmd == "validate":
         cmd_validate(a.plan, res)
         res.finish(0 if res.d["lane"] == "fast" else 20)

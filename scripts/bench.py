@@ -147,8 +147,8 @@ def mutate(folder, kind, d):
 
 # ── the two pipelines ───────────────────────────────────────────────────────────────────
 def pipeline_cmd(mode, d):
-    # BOTH modes go through finish.sh: the mode is chosen by JTI_REPORT_BUILD_MODE, exactly
-    # as a real build selects it, so the switch itself is exercised on every fast run.
+    # BOTH modes go through finish.sh: the verifier is chosen by JTI_VERIFIER, exactly
+    # as a real build selects it (JTI_VERIFIER), so the switch itself is exercised on every fast run.
     cmd = [os.path.join(PLUGIN, "scripts", "finish.sh"), d["rule"], d["jrxml"],
            "--code", d["code"], "--name", d["name"]]
     if d["template"]:
@@ -166,7 +166,7 @@ def run_once(src, mode, mutation=None, keep=False):
         mutate(work, mutation, d)
     log = os.path.join(tmp, "jvm.log")
     env = dict(os.environ, JRS=shim, JTI_PLUGIN=PLUGIN, JTI_BENCH_JVM_LOG=log,
-               JTI_REPORT_BUILD_MODE=mode)
+               JTI_VERIFIER=mode)
     t0 = time.perf_counter()
     p = subprocess.run(pipeline_cmd(mode, d), cwd=work, env=env,
                        capture_output=True, text=True)

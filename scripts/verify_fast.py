@@ -3,7 +3,7 @@
 
     verify_fast.py <rule>.groovy <report>.jrxml --code CODE --name "Human Name" [...]
 
-Selected by JTI_REPORT_BUILD_MODE=fast (finish.sh hands over to this). Run from inside the
+Selected by JTI_VERIFIER=fast (finish.sh hands over to this). Run from inside the
 report folder, exactly like finish.sh. Same gates, same order, same "GATE n FAILED" lines.
 
 WHAT IS DIFFERENT, AND WHY EACH IS SAFE
@@ -103,7 +103,7 @@ def legacy(reason):
     # FLUSH before exec. Under a pipe - which is how every real build captures this - Python
     # block-buffers stdout, and execve replaces the process without flushing it, so the one
     # line saying the downgrade happened was silently thrown away. The suite caught it.
-    env = dict(os.environ, JTI_REPORT_BUILD_MODE="legacy")
+    env = dict(os.environ, JTI_VERIFIER="legacy", JTI_REPORT_BUILD_MODE="legacy")
     # The legacy scripts start their own JVMs, which cannot be handed a flag without editing
     # them - but every JVM reads JAVA_TOOL_OPTIONS. So the fast-start JIT still applies to a
     # harness this file does not understand: measured on the 5-variant asset-template report,
@@ -177,7 +177,7 @@ def main():
     if not m or not m.group(1).split():
         legacy("cannot read the variant list (WANT=...) from verification/run.sh")
     variants = m.group(1).split()
-    print("  mode: fast (one JVM) - JTI_REPORT_BUILD_MODE=legacy forces the old gates")
+    print("  mode: fast (one JVM) - JTI_VERIFIER=legacy forces the old gates")
 
     # ---- 0. regenerate -----------------------------------------------------------------
     mark("regenerate")
