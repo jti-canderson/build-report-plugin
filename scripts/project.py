@@ -17,6 +17,7 @@ and a wrong guess is silent: the report compiles here and behaves differently th
     project.py list
     project.py resolve  <name|relative path> [--create]
     project.py sdk-status <project-folder>
+    project.py sdk-decide <project-folder>   exit 0 = current SDK, don't ask; 10 = ask
 
 SCOPE: every path this touches is resolved under the WORKSPACE ROOT and a path that
 escapes it is refused. The plugin has no business anywhere else, and a tool that writes
@@ -247,6 +248,55 @@ def cmd_sdk_status(folder):
     return 0
 
 
+ASK = 10     # sdk-decide: the user has to be asked
+
+
+def cmd_sdk_decide(folder):
+    """Decide - in code, not in the model's judgement - whether a build must stop and ask.
+
+    Exit 0 and one line to put in the build log and the handoff when a current, readable SDK
+    is on file: nobody needs to confirm a file they registered months ago and that has not
+    gone stale. Exit ASK (10) with the reason when the user genuinely has to act: no SDK,
+    the recorded file is gone, it is STALE, or it cannot be read.
+
+    `sdk-status` is unchanged; this is what fast-mode builds call instead. Deciding here
+    makes the no-question path deterministic and testable, rather than a sentence in the
+    command the model may or may not weigh the same way twice.
+    """
+    folder = _under_root(folder)
+    if folder is None:
+        print(f"ASK     outside {ROOT} - cannot check the SDK")
+        return ASK
+    sdk = _meta(folder).get("sdk")
+    if not sdk:
+        print("ASK     no SDK/JAR recorded for this project")
+        return ASK
+    stored = folder / sdk["stored"]
+    if not stored.exists():
+        print(f"ASK     recorded as {sdk['filename']} but the file is gone")
+        return ASK
+    age = (datetime.date.today() - datetime.date.fromisoformat(sdk["registered"])).days
+    if age >= STALE_DAYS:
+        print(f"ASK     {sdk['filename']} is {age} days old (stale after {STALE_DAYS})")
+        return ASK
+    # READABLE, not merely present: a truncated download or a renamed HTML error page sits on
+    # disk looking like an SDK. A jar/xlsx is a zip, so it has to open as one.
+    try:
+        if stored.suffix.lower() in (".jar", ".zip", ".xlsx"):
+            import zipfile
+            with zipfile.ZipFile(stored) as z:
+                if not z.namelist():
+                    raise ValueError("empty archive")
+        elif stored.stat().st_size == 0 or not os.access(stored, os.R_OK):
+            raise ValueError("empty or unreadable")
+    except Exception as e:                                  # noqa: BLE001
+        print(f"ASK     {sdk['filename']} is on file but cannot be read ({type(e).__name__})")
+        return ASK
+    print(f"SDK     {sdk['filename']}, registered {sdk['registered']} ({age} day"
+          f"{'s' if age != 1 else ''} ago) - current; used without asking")
+    return 0
+
+
 def cmd_sdk_register(folder, src):
     # The SOURCE may sit anywhere - it is a file the user just handed over, typically from
     # Downloads. The DESTINATION may not: the copy lands inside the project folder or not
@@ -291,6 +341,8 @@ if __name__ == "__main__":
         sys.exit(cmd_resolve(a[1], "--create" in a))
     elif c == "sdk-status":
         sys.exit(cmd_sdk_status(a[1]))
+    elif c == "sdk-decide":
+        sys.exit(cmd_sdk_decide(a[1]))
     elif c == "sdk-register":
         sys.exit(cmd_sdk_register(a[1], a[2]))
     else:

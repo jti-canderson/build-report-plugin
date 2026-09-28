@@ -613,6 +613,40 @@ print("RESOLVE", same, wrong, refused, typo)
         skip("search_build writes a gate-clean form from a spec", "no Eh Team dictionary")
         skip("search_build refuses a field from another environment", "no Eh Team dictionary")
 
+    # ---- phase 3: no pause for a current SDK - decided in code ---------------------
+    # sdk-decide exits 0 only for a current AND readable SDK; anything the user would have to
+    # fix (none, gone, stale, unreadable) exits 10 so the build asks. Each case is built here.
+    import zipfile as _zfd
+    pd = os.path.join(ws, "SDK Probe")
+    os.makedirs(pd, exist_ok=True)
+    jar = os.path.join(ws, "ecourt-sdk-probe.jar")
+    with _zfd.ZipFile(jar, "w") as z:
+        z.writestr("com/sustain/cases/model/Case.class", b"\xca\xfe\xba\xbe")
+    proj = os.path.join(PLUGIN, "scripts", "project.py")
+    penv = {"JTI_PROJECT_ROOT": ws}
+    rc0, o0 = run(["python3", proj, "sdk-decide", pd], env=penv)
+    run(["python3", proj, "sdk-register", pd, jar], env=penv)
+    rc1, o1 = run(["python3", proj, "sdk-decide", pd], env=penv)
+    meta_p = os.path.join(pd, ".jti-project.json")
+    meta = json.load(open(meta_p))
+    meta["sdk"]["registered"] = "2025-01-01"
+    json.dump(meta, open(meta_p, "w"))
+    rc2, o2 = run(["python3", proj, "sdk-decide", pd], env=penv)
+    meta["sdk"]["registered"] = __import__("datetime").date.today().isoformat()
+    json.dump(meta, open(meta_p, "w"))
+    open(os.path.join(pd, meta["sdk"]["stored"]), "wb").write(b"<html>404 Not Found</html>")
+    rc3, o3 = run(["python3", proj, "sdk-decide", pd], env=penv)
+    check("sdk-decide: current readable SDK -> no question (exit 0, one SDK line)",
+          rc1 == 0 and o1.startswith("SDK ") and "used without asking" in o1, o1)
+    check("sdk-decide asks when the SDK is missing, stale, or unreadable (exit 10)",
+          rc0 == 10 and rc2 == 10 and "days old" in o2 and rc3 == 10 and "cannot be read" in o3,
+          f"none={rc0} stale={rc2} {o2.strip()} unreadable={rc3} {o3.strip()}")
+    cmd_md = open(os.path.join(PLUGIN, "commands", "build-report.md"), encoding="utf8").read()
+    check("build-report: fast mode decides the SDK in code, legacy keeps its confirmation",
+          "sdk-decide" in cmd_md and "FAST MODE" in cmd_md and '"derived"' in cmd_md
+          and "**Still current** / **I'll send a newer one**" in cmd_md
+          and "**Legacy mode:** confirm the derived columns" in cmd_md, "command text")
+
     # usage.activity() splits wall time into active vs waiting-on-the-user. BOTH ways of
     # waiting must count: a turn that ended (stop_reason end_turn) until the next line, and a
     # picker question, whose answer arrives as a tool_result rather than as user text - the

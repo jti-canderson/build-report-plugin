@@ -87,6 +87,61 @@ Go straight from there to the SDK check (question 2, the only one a spec cannot 
 and then to the build. **The gates are unchanged** — a spec skips the questions, never the
 verification.
 
+### FAST MODE — a complete builder submission runs without chat
+
+Check the mode once, at the start:
+
+```bash
+echo "build mode: ${JTI_REPORT_BUILD_MODE:-legacy}"
+```
+
+**`legacy`** (the default): everything in this file applies as written, including the SDK
+confirmation and the brief-only column confirmation below.
+
+**`fast`**: the person clicked Write and walked away. The build runs straight through to the
+delivered files, and exactly two things change:
+
+1. **The SDK is decided in code, not confirmed in chat.** Instead of the question-2 picker:
+
+   ```bash
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/project.py" sdk-decide "<project folder>"
+   ```
+
+   Exit **0** prints one `SDK ...` line — a current, readable SDK. **Put that line in the build
+   log and the handoff and do not ask.** Exit **10** prints `ASK ...` with the reason (none on
+   file, file gone, stale, unreadable): ask exactly as question 2 says, with the same
+   where-to-get-it directions, because then the user really does have to act.
+2. **Derived columns are recorded, not confirmed.** A brief-only spec (below) still has its
+   columns derived and written back into `spec.json` — and in fast mode the derivation is also
+   recorded there, under `"derived"`, and stated in the handoff, instead of stopping to ask
+   *"Good?"*:
+
+   ```json
+   "derived": {"from": "intent",
+               "columns": ["Case Number <- caseNumber", "Type <- caseType"],
+               "assumptions": ["one row per case", "date range filters filingDate"],
+               "sdk": "the sdk-decide line, or 'none - fields unverified'"}
+   ```
+
+   The handoff leads its "decide" list with these assumptions, so they get read.
+
+**Ask only when getting it wrong would materially change the report, or create a real
+correctness risk** — and say which one it is. In practice that means:
+
+- the brief fits two root entities or traversals that return **different rows**, and the SDK,
+  `model-facts.md` and the corpus can't settle it (e.g. "payments": receipts vs pay-plan
+  installments);
+- a money figure whose definition is genuinely open (paid, balance, collected — see the
+  financials skill);
+- `sdk-decide` exits 10.
+
+Anything else — a column order, a heading, a width, a default sort — is a call you make and
+record as an assumption. Asking about it costs a turn, and if the person has walked away it
+stalls the build.
+
+**Unchanged in both modes:** every gate, the three deliverables, looking at every rendered
+page, and the honest *not verified* list. Fast mode removes pauses; it never removes a check.
+
 ### A spec with a brief but no columns — derive them, don't send it back
 
 A spec can carry `"template"` and an `"intent"` brief with **`"sections": []`**. That is
@@ -115,10 +170,12 @@ json.dump(s, open(p, 'w'), indent=2)
 EOF
 ```
 
-Confirm the derived columns with the user in one line before building — *"From your brief I'm
-showing case number, type and jurisdiction, one row per case. Good?"* — because you chose the
-fields and they could not see you do it. Then scaffold and build as normal. **The gates are
-unchanged**; deriving the columns is the only added step.
+**Legacy mode:** confirm the derived columns with the user in one line before building —
+*"From your brief I'm showing case number, type and jurisdiction, one row per case. Good?"* —
+because you chose the fields and they could not see you do it. **Fast mode:** do not stop;
+record the columns and your assumptions under `"derived"` in the spec and in the handoff (see
+FAST MODE above). Then scaffold and build as normal. **The gates are unchanged**; deriving the
+columns is the only added step.
 
 ### `look_like` — the spec says "match this picture"
 
@@ -268,6 +325,10 @@ The point of the scope is that pointing the plugin at a folder is the whole perm
 grant; a tool that writes outside it is one you would have to supervise.
 
 ## 2. The field list (what eSeries calls the SDK)
+
+**Fast mode** (`JTI_REPORT_BUILD_MODE=fast`): run `project.py sdk-decide` instead - see
+FAST MODE above. Exit 0 means name the SDK and carry on; only exit 10 reaches the questions
+below. **Legacy mode:** as written here.
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/project.py" sdk-status "<project folder>"
