@@ -22,21 +22,41 @@ done
 
 fail() { echo; echo "  GATE $1 FAILED - $2"; echo "  Fix it and re-run finish.sh. Later gates were not run."; exit 1; }
 
+# ---- performance record: MEASURES ONLY (scripts/perf.py) -------------------------------
+# One timestamp as each stage begins; on exit - pass or fail - one line appended to
+# verification/perf.jsonl. The exit status is re-raised unchanged, and nothing is written
+# when the folder has no verification/. perl because macOS ships bash 3.2, which has no
+# sub-second clock; `date +%s` is the fallback, at whole-second resolution.
+_now() { /usr/bin/perl -MTime::HiRes -e 'printf "%.3f", Time::HiRes::time()' 2>/dev/null || date +%s; }
+PERF_MARKS="start:$(_now)"
+mark() { PERF_MARKS="$PERF_MARKS $1:$(_now)"; }
+_perf_exit() {
+  rc=$?
+  [ "$rc" -eq 0 ] && mark end
+  python3 "$ROOT/scripts/perf.py" record --mode legacy --rc "$rc" --marks "$PERF_MARKS" \
+      --out verification/perf.jsonl 2>/dev/null || true
+  exit "$rc"
+}
+trap _perf_exit EXIT
+
 # REGENERATE FIRST. contract_check reads the .jrxml ON DISK, and the render is what
 # rebuilds it from gen_jrxml.py - so checking before regenerating checks the PREVIOUS
 # layout. Caught 2026-09-08 forward-testing: an edited generator was checked against the
 # stale artifact. It failed loudly that time; the same ordering silently passes a stale
 # layout whenever the old one happens to satisfy the contract, which is a false green.
+mark regenerate
 if [ -f gen_jrxml.py ]; then
   echo "== 0/4  regenerate ========================================"
   python3 gen_jrxml.py || fail 0 "gen_jrxml.py failed"
   echo
 fi
 
+mark contract
 echo "== 1/4  contract =========================================="
 python3 "$ROOT/templates/contract_check.py" "$RULE" "$JRXML" || fail 1 "the rule and the layout disagree"
 
 echo
+mark rule
 echo "== 1.5/4  rule executes ==================================="
 # THE GATE THAT WAS MISSING. Everything else inspects TEXT - columns against fields,
 # parameters against reads - and a rule that never assigned _data passed all of it and died
@@ -68,6 +88,7 @@ else
 fi
 
 echo
+mark render
 echo "== 2/4  render ============================================"
 if [ -x ./verification/run.sh ]; then
   ./verification/run.sh render || fail 2 "the jrxml did not compile or fill"
@@ -80,6 +101,7 @@ else
 fi
 
 echo
+mark truncation
 echo "== 3/4  truncation ========================================"
 # A cell wider than its column is cut mid-word with no ellipsis and no error. _fits_width
 # guards column HEADERS, which are known at generate time; row VALUES are not, so nothing
@@ -97,10 +119,12 @@ done
 [ -f verification/fixture_full.tsv ] || echo "  (no per-variant fixtures - skipped)"
 
 echo
+mark package
 echo "== 4/4  rule zip =========================================="
 python3 "$ROOT/scripts/rule_zip.py" "$RULE" "$JRXML" "$@" || fail 3 "contract fault - no zip written"
 
 echo
+mark verdict
 echo "== verdict ================================================"
 ok=1
 for f in "$RULE" "$JRXML" RULE-*.zip RULE_REGISTRATION.txt JRXML_CONTRACT.txt; do

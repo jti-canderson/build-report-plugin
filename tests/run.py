@@ -131,6 +131,23 @@ def main():
         check("baseline: the good report passes every gate", rc == 0, out)
         if rc != 0:
             return report()
+
+        # PERF RECORD (phase 1). The instrumentation must MEASURE and never change an
+        # outcome: a passing run records every stage; a failing run records WHERE it failed
+        # and still exits non-zero with the same "GATE n FAILED" message as before.
+        pj = os.path.join(good, "verification", "perf.jsonl")
+        last = json.loads(open(pj).read().strip().splitlines()[-1]) if os.path.exists(pj) else {}
+        want = {"regenerate", "contract", "rule", "render", "truncation", "package", "verdict"}
+        check("finish.sh records a perf line with every stage on a passing run",
+              last.get("ok") is True and want <= set(last.get("stages") or {})
+              and last.get("mode") == "legacy", json.dumps(last)[:300])
+        bf = mutate(good, ws, "perf_fail", lambda f: edit(rule(f), "_data = rows", "data = rows"))
+        rc_f, out_f = gates(bf)
+        lf = json.loads(open(os.path.join(bf, "verification", "perf.jsonl")).read()
+                        .strip().splitlines()[-1])
+        check("a failing gate run still exits 1, says GATE 1 FAILED, and records the stage",
+              rc_f == 1 and "GATE 1 FAILED" in out_f and lf.get("failed_stage") == "contract"
+              and lf.get("ok") is False, f"rc={rc_f} rec={lf}")
     else:
         rc, out = run(["python3", os.path.join(PLUGIN, "templates", "contract_check.py"),
                        rule(good), os.path.join(good, "Probe_Report.jrxml")])
@@ -590,6 +607,36 @@ print("RESOLVE", same, wrong, refused, typo)
     else:
         skip("search_build writes a gate-clean form from a spec", "no Eh Team dictionary")
         skip("search_build refuses a field from another environment", "no Eh Team dictionary")
+
+    # usage.activity() splits wall time into active vs waiting-on-the-user. BOTH ways of
+    # waiting must count: a turn that ended (stop_reason end_turn) until the next line, and a
+    # picker question, whose answer arrives as a tool_result rather than as user text - the
+    # first cut of this missed the second and scored every picker question as zero wait.
+    T = lambda s: f"2026-09-28T10:{s // 60:02d}:{s % 60:02d}.000Z"
+    ev = [
+        {"type": "assistant", "timestamp": T(0), "message": {"id": "m1", "stop_reason": "tool_use",
+         "content": [{"type": "tool_use", "id": "q1", "name": "AskUserQuestion", "input": {}}]}},
+        {"type": "user", "timestamp": T(60), "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "q1", "content": "Still current"}]}},
+        {"type": "assistant", "timestamp": T(70), "message": {"id": "m2", "stop_reason": "tool_use",
+         "content": [{"type": "tool_use", "id": "b1", "name": "Bash", "input": {}}]}},
+        {"type": "user", "timestamp": T(75), "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "b1", "content": "ok"}]}},
+        {"type": "assistant", "timestamp": T(80), "message": {"id": "m3", "stop_reason": "end_turn",
+         "content": [{"type": "text", "text": "done?"}]}},
+        {"type": "user", "timestamp": T(110), "message": {"content": [{"type": "text", "text": "yes"}]}},
+    ]
+    probe_a = ("import sys, json; sys.path.insert(0, %r); import usage as U; "
+               "print(json.dumps(U.activity([json.dumps(e) for e in json.loads(sys.argv[1])])))"
+               % os.path.join(PLUGIN, "scripts"))
+    rc, out = run(["python3", "-c", probe_a, json.dumps(ev)])
+    try:
+        av = json.loads(out.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        av = {}
+    check("usage.py counts picker questions AND ended turns as time waiting on the user",
+          rc == 0 and av.get("user_idle_secs") == 90.0 and av.get("active_secs") == 20.0
+          and av.get("questions") == 1 and av.get("tool_calls") == 2 and av.get("turns") == 3, out)
 
     # the two listings that disagreed twice
     rc, out = run(["python3", "-c",

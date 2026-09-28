@@ -1,0 +1,52 @@
+
+  jti-reports regression suite
+  plugin /Users/canderson/JaspersoftWorkspace/MyReports/jti-reports-plugin
+  jasper /Applications/jasperreports-server-9.0.0
+
+  PASS  baseline: scaffold builds the probe report
+  PASS  baseline: the good report passes every gate
+  PASS  a rule that never assigns _data is rejected
+  PASS  a parameter the jrxml never declares is rejected
+  PASS  rule_zip refuses to write a zip on a contract fault
+  PASS  a non-WinAnsi glyph is refused at generate time
+  PASS  text too small to print is refused at generate time
+  PASS  a column header too wide for its column is refused
+  PASS  scaffold refuses a template that cannot be parameterised
+  PASS  scaffold refuses a match-a-picture spec and names build-report
+  PASS  an uploaded example layout is sniffed, named and copied into the report folder
+  PASS  a spec with neither a template nor a picture is refused
+  PASS  a brief-only spec (template + words, no typed columns) is accepted and keeps intent
+  PASS  a spec with a template but nothing said about the page is refused
+  PASS  scaffold refuses a brief-only spec and names build-report (not 'missing sections')
+  PASS  the Write button reaches a waiting Claude
+  PASS  a Claude that hung up stops counting as watching
+  PASS  form_import reproduces every FORM export byte-for-byte (28 platform exports)
+  PASS  the form gate passes every platform export
+  PASS  renaming a form changes the code everywhere and the items nowhere
+  PASS  the form gate rejects an empty srcHash
+  PASS  from-scratch item synthesis reproduces real clean items byte-for-byte (11 criteria, 6 results)
+  PASS  build_search assembles a gate-clean, round-tripping from-scratch form
+  PASS  compose(donor -> itself) reproduces the platform file byte-for-byte
+  PASS  the form gate has zero false faults on every platform export
+  PASS  the form gate catches a JSON half that disagrees with the XStream
+  PASS  the form gate catches a dangling XStream reference
+  PASS  srcContent projection is byte-identical on search-form items (220 items)
+  PASS  usage.py counts one API response once, not once per content-block line
+  PASS  the field resolver names the platform's own class for every path (410 identical, 0 wrong)
+  PASS  the field resolver refuses a misspelt field
+  PASS  search_build writes a gate-clean, round-tripping form from a spec
+  PASS  search_build refuses a field that does not exist in the target environment
+  PASS  project listing and list_projects() agree
+  PASS  rule_import reproduces 2 platform export(s) byte for byte
+  PASS  formexport --spec: parseable JSON, unique field names (FORM-OklahomaDACProduction-2026-06-10 (1).zip)
+  PASS  formexport --spec returns an empty list for a non-folder-view export
+  PASS  a rule that does not compile is rejected
+  PASS  a GString value is rejected
+  PASS  a value truncated by its column is rejected
+  PASS  a failed render is not reported as success
+
+  41 passed, 0 failed, 0 skipped
+
+real 76.80
+user 105.92
+sys 14.04

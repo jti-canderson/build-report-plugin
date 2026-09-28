@@ -160,6 +160,74 @@ def scan(lines, start=0):
     return tot, raw, bytool, turns, (entry or 0)
 
 
+def activity(lines, start=0):
+    """Turns, tool calls, and wall time split into ACTIVE and WAITING-ON-THE-USER.
+
+    The number a build is judged by is how long the machine worked, not how long someone took
+    to answer a question - so time is split at every genuine user message: the gap from the
+    previous line to that message is user idle, everything else is active. A tool result is
+    also a "user" line in the transcript, and it is machine time, not a person - it is told
+    apart by its content block type, the same rule build_start() uses.
+
+    Tool calls are counted once per tool_use block (a response can make several). Turns are
+    API responses, deduplicated by message.id exactly as scan() does.
+    """
+    import datetime
+    def ts(d):
+        t = d.get("timestamp")
+        try:
+            return datetime.datetime.fromisoformat(t.replace("Z", "+00:00")).timestamp()
+        except Exception:                                   # noqa: BLE001
+            return None
+    # Two ways the machine waits on a person, and both must count as idle:
+    #   - the model ENDED its turn (stop_reason end_turn): everything until the next line is
+    #     the user reading and replying;
+    #   - an AskUserQuestion is open: the answer arrives as a tool_RESULT, not a user text
+    #     message, so a rule that only looks for user text scores every picker question as
+    #     zero wait. The first cut of this did exactly that.
+    msgs, tools, seen_tool, asks, ask_opened = set(), collections.Counter(), set(), set(), {}
+    idle, first, last, prev, waiting = 0.0, None, None, None, False
+    for ln in lines[start:]:
+        try:
+            d = json.loads(ln)
+        except ValueError:
+            continue
+        t = ts(d)
+        if t is None:
+            continue
+        first = t if first is None else first
+        m = d.get("message") or {}
+        c = m.get("content")
+        blocks = c if isinstance(c, list) else [{"type": "text", "text": c or ""}]
+        if waiting and prev is not None:
+            idle += max(0.0, t - prev)
+        waiting = False
+        if d.get("type") == "assistant" and m.get("id"):
+            msgs.add(m["id"])
+            for b in blocks:
+                if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("id") not in seen_tool:
+                    seen_tool.add(b.get("id")); tools[b.get("name", "")] += 1
+                    if b.get("name") == "AskUserQuestion":
+                        asks.add(b.get("id"))
+            if m.get("stop_reason") == "end_turn":
+                waiting = True
+        elif d.get("type") == "user":
+            # the answer to a picker question closes a wait that began when it was asked
+            for b in blocks:
+                if isinstance(b, dict) and b.get("type") == "tool_result" and b.get("tool_use_id") in asks:
+                    idle += max(0.0, t - ask_opened.get(b.get("tool_use_id"), t))
+        if d.get("type") == "assistant":
+            for b in blocks:
+                if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "AskUserQuestion":
+                    ask_opened[b.get("id")] = t
+        prev = last = t
+    wall = (last - first) if first is not None else 0.0
+    return {"turns": len(msgs), "tool_calls": sum(tools.values()),
+            "tools": dict(tools.most_common()), "questions": tools.get("AskUserQuestion", 0),
+            "wall_secs": round(wall, 1), "user_idle_secs": round(idle, 1),
+            "active_secs": round(wall - idle, 1)}
+
+
 def subagents(path):
     base = path[:-6]
     out = []
@@ -205,6 +273,15 @@ def main():
             "entry_context": round(entry), "session_baseline": round(baseline),
             "inherited_context": round(inherited), "inherited_effective": round(carried),
             "usd": {k: round((tot + sub_tot) / 1e6 * v, 2) for k, v in PRICE.items()}}
+    if "--perf" in sys.argv:
+        act = activity(lines, start)
+        data["activity"] = act
+        if not as_json:
+            print(f"  build activity: {act['turns']} turns, {act['tool_calls']} tool calls "
+                  f"({act['questions']} questions to the user), "
+                  f"{act['active_secs'] / 60:.1f} min active + "
+                  f"{act['user_idle_secs'] / 60:.1f} min waiting on the user")
+            return 0
     if as_json:
         print(json.dumps(data, indent=2)); return 0
 
