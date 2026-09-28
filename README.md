@@ -132,3 +132,49 @@ Checks      = ~/JaspersoftWorkspace/MyReports/OKDAC Reports/Checks
 
 Nothing is read until a shortcut is clicked — the list is built with `stat`, which macOS
 does not gate, so opening the picker never triggers a file-access prompt.
+
+## Build mode: legacy (default) or fast
+
+One environment variable selects the build path. **Legacy is the default**, and it is the
+pre-optimisation behaviour, unchanged.
+
+```bash
+export JTI_REPORT_BUILD_MODE=fast     # before starting Claude Code
+```
+
+Or put it in Claude Code's settings (`"env": {"JTI_REPORT_BUILD_MODE": "fast"}`) so every session
+gets it.
+
+| | legacy | fast |
+|---|---|---|
+| Gates | two JVMs (rule, render) | the same unchanged gate scripts in **one** JVM, fast-start JIT |
+| SDK question | asked every build | asked only when missing, stale or unreadable (`project.py sdk-decide`) |
+| Brief-only columns | confirmed in chat | recorded in `spec.json` → `"derived"` and in the handoff |
+| model-facts.md | read whole | queried: `scripts/facts.py` |
+| Precedent | explore folders | `scripts/precedents.py` |
+| Mechanics | step by step | `scripts/build_plan.py run build-plan.json` (fast lane only) |
+
+**Force legacy at any time:** `export JTI_REPORT_BUILD_MODE=legacy`, or unset it. Only fast mode
+reads `JTI_JVM_OPTS` (default `-XX:TieredStopAtLevel=1`; set it to `""` to turn the flag off).
+
+Fast mode falls back to the legacy gates, and says so, for any harness it does not understand.
+Measurements: `docs/perf/BASELINE.md` and `docs/perf/RESULTS.md`. Plan design:
+`docs/perf/BUILD_PLAN.md`. Benchmark any report on a temp copy: `python3 scripts/bench.py <folder>
+--mode legacy|fast --runs 3`.
+
+### Rolling back
+
+Every phase is one commit on `perf/report-build-speed`; each can be reverted on its own
+(`git revert <commit>`), latest first if more than one:
+
+| Commit | Phase | Reverting it removes |
+|---|---|---|
+| `e23d27f` | 5 | `build_plan.py`, the plan design, the command's plan pointer |
+| `ff1298b` | 4 | `facts.py`, `precedents.py`, the command's lookup text |
+| `2cc6029` | 3 | `sdk-decide`, the command's FAST MODE section |
+| `ea0483b` | 2 | the one-JVM verifier and the mode switch in `finish.sh` |
+| `2fec819` | 1 | the perf record, `bench.py`, `usage.py --perf` |
+| `ebd9bed` | — | the quoted-parameter parser fix (independent; keep it) |
+
+No revert is needed to go back to legacy behaviour: leaving `JTI_REPORT_BUILD_MODE` unset already
+does that.
