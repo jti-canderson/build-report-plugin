@@ -1,0 +1,382 @@
+#!/usr/bin/env python3
+"""jobs.py - the build-job coordinator for /test-report, and the helper Claude calls.
+
+THE SHAPE. The browser is the user interface, the local builder server (serve_builder.py
+--jobs) is the job coordinator, and the running /test-report command is the worker. Nothing
+here launches Claude: the command that is already running claims a job and does the build,
+and reports each step through this helper.
+
+    browser  --submit-->  server  <--claim / progress / ask / complete--  jobs.py (Claude)
+
+HELPER (what the /test-report command runs; it talks to the server over 127.0.0.1):
+
+    jobs.py wait [--secs 540]            block until the browser submits; claim it; print JSON
+                                         exit 7 = nothing submitted yet, run it again
+    jobs.py start <stage> "<status>"     a stage has begun (spinner; percent unchanged)
+    jobs.py done  <stage> "<status>"     a stage is complete (percent from the stage table)
+    jobs.py log [--level info|warn|error] "<message>"
+    jobs.py fail --stage <stage> --message "<why>" [--retryable]
+    jobs.py complete                     verify and register the deliverables; finish
+    jobs.py status                       print the job as the browser sees it
+
+Every helper call reports the cancel flag: exit 6 means the user cancelled - stop at once.
+
+STATE. One job at a time. A job lives on disk, written atomically, in a hidden folder inside
+the report folder it builds (`<report>/.jti-build/job.json`), so a browser refresh or a
+server restart loses nothing. The server's own state - the worker token and an index of job
+folders - is in `<workspace root>/.jti-builder/` (mode 0700). Nothing goes in ~/Downloads.
+
+PERCENT is never timed. It is the table value of the highest stage reported DONE, so it only
+moves when work finishes, and it never goes down.
+"""
+import hashlib
+import hmac
+import json
+import os
+import pathlib
+import secrets
+import sys
+import threading
+import time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+
+# key, percent when DONE, label shown in the checklist
+STAGES = [
+    ("submitted", 0, "Submitted"),
+    ("validated", 5, "Specification validated"),
+    ("destination", 12, "Destination and SDK checked"),
+    ("requirements", 22, "Requirements and field sources resolved"),
+    ("plan", 35, "Rule and build plan prepared"),
+    ("scaffold", 45, "Report scaffolded"),
+    ("fixtures", 55, "Fixtures prepared"),
+    ("contract", 62, "Contract check passed"),
+    ("rule", 72, "Rule execution passed"),
+    ("render", 84, "Rendered"),
+    ("truncation", 90, "Truncation check passed"),
+    ("package", 93, "Rule package written"),
+    ("review", 96, "Every rendered page looked at"),
+    ("documentation", 98, "Documentation written"),
+    ("complete", 100, "Complete"),
+]
+PERCENT = {k: p for k, p, _ in STAGES}
+LABEL = {k: l for k, _, l in STAGES}
+TERMINAL = ("complete", "failed", "cancelled", "timed_out")
+LEVELS = ("info", "warn", "error")
+MAX_STATUS = 300            # characters of a status line or log message kept
+MAX_EVENTS = 2000
+
+EXIT_CANCELLED, EXIT_TIMEOUT, EXIT_NOJOB = 6, 5, 7
+
+
+# ── files ─────────────────────────────────────────────────────────────────────────────
+def atomic_write(path, data, mode=0o600):
+    """Write whole-or-nothing: a reader never sees half a job, even mid-crash."""
+    path = pathlib.Path(path)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+    with os.fdopen(fd, "w", encoding="utf8") as f:
+        f.write(data)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
+def state_dir(root=None):
+    import project as P
+    d = pathlib.Path(root or P.ROOT) / ".jti-builder"
+    d.mkdir(mode=0o700, exist_ok=True)
+    os.chmod(d, 0o700)
+    return d
+
+
+def digest(tok):
+    return hashlib.sha256(tok.encode()).hexdigest()
+
+
+def same(a, b):
+    return bool(a) and bool(b) and hmac.compare_digest(str(a), str(b))
+
+
+def clip(s, n=MAX_STATUS):
+    s = str(s if s is not None else "")
+    return s if len(s) <= n else s[:n - 1] + "…"
+
+
+# ── the store (server side) ──────────────────────────────────────────────────────────
+class Store:
+    """All job state. Every mutation happens under one lock, is written to disk before the
+    lock is released, and wakes every waiter (worker long-polls, browser streams)."""
+
+    def __init__(self, root=None):
+        self.dir = state_dir(root)
+        self.lock = threading.RLock()
+        self.changed = threading.Condition(self.lock)
+        self.jobs = {}                               # id -> job (cache of what is on disk)
+        srv = self._read(self.dir / "server.json") or {}
+        self.worker_token = srv.get("worker_token") or secrets.token_urlsafe(32)
+        self.session_token = secrets.token_urlsafe(32)   # new every start; the page fetches it
+        self.index = self._read(self.dir / "index.json") or {}
+        self.claim_waiters = 0
+
+    @staticmethod
+    def _read(p):
+        try:
+            return json.loads(pathlib.Path(p).read_text())
+        except (OSError, ValueError):
+            return None
+
+    def publish(self, port):
+        atomic_write(self.dir / "server.json", json.dumps(
+            {"port": port, "pid": os.getpid(), "worker_token": self.worker_token,
+             "started": time.time()}, indent=2))
+
+    # -- load / save
+    def job_file(self, folder):
+        return pathlib.Path(folder) / ".jti-build" / "job.json"
+
+    def get(self, jid):
+        with self.lock:
+            if jid in self.jobs:
+                return self.jobs[jid]
+            folder = self.index.get(jid)
+            if not folder:
+                return None
+            j = self._read(self.job_file(folder))
+            if j and j.get("id") == jid:
+                self.jobs[jid] = j
+            return j
+
+    def save(self, j):
+        with self.lock:
+            j["updated"] = time.time()
+            bd = pathlib.Path(j["report"]["folder"]) / ".jti-build"
+            if bd.is_symlink():
+                raise OSError(f"{bd} is a symlink - refusing to write through it")
+            bd.mkdir(mode=0o700, exist_ok=True)
+            atomic_write(bd / "job.json", json.dumps(j, indent=1))
+            self.jobs[j["id"]] = j
+            self.changed.notify_all()
+
+    def active(self):
+        """The one job that is not finished, if any."""
+        with self.lock:
+            for jid in list(self.index):
+                j = self.get(jid)
+                if j and j["status"] not in TERMINAL:
+                    return j
+        return None
+
+    # -- events
+    def event(self, j, kind, stage=None, status=None, level="info", **extra):
+        ev = {"seq": len(j["events"]) + 1, "ts": round(time.time(), 3), "kind": kind,
+              "stage": stage or j.get("stage"), "percent": j["percent"],
+              "status": clip(status if status is not None else j.get("status_text", "")),
+              "level": level if level in LEVELS else "info"}
+        ev.update(extra)
+        j["events"].append(ev)
+        if len(j["events"]) > MAX_EVENTS:                    # keep numbering, drop the middle
+            j["events"] = j["events"][:50] + j["events"][-(MAX_EVENTS - 50):]
+        return ev
+
+    def log(self, j, text):
+        p = pathlib.Path(j["report"]["folder"]) / ".jti-build" / "log.txt"
+        with open(p, "a", encoding="utf8") as f:
+            for line in str(text).splitlines() or [""]:
+                f.write(time.strftime("%H:%M:%S ") + line + "\n")
+
+    def log_tail(self, j, n=200):
+        p = pathlib.Path(j["report"]["folder"]) / ".jti-build" / "log.txt"
+        try:
+            return p.read_text(encoding="utf8", errors="replace").splitlines()[-n:]
+        except OSError:
+            return []
+
+    # -- lifecycle
+    def create(self, report, spec_rel, pre_existing):
+        tok = secrets.token_urlsafe(24)
+        jid = secrets.token_hex(8)
+        now = time.time()
+        j = {"id": jid, "token_sha256": digest(tok), "created": now, "updated": now,
+             "status": "submitted", "stage": "submitted", "running": False,
+             "status_text": "Waiting for Claude to pick this up", "percent": 0,
+             "done": ["submitted"], "events": [], "report": report, "spec": spec_rel,
+             "pre_existing": pre_existing, "question": None, "answers": {},
+             "cancel_requested": False, "child": None, "failure": None, "gates": None,
+             "artifacts": [], "partial": [], "worker_seen": None, "claimed": None}
+        with self.lock:
+            self.event(j, "submitted", "submitted", j["status_text"])
+            self.index[jid] = report["folder"]
+            atomic_write(self.dir / "index.json", json.dumps(self.index, indent=1))
+            self.save(j)
+        return j, tok
+
+    def claim(self, secs):
+        """Long-poll for a submitted job; claim the oldest one."""
+        deadline = time.monotonic() + secs
+        with self.lock:
+            self.claim_waiters += 1
+            try:
+                while True:
+                    j = self.active()
+                    if j and j["status"] == "submitted":
+                        j["status"], j["claimed"] = "running", time.time()
+                        j["worker_seen"] = time.time()
+                        j["status_text"] = "Claude has picked this up"
+                        self.event(j, "claimed", "submitted", j["status_text"])
+                        self.save(j)
+                        return j
+                    left = deadline - time.monotonic()
+                    if left <= 0:
+                        return None
+                    self.changed.wait(timeout=min(left, 1.0))
+            finally:
+                self.claim_waiters -= 1
+
+    def worker_job(self):
+        """The job the worker is on: the active, claimed one."""
+        j = self.active()
+        return j if j and j["status"] != "submitted" else None
+
+    def start(self, j, stage, status):
+        j["stage"], j["running"] = stage, True
+        j["status_text"] = clip(status or LABEL.get(stage, stage))
+        self.event(j, "start", stage, j["status_text"])
+
+    def done(self, j, stage, status, level="info"):
+        if stage in PERCENT:
+            j["percent"] = max(j["percent"], PERCENT[stage])     # monotonic, never timed
+            if stage not in j["done"]:
+                j["done"].append(stage)
+        j["stage"], j["running"] = stage, False
+        j["status_text"] = clip(status or LABEL.get(stage, stage))
+        self.event(j, "done", stage, j["status_text"], level)
+
+    def fail(self, j, stage, message, excerpt="", retryable=False, attempts=0):
+        j["status"], j["running"] = "failed", False
+        j["failure"] = {"stage": stage, "label": LABEL.get(stage, stage),
+                        "message": clip(message, 1000), "excerpt": clip(excerpt, 6000),
+                        "retryable": bool(retryable), "auto_attempts": int(attempts or 0)}
+        j["status_text"] = f"Failed at: {LABEL.get(stage, stage)}"
+        j["partial"] = self.created_files(j)
+        self.event(j, "failed", stage, clip(message), "error")
+
+    def created_files(self, j):
+        """Files in the report folder that were not there when the job was submitted."""
+        folder = pathlib.Path(j["report"]["folder"])
+        pre = set(j.get("pre_existing") or [])
+        out = []
+        try:
+            for p in sorted(folder.rglob("*")):
+                rel = str(p.relative_to(folder))
+                if rel.startswith(".jti-build") or not p.is_file() or rel in pre:
+                    continue
+                out.append(rel)
+        except OSError:
+            pass
+        return out[:500]
+
+    def public(self, j):
+        """The job as the browser may see it: no token hash, plus the live facts."""
+        d = {k: v for k, v in j.items() if k != "token_sha256"}
+        d["worker_waiting"] = self.claim_waiters > 0
+        d["worker_seen_ago"] = (round(time.time() - j["worker_seen"])
+                                if j.get("worker_seen") else None)
+        d["log_tail"] = self.log_tail(j)
+        return d
+
+
+# ── the helper (worker side) ─────────────────────────────────────────────────────────
+def _server():
+    s = Store._read(state_dir() / "server.json")
+    if not s:
+        sys.exit("  no builder server state - start it: serve_builder.py --jobs")
+    return s
+
+
+def call(path, body=None, timeout=60):
+    import urllib.request
+    import urllib.error
+    s = _server()
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{s['port']}{path}", data=json.dumps(body or {}).encode(),
+        headers={"Content-Type": "application/json", "X-JTI-Worker": s["worker_token"]},
+        method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        try:
+            return {"ok": False, "code": e.code, **json.loads(e.read() or b"{}")}
+        except ValueError:
+            return {"ok": False, "code": e.code, "message": str(e)}
+    except (urllib.error.URLError, OSError) as e:
+        sys.exit(f"  the builder server is not reachable on port {s['port']}: {e}")
+
+
+def _checked(r):
+    """Every reply says whether the user cancelled. Exit 6 at once if so."""
+    if r.get("cancel"):
+        print("CANCELLED - the user cancelled this build in the browser. Stop now; do not "
+              "start another step.")
+        sys.exit(EXIT_CANCELLED)
+    if not r.get("ok", True):
+        print(f"  refused: {r.get('message') or r}")
+        sys.exit(1)
+    return r
+
+
+def main(argv):
+    import argparse
+    ap = argparse.ArgumentParser(prog="jobs.py", add_help=True)
+    sub = ap.add_subparsers(dest="cmd")
+    w = sub.add_parser("wait"); w.add_argument("--secs", type=int, default=540)
+    for name in ("start", "done"):
+        x = sub.add_parser(name); x.add_argument("stage"); x.add_argument("status", nargs="?", default="")
+    lg = sub.add_parser("log"); lg.add_argument("message")
+    lg.add_argument("--level", default="info", choices=LEVELS)
+    f = sub.add_parser("fail"); f.add_argument("--stage", required=True)
+    f.add_argument("--message", required=True); f.add_argument("--retryable", action="store_true")
+    f.add_argument("--attempts", type=int, default=0)
+    sub.add_parser("complete"); sub.add_parser("status")
+    a = ap.parse_args(argv)
+
+    if a.cmd == "wait":
+        deadline = time.monotonic() + a.secs
+        while True:
+            left = int(deadline - time.monotonic())
+            if left <= 0:
+                print("NO JOB YET - nothing was submitted. Run `jobs.py wait` again.")
+                return EXIT_NOJOB
+            r = call("/api/worker/claim", {"secs": min(left, 50)}, timeout=70)
+            if r.get("job"):
+                print(json.dumps(r["job"], indent=2))
+                return 0
+    if a.cmd in ("start", "done"):
+        if a.stage not in PERCENT:
+            print(f"  unknown stage {a.stage!r}; stages: {', '.join(PERCENT)}")
+            return 2
+        _checked(call(f"/api/worker/{a.cmd}", {"stage": a.stage, "status": a.status}))
+        return 0
+    if a.cmd == "log":
+        _checked(call("/api/worker/log", {"message": a.message, "level": a.level}))
+        return 0
+    if a.cmd == "fail":
+        _checked(call("/api/worker/fail", {"stage": a.stage, "message": a.message,
+                                           "retryable": a.retryable, "attempts": a.attempts}))
+        print(f"  job marked FAILED at {a.stage}")
+        return 0
+    if a.cmd == "complete":
+        r = _checked(call("/api/worker/complete"))
+        print(f"  job COMPLETE - {len(r.get('artifacts') or [])} deliverable(s) registered")
+        return 0
+    if a.cmd == "status":
+        print(json.dumps(_checked(call("/api/worker/status")).get("job"), indent=2))
+        return 0
+    ap.print_help()
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

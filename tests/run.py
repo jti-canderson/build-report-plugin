@@ -71,6 +71,7 @@ JRS = os.environ.get("JRS") or next(
 results = []
 
 sys.path.insert(0, os.path.join(PLUGIN, "scripts"))
+sys.path.insert(0, HERE)
 import build_mode  # noqa: E402
 SWITCHES = build_mode.resolve()[0]
 
@@ -861,6 +862,12 @@ print("RESOLVE", same, wrong, refused, typo)
         skip("formexport --spec on a non-folder-view export", "no RULE-*.zip on hand")
 
     tier("core")
+    # ---- /test-report: the browser-contained build (job coordinator + helper) --------
+    import jobs_tests
+    jobs_tests.run(check, skip, {"plugin": PLUGIN, "ws": ws, "jrs": JRS, "fix": FIX,
+                                 "build_good": build_good, "rule": rule, "fixture": fixture,
+                                 "edit": edit})
+
     # ---- the ones that need a JVM ---------------------------------------------
     if not JRS:
         for n in ("a rule that does not compile is rejected",

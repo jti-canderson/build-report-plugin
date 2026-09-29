@@ -364,12 +364,13 @@ def browse(rel):
             "quick": [{"name": n, "path": str(d)} for n, d in shortcuts()]}
 
 
-def write_spec(payload):
-    """Validate, then write spec.json inside the chosen project. Returns (ok, message)."""
+def destination(payload):
+    """(the chosen destination folder, error). The folder must already EXIST: browsing to a
+    place is a grant to write a report there, not to create directory trees anywhere."""
     name = (payload.get("name") or "").strip()
     if not NAME_OK.match(name):
-        return False, ("Report name must start with a letter and use only letters, digits "
-                       "and underscores - it becomes the .jrxml and rule file names.")
+        return None, ("Report name must start with a letter and use only letters, digits "
+                      "and underscores - it becomes the .jrxml and rule file names.")
     proj = (payload.get("project") or "").strip()
     if proj in ("", "."):
         folder = P.ROOT
@@ -377,11 +378,24 @@ def write_spec(payload):
         cand = pathlib.Path(proj).expanduser() if proj.startswith(("/", "~")) \
             else P.ROOT / proj
         folder = cand.resolve() if cand.is_dir() else None
-    # The folder must already EXIST. Browsing to a place is a grant to write a report
-    # there; it is not a grant to create arbitrary directory trees anywhere on the disk.
     if folder is None:
-        return False, (f"{proj!r} is not a folder that exists. Browse to it, or create it "
-                       f"first.")
+        return None, (f"{proj!r} is not a folder that exists. Browse to it, or create it "
+                      f"first.")
+    return folder, None
+
+
+def report_folder(payload):
+    """(destination/<name>, error) - where the report will be built. Nothing is created."""
+    folder, err = destination(payload)
+    return (None, err) if err else (folder / payload["name"].strip(), None)
+
+
+def write_spec(payload):
+    """Validate, then write spec.json inside the chosen project. Returns (ok, message)."""
+    folder, err = destination(payload)
+    if err:
+        return False, err
+    name = payload["name"].strip()
     look = None
     if payload.get("look"):
         with LOOK_LOCK:
@@ -433,14 +447,40 @@ def write_spec(payload):
     return True, rel
 
 
+# --jobs mode (/test-report only). None in the default mode, which /build-report uses and
+# which behaves exactly as it did before jobs existed.
+JOBS = None
+PORT = [8787]
+
+
 class Handler(http.server.SimpleHTTPRequestHandler):
-    def _send(self, code, body, ctype="application/json"):
+    def _send(self, code, body, ctype="application/json", headers=None):
         b = body if isinstance(body, bytes) else body.encode("utf8")
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(b)))
+        for k, v in (headers or {}).items():
+            self.send_header(k, v)
+        if JOBS:
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(b)
+
+    def _jobs_guard(self, method):
+        """--jobs mode only. The server coordinates executable work, so being on 127.0.0.1
+        is not enough: a web page elsewhere can still make the browser send requests here.
+        The Host header must name this server (stops DNS rebinding), a POST from another
+        origin is refused, and tokens are checked by the routes themselves."""
+        ok_hosts = {f"127.0.0.1:{PORT[0]}", f"localhost:{PORT[0]}"}
+        if (self.headers.get("Host") or "") not in ok_hosts:
+            self._send(421, json.dumps({"ok": False, "message": "wrong Host header"}))
+            return False
+        origin = self.headers.get("Origin")
+        if method == "POST" and origin and origin not in {"http://" + h for h in ok_hosts}:
+            self._send(403, json.dumps({"ok": False, "message": "cross-origin request refused"}))
+            return False
+        return True
 
     def _peer_gone(self):
         """Has the client hung up? A closed peer reads as ready-with-nothing.
@@ -460,6 +500,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def do_GET(self):
         path = urllib.parse.urlparse(self.path).path
+        if JOBS:
+            if not self._jobs_guard("GET"):
+                return
+            if JOBS.handle(self, "GET"):
+                return
+            if path == "/api/wait":            # the /build-report hand-over does not exist here
+                return self._send(404, b"not found", "text/plain")
         if path in ("/", "/index.html"):
             with open(os.path.join(HERE, "builder.html"), "rb") as f:
                 return self._send(200, f.read(), "text/html; charset=utf-8")
@@ -524,15 +571,26 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if path == "/api/browse":
             q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             return self._send(200, json.dumps(browse((q.get("path") or [""])[0])))
+        if path == "/api/watching" and JOBS:
+            return self._send(200, json.dumps({"watching": JOBS.s.claim_waiters > 0}))
         if path == "/api/watching":
             # Cheap enough to poll: whether Claude is parked on /api/wait right now. The
             # page shows this BEFORE the button is clicked - finding out afterwards, from a
             # result box, is finding out too late to do anything about it.
             return self._send(200, json.dumps({"watching": WAITERS[0] > 0}))
         if path == "/api/bootstrap":
-            return self._send(200, json.dumps({
-                "root": str(P.ROOT), "rootWhy": P.ROOT_WHY, "version": version_note(),
-                "projects": projects(), "templates": templates()}))
+            boot = {"root": str(P.ROOT), "rootWhy": P.ROOT_WHY, "version": version_note(),
+                    "projects": projects(), "templates": templates()}
+            if JOBS:
+                # Readable only by a page served from this origin (no CORS headers are ever
+                # sent), so a page elsewhere cannot learn the session token.
+                import jobs as J
+                act = JOBS.s.active()
+                boot["jobs"] = {"session": JOBS.s.session_token,
+                                "stages": [{"key": k, "percent": p, "label": l}
+                                           for k, p, l in J.STAGES],
+                                "active": {"name": act["report"]["name"]} if act else None}
+            return self._send(200, json.dumps(boot))
         if path.startswith("/preview/"):
             fn = os.path.basename(path)
             full = os.path.join(PREVIEW, fn)
@@ -546,6 +604,18 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def do_POST(self):
         route = urllib.parse.urlparse(self.path)
+        if JOBS:
+            if not self._jobs_guard("POST"):
+                return
+            if JOBS.handle(self, "POST"):
+                return
+            if route.path == "/api/spec":      # jobs mode submits through /api/jobs only
+                return self._send(404, b"not found", "text/plain")
+            import jobs_http as JH
+            try:
+                JOBS.need_session(self)
+            except JH.Refuse as e:
+                return self._send(e.code, json.dumps({"ok": False, "message": e.message}))
         if route.path == "/api/formexport":
             n = int(self.headers.get("Content-Length") or 0)
             if n > 40 * 1024 * 1024:
@@ -579,26 +649,42 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
 def main():
     ap = argparse.ArgumentParser(add_help=False)
-    ap.add_argument("--port", type=int, default=8787)
+    ap.add_argument("--port", type=int, default=None)
     ap.add_argument("--no-open", action="store_true")
+    ap.add_argument("--jobs", action="store_true",
+                    help="job coordinator for /test-report (default port 8788)")
     ap.add_argument("-h", "--help", action="store_true")
     a = ap.parse_args()
     if a.help:
         print(__doc__)
         sys.exit(0)
+    a.port = a.port or (8788 if a.jobs else 8787)
+    PORT[0] = a.port
 
     # If the port is taken, find out by WHOM before shouting about it. A second
     # `/build-report` should say "it is already open at this URL", not fail with
     # EADDRINUSE and leave someone wondering which of the two is real.
     import urllib.request
     try:
-        with urllib.request.urlopen(f"http://127.0.0.1:{a.port}/api/bootstrap", timeout=1):
-            print(f"  report builder ALREADY RUNNING at http://127.0.0.1:{a.port}/")
-            if not a.no_open:
-                webbrowser.open(f"http://127.0.0.1:{a.port}/")
-            sys.exit(0)
+        with urllib.request.urlopen(f"http://127.0.0.1:{a.port}/api/bootstrap", timeout=1) as r:
+            running_jobs = "jobs" in json.loads(r.read() or b"{}")
+        if running_jobs != a.jobs:
+            print(f"  port {a.port} is already serving a builder in the OTHER mode - "
+                  f"pass --port to use a different one")
+            sys.exit(3)
+        print(f"  report builder ALREADY RUNNING at http://127.0.0.1:{a.port}/")
+        if not a.no_open:
+            webbrowser.open(f"http://127.0.0.1:{a.port}/")
+        sys.exit(0)
+    except SystemExit:
+        raise
     except Exception:
         pass
+    global JOBS
+    if a.jobs:
+        import jobs as J
+        import jobs_http as JH
+        JOBS = JH.Routes(J.Store(), sys.modules[__name__])
 
     # THREADED, not the plain TCPServer this used until 09/18. /api/wait blocks for minutes
     # by design, and on a single-threaded server that blocked the form too - the Write button
@@ -611,6 +697,9 @@ def main():
     # from the network.
     with Server(("127.0.0.1", a.port), Handler) as httpd:
         url = f"http://127.0.0.1:{a.port}/"
+        if JOBS:
+            JOBS.s.publish(a.port)
+            print(f"  JOB MODE (/test-report) - state in {JOBS.s.dir}")
         print(f"  report builder  {url}")
         print(f"  workspace       {P.ROOT}   ({P.ROOT_WHY})")
         print(f"  {len(projects())} project(s), {len(templates())} template(s)")
