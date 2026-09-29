@@ -261,7 +261,7 @@ def _detail(subrows=False):
                             # first column is the row's link on the screen
                             color=LINK if i == 0 else S.INK,
                             pad=2, valign="Top", stretch=True, align=c["align"],
-                            grow=True, when=when))
+                            grow=True, when=when, markup=MARKUP.get(c["field"])))
     if subrows:
         # One indented, full-width, wrapping line. Two depths, gated separately rather
         # than computed, because a printWhenExpression cannot set geometry - only
@@ -286,12 +286,19 @@ def _detail(subrows=False):
 </detail>"""
 
 
+MARKUP = {}
+
+
 def build(sections=None, banners=None, header_cols=None, name=None, params=(),
-          meta=None, tiles=None, subrows=False):
+          meta=None, tiles=None, subrows=False, markup=None):
     """`meta` and `tiles` are accepted and ignored, so this template is a drop-in for
     the others in scaffold.py and the catalog. This layout has no metadata strip and no
     stat tiles - the header block does that job."""
-    global SECTIONS, BANNERS, HEADER_COLS
+    global SECTIONS, BANNERS, HEADER_COLS, MARKUP
+    # `markup`: {field: "styled"} for cells whose value carries Jasper styled text (bold
+    # labels). The rule must then ESCAPE the plain text in that value - see
+    # jasper-reports' HTML-valued calculated fields note. Default: plain text, as before.
+    MARKUP = dict(markup or {})
     SECTIONS = sections or SECTIONS
     BANNERS = banners or BANNERS
     HEADER_COLS = header_cols or HEADER_COLS

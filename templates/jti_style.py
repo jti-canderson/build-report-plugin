@@ -108,14 +108,15 @@ def text(x, y, w, h, expr, *, style=None, align="Left", valign="Middle",
         a.append(f'evaluationTime="{eval_time}"')
     if eval_group:
         a.append(f'evaluationGroup="{eval_group}"')
-    if markup:
-        a.append(f'markup="{markup}"')
     if stretch:
         a.append('textAdjust="StretchHeight"')
+    # `markup` ("styled", "html") belongs on <textElement>; on <textField> the schema rejects
+    # it and the report does not compile (found 09/29, the first time it was used).
+    mk = f' markup="{markup}"' if markup else ""
     return f"""<textField {" ".join(a)}>
 {_re(x, y, w, h, style=style, when=when, forecolor=color,
      stretch_type="RelativeToTallestObject" if (grow or stretch) else None)}
-{_box(pad)}<textElement textAlignment="{align}" verticalAlignment="{valign}">
+{_box(pad)}<textElement textAlignment="{align}" verticalAlignment="{valign}"{mk}>
 {_font(size, bold, font)}</textElement>
 <textFieldExpression><![CDATA[{expr}]]></textFieldExpression>
 </textField>"""

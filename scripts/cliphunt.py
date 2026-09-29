@@ -29,10 +29,18 @@ except ImportError:
     sys.exit("PyMuPDF not available: python3 -m pip install pymupdf")
 
 NORM = re.compile(r"\s+")
+# Jasper "styled" markup (markup="styled" cells: bold labels) is not on the page as text;
+# compare against what IS printed, or every styled value reads as truncated.
+STYLED = re.compile(r"</?style\b[^>]*>")
 
 
 def norm(s):
     return NORM.sub(" ", s).strip()
+
+
+def visible(s):
+    s = STYLED.sub("", s)
+    return s.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", '"').replace("&amp;", "&")
 
 
 def main():
@@ -49,7 +57,7 @@ def main():
         lines = [l for l in open(t, encoding="utf8").read().splitlines() if l.strip()]
         for line in lines[1:]:
             for v in line.split("\t"):
-                v = norm(v.replace("\\n", " "))
+                v = norm(visible(v.replace("\\n", " ")))
                 # Short values cannot be told apart from coincidence, and a value that is
                 # a prefix of another cell's text would false-positive constantly.
                 if len(v) >= 8:
