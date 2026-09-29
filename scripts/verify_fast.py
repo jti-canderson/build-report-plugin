@@ -86,7 +86,20 @@ def done(rc):
     sys.exit(rc)
 
 
+JEV = [None]                 # the gate running now, for the job wrapper's events
+
+
+def jev(kind, gate, msg=""):
+    """Structured stage events for jobs.py run --gates. Silent unless JTI_JOB_STAGES is set,
+    so the output every other caller sees is unchanged."""
+    if os.environ.get("JTI_JOB_STAGES"):
+        print(f"JTI-GATE {kind} {gate}" + (f" {msg}" if msg else ""), flush=True)
+    if kind == "started":
+        JEV[0] = gate
+
+
 def fail(gate, why):
+    jev("failed", JEV[0] or "regenerate", why)
     print()
     print(f"  GATE {gate} FAILED - {why}")
     print("  Fix it and re-run finish.sh. Later gates were not run.")
@@ -181,6 +194,7 @@ def main():
 
     # ---- 0. regenerate -----------------------------------------------------------------
     mark("regenerate")
+    jev("started", "regenerate")
     if os.path.isfile("gen_jrxml.py"):
         header("0/4  regenerate")
         if run([sys.executable, "gen_jrxml.py"]).returncode != 0:
@@ -188,13 +202,17 @@ def main():
         print()
 
     # ---- 1. contract -------------------------------------------------------------------
+    jev("passed", "regenerate")
     mark("contract")
+    jev("started", "contract")
     header("1/4  contract")
     if run([sys.executable, os.path.join(TPL, "contract_check.py"), rule, jrxml]).returncode != 0:
         fail(1, "the rule and the layout disagree")
+    jev("passed", "contract")
 
     # ---- render inputs: the TSVs run.sh wrote before its JVM ----------------------------
     mark("fixtures")
+    JEV[0] = "render"            # the render's inputs: a failure here is a render failure
     for p in glob.glob(os.path.join("verification", "fixture_*.tsv")):
         os.remove(p)
     vargs = []
@@ -209,6 +227,9 @@ def main():
 
     # ---- 1.5 + 2. rule executes, then render: ONE JVM ----------------------------------
     mark("jvm")
+    # ONE JVM runs the rule and then the render, so both finish together: the events say so
+    # rather than pretending the split was observed live.
+    jev("started", "rule", "rule and render in one JVM")
     header("1.5/4  rule executes")
     fx = os.path.join("verification", "Fixture.groovy")
     rule_not_run = not os.path.isfile(fx)
@@ -263,6 +284,10 @@ def main():
         fail(1.5, "the rule did not execute cleanly")
     if not rule_not_run:
         print("\n".join(rule_lines))
+    else:
+        jev("warn", "rule", "the rule was not executed - no verification/Fixture.groovy")
+    jev("passed", "rule")
+    jev("started", "render")
     print()
     mark("raster")
     header("2/4  render")
@@ -279,10 +304,12 @@ def main():
             if rc != 0:
                 fail(2, f"could not rasterise {pdf} for inspection")
     print("output in verification/")
+    jev("passed", "render")
 
     # ---- 3. truncation -----------------------------------------------------------------
     print()
     mark("truncation")
+    jev("started", "truncation")
     header("3/4  truncation")
     clip = False
     for pdf in pdfs:
@@ -296,17 +323,21 @@ def main():
                 "abbreviated form")
     if not os.path.isfile(os.path.join("verification", "fixture_full.tsv")):
         print("  (no per-variant fixtures - skipped)")
+    jev("passed", "truncation")
 
     # ---- 4. package --------------------------------------------------------------------
     print()
     mark("package")
+    jev("started", "package")
     header("4/4  rule zip")
     if run([sys.executable, os.path.join(HERE, "rule_zip.py"), rule, jrxml, *extra]).returncode != 0:
         fail(4, "contract fault - no zip written")
+    jev("passed", "package")
 
     # ---- verdict -----------------------------------------------------------------------
     print()
     mark("verdict")
+    jev("started", "verdict")
     header("verdict")
     ok = True
     for f in [rule, jrxml] + (glob.glob("RULE-*.zip") or ["RULE-*.zip"]) + \
@@ -325,6 +356,7 @@ def main():
     print()
     print("  All gates passed. Fill the NOTES blocks, then hand over the zip.")
     print("  IMPORTING IS A WRITE - the user imports it, not you.")
+    jev("passed", "verdict")
     done(0)
 
 

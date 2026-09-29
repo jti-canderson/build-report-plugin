@@ -24,6 +24,9 @@ const uid = (() => { let n = 0; return () => ++n; })();
 const newCol = () => ({ id: uid(), header: '', width: 20, align: 'Left', field: '' });
 const newSection = () => ({ id: uid(), key: '', title: '', cols: [newCol(), newCol()] });
 const newParam = () => ({ id: uid(), name: '', type: TYPES[0][0] });
+// --jobs mode (/test-report) only: its session token on every upload. Empty in the default
+// mode, so those requests are exactly what they always were.
+const SESSION = { h: {} };
 
 /* ---------------------------------------------------------------- folder browser */
 function FolderBrowser({ onPick, onClose }) {
@@ -183,6 +186,7 @@ function App() {
   const [look, setLook] = useState(null);
   const [lookErr, setLookErr] = useState('');
   const [watching, setWatching] = useState(null);
+  const [job, setJob] = useState(null);           // --jobs mode: the build being followed
 
   // A folder-view export answers the sections, the columns and the root entity outright -
   // they are the panels of a screen someone already designed. Retyping them by hand is
@@ -214,7 +218,7 @@ function App() {
     setImpErr(''); setImported(null);
     file.arrayBuffer().then(buf =>
       fetch('/api/formexport?name=' + encodeURIComponent(file.name),
-            { method: 'POST', body: buf })
+            { method: 'POST', body: buf, headers: SESSION.h })
         .then(r => r.json())
         .then(d => {
           if (!d.ok) return setImpErr(d.message);
@@ -231,7 +235,8 @@ function App() {
     if (!file) return;
     setLookErr(''); setLook(null);
     file.arrayBuffer().then(buf =>
-      fetch('/api/look?name=' + encodeURIComponent(file.name), { method: 'POST', body: buf })
+      fetch('/api/look?name=' + encodeURIComponent(file.name),
+            { method: 'POST', body: buf, headers: SESSION.h })
         .then(r => r.json())
         .then(d => (d.ok ? setLook(d) : setLookErr(d.message))));
     e.target.value = '';
@@ -241,6 +246,11 @@ function App() {
     fetch('/api/bootstrap').then(r => r.json()).then(d => {
       setBoot(d);
       if (d.projects.length) setProject(d.projects[0].name);
+      if (d.jobs && window.JTIBuild) {
+        SESSION.h = { 'X-JTI-Session': d.jobs.session };
+        const j = window.JTIBuild.recall();       // a refresh comes back to its build
+        if (j) setJob(j);
+      }
     });
   }, []);
 
@@ -271,10 +281,12 @@ function App() {
   const hasBrief = intent.trim().length > 0;
   const needsSay = tpl && tpl !== PICTURE && realCols === 0 && !hasBrief;
 
+  const jobsMode = !!(boot.jobs && window.JTIBuild);
   const submit = () => {
     setBusy(true); setRes(null);
-    fetch('/api/spec', {
+    fetch(jobsMode ? '/api/jobs' : '/api/spec', {
       method: 'POST',
+      headers: jobsMode ? { 'Content-Type': 'application/json', ...SESSION.h } : undefined,
       body: JSON.stringify({
         project, name: name.trim(), title: title.trim(), intent: intent.trim(),
         template: tpl === PICTURE ? '' : tpl,
@@ -289,8 +301,25 @@ function App() {
         })).filter(s => s.cols.length),
         params: params.filter(p => p.name.trim()).map(p => [p.name.trim(), p.type]),
       }),
-    }).then(r => r.json()).then(d => { setBusy(false); setRes(d); });
+    }).then(r => r.json()).then(d => {
+      setBusy(false);
+      if (jobsMode && d.ok) {
+        const j = { id: d.job, token: d.token };
+        window.JTIBuild.remember(j); setJob(j); window.scrollTo(0, 0);
+      } else setRes(d);
+    });
   };
+  const another = () => { window.JTIBuild.remember(null); setJob(null); setRes(null); setName(''); };
+
+  if (jobsMode && job) return html`
+    <${React.Fragment}>
+      <header>
+        <h1>JTI Report Builder — test build</h1>
+        <div class="root">workspace ${boot.root} — ${boot.rootWhy}</div>
+      </header>
+      <main><${window.JTIBuild.BuildScreen} job=${job} stages=${boot.jobs.stages}
+              onAnother=${another}/></main>
+    <//>`;
 
   return html`
     <${React.Fragment}>
@@ -434,11 +463,16 @@ function App() {
         <div class="foot2">
           <button class="go" disabled=${busy || !tpl || (tpl === PICTURE && !look) || needsSay}
                   onClick=${submit}>
-            ${busy ? 'Writing…' : 'Write spec.json'}</button>
+            ${jobsMode ? (busy ? 'Starting…' : 'Build report')
+                       : (busy ? 'Writing…' : 'Write spec.json')}</button>
           <span class=${'watch' + (watching ? ' on' : '')}>
             ${watching === null ? ''
+              : jobsMode ? (watching ? 'Claude is ready — the build starts as soon as you click'
+                                     : 'Claude is not waiting yet — the build starts when /test-report picks it up')
               : watching ? 'Claude is watching — clicking Write hands it straight over'
                          : 'Claude is not watching — you will get a command to paste'}</span>
+          ${jobsMode && boot.jobs.active && !job && html`<div class="out err">A build is already
+            running (${boot.jobs.active.name}). One build at a time.</div>`}
           ${!tpl && html`<span class="hint ml12">Pick a template first.</span>`}
           ${tpl === PICTURE && !look && html`
             <span class="hint ml12">Attach the picture you want it to look like.</span>`}

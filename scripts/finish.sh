@@ -32,7 +32,11 @@ for f in "$RULE" "$JRXML"; do
   [ -f "$f" ] || { echo "  no such file: $f"; exit 2; }
 done
 
-fail() { echo; echo "  GATE $1 FAILED - $2"; echo "  Fix it and re-run finish.sh. Later gates were not run."; exit 1; }
+# Structured stage events for the /test-report job wrapper (jobs.py run --gates). Silent
+# unless it sets JTI_JOB_STAGES, so every other caller sees exactly the output it always did.
+_jev() { [ -n "${JTI_JOB_STAGES:-}" ] && echo "JTI-GATE $*"; return 0; }
+LASTMARK=""
+fail() { _jev failed "${LASTMARK:-regenerate}" "$2"; echo; echo "  GATE $1 FAILED - $2"; echo "  Fix it and re-run finish.sh. Later gates were not run."; exit 1; }
 
 # ---- performance record: MEASURES ONLY (scripts/perf.py) -------------------------------
 # One timestamp as each stage begins; on exit - pass or fail - one line appended to
@@ -41,7 +45,11 @@ fail() { echo; echo "  GATE $1 FAILED - $2"; echo "  Fix it and re-run finish.sh
 # sub-second clock; `date +%s` is the fallback, at whole-second resolution.
 _now() { /usr/bin/perl -MTime::HiRes -e 'printf "%.3f", Time::HiRes::time()' 2>/dev/null || date +%s; }
 PERF_MARKS="start:$(_now)"
-mark() { PERF_MARKS="$PERF_MARKS $1:$(_now)"; }
+mark() {
+  PERF_MARKS="$PERF_MARKS $1:$(_now)"
+  [ -n "$LASTMARK" ] && _jev passed "$LASTMARK"
+  _jev started "$1"; LASTMARK="$1"
+}
 _perf_exit() {
   rc=$?
   [ "$rc" -eq 0 ] && mark end
@@ -97,6 +105,7 @@ else
   echo "  Scaffold one, or copy the pattern from a recent report. A rule that is never run"
   echo "  can still fail on its first use in eSeries."
   RULE_NOT_RUN=1
+  _jev warn rule "the rule was not executed - no verification/Fixture.groovy"
 fi
 
 echo
@@ -110,6 +119,7 @@ else
   echo "  NO verification/run.sh - layout is UNPROVEN."
   echo "  Copy skills/jasper-reports/assets/run_template.sh and fill its PER-REPORT block."
   RENDER_SKIPPED=1
+  _jev warn render "no verification/run.sh - the layout is unproven"
 fi
 
 echo

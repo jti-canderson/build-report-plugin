@@ -509,7 +509,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self._send(404, b"not found", "text/plain")
         if path in ("/", "/index.html"):
             with open(os.path.join(HERE, "builder.html"), "rb") as f:
-                return self._send(200, f.read(), "text/html; charset=utf-8")
+                page = f.read()
+            if JOBS:                            # the build screen exists in --jobs mode only
+                page = page.replace(b'<script src="/app.js"></script>',
+                                    b'<script src="/build_ui.js"></script>\n'
+                                    b'<script src="/app.js"></script>')
+            return self._send(200, page, "text/html; charset=utf-8")
+        if path == "/build_ui.js" and JOBS:
+            with open(os.path.join(HERE, "build_ui.js"), "rb") as f:
+                return self._send(200, f.read(), "application/javascript")
         if path.startswith("/vendor/") or path == "/app.js":
             fn = os.path.basename(path)
             base = os.path.join(HERE, "vendor") if path.startswith("/vendor/") else HERE
@@ -652,13 +660,14 @@ def main():
     ap.add_argument("--port", type=int, default=None)
     ap.add_argument("--no-open", action="store_true")
     ap.add_argument("--jobs", action="store_true",
-                    help="job coordinator for /test-report (default port 8788)")
+                    help="job coordinator for /test-report (default port 8789)")
     ap.add_argument("-h", "--help", action="store_true")
     a = ap.parse_args()
     if a.help:
         print(__doc__)
         sys.exit(0)
-    a.port = a.port or (8788 if a.jobs else 8787)
+    # 8789, not 8788: the jti-search builder already uses 8788.
+    a.port = a.port or (8789 if a.jobs else 8787)
     PORT[0] = a.port
 
     # If the port is taken, find out by WHOM before shouting about it. A second
@@ -669,8 +678,8 @@ def main():
         with urllib.request.urlopen(f"http://127.0.0.1:{a.port}/api/bootstrap", timeout=1) as r:
             running_jobs = "jobs" in json.loads(r.read() or b"{}")
         if running_jobs != a.jobs:
-            print(f"  port {a.port} is already serving a builder in the OTHER mode - "
-                  f"pass --port to use a different one")
+            print(f"  port {a.port} is already in use by another server (not this builder "
+                  f"in {'job' if a.jobs else 'default'} mode) - pass --port to use a different one")
             sys.exit(3)
         print(f"  report builder ALREADY RUNNING at http://127.0.0.1:{a.port}/")
         if not a.no_open:

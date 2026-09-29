@@ -98,6 +98,11 @@ def fresh_ws(root, tag):
 
 
 def run(check, skip, ctx):
+    run_phase1(check, skip, ctx)
+    run_phase2(check, skip, ctx)
+
+
+def run_phase1(check, skip, ctx):
     plugin, root = ctx["plugin"], ctx["ws"]
 
     # ---- submit -> claim -> progress -> complete, with honest, ordered progress -------
@@ -192,3 +197,114 @@ def run(check, skip, ctx):
               == hashlib.sha256(g.stdout).hexdigest(), "build-report.md changed")
     else:
         skip("commands/build-report.md is unchanged", "no git history for commit 9bcbe03")
+
+
+# ── phase 2: event transport and gate-driven stages ──────────────────────────────────
+def probe_job(plugin, ctx, srv, ws, name="Probe_Report"):
+    """Submit the known-good probe report as a job, claim it, and do what the worker does
+    before the gates: scaffold, write the rule, give the fixture real rows."""
+    import re
+    good = json.load(open(os.path.join(ctx["fix"], "good_spec.json")))
+    spec = spec_for(name)
+    spec.update({k: good[k] for k in ("sections", "params", "template", "root", "id")})
+    code, d = srv.submit(spec)
+    assert code == 200, d
+    c = helper(plugin, ws, "wait", "--secs", "10")
+    folder = json.loads(c.stdout)["folder"]
+    subprocess.run([sys.executable, os.path.join(plugin, "scripts", "scaffold.py"),
+                    os.path.join(folder, "spec.json"), "--out", folder],
+                   capture_output=True, check=True)
+    shutil.copy(os.path.join(ctx["fix"], "good_rule.groovy"), os.path.join(folder, f"{name}_V1.groovy"))
+    fx = os.path.join(folder, "verification", "fixture.py")
+    t = open(fx).read()
+    t = re.sub(r'ROWS = \[\n.*?\n\]', 'ROWS = [\n    ("CF-2026-00184", "Felony"),\n'
+               '    ("CM-2026-01920", "Misdemeanor"),\n]', t, flags=re.S)
+    t = re.sub(r'"(rptSubtitle|rptSlug)": "TODO [^"]*"', lambda m: f'"{m.group(1)}": "probe"', t)
+    open(fx, "w").write(t)
+    return d["job"], d["token"], folder
+
+
+def gates_cmd(plugin, name="Probe_Report"):
+    return [os.path.join(plugin, "scripts", "finish.sh"), f"{name}_V1.groovy", f"{name}.jrxml",
+            "--code", name, "--name", name.replace("_", " ")]
+
+
+def run_gates(plugin, ws, folder, name="Probe_Report", stage="contract"):
+    return subprocess.run([sys.executable, os.path.join(plugin, "scripts", "jobs.py"), "run",
+                           "--stage", stage, "--gates", "--", *gates_cmd(plugin, name)],
+                          cwd=folder, env=dict(os.environ, JTI_PROJECT_ROOT=ws),
+                          capture_output=True, text=True, timeout=300)
+
+
+def sse_first(srv, jid, tok, timeout=10):
+    """Open the event stream, return the first snapshot, hang up."""
+    import http.client
+    c = http.client.HTTPConnection("127.0.0.1", srv.port, timeout=timeout)
+    c.request("GET", f"/api/jobs/{jid}/events?t={tok}")
+    r = c.getresponse()
+    data, ctype = None, r.getheader("Content-Type")
+    while True:
+        line = r.fp.readline().decode()
+        if line.startswith("data: "):
+            data = json.loads(line[6:])
+            break
+        if not line:
+            break
+    c.close()
+    return ctype, data
+
+
+def run_phase2(check, skip, ctx):
+    plugin, root = ctx["plugin"], ctx["ws"]
+    if not ctx["jrs"]:
+        return skip("jobs: gate-driven stages", "no JasperReports install")
+    ws = fresh_ws(root, "gates")
+    srv = Server(plugin, ws).start()
+    try:
+        jid, tok, folder = probe_job(plugin, ctx, srv, ws)
+        ctype, first = sse_first(srv, jid, tok)
+        check("jobs: the event stream is text/event-stream and opens with a full snapshot",
+              ctype == "text/event-stream" and first and first["id"] == jid
+              and first["status"] == "running", ctype)
+        r = run_gates(plugin, ws, folder)
+        j = srv.snap(jid, tok)
+        kinds = [(e["kind"], e["stage"]) for e in j["events"]]
+        done = [e["stage"] for e in j["events"] if e["kind"] == "done"]
+        check("jobs: finish.sh's structured JTI-GATE lines drive the stages, in order, to 93%",
+              r.returncode == 0 and done == ["contract", "rule", "render", "truncation", "package"]
+              and j["percent"] == 93 and ("gates_passed", "package") in kinds
+              and set((j["gates"] or {}).get("files", {})) >= {"Probe_Report_V1.groovy",
+                                                                "Probe_Report.jrxml"},
+              r.stdout[-600:] + json.dumps(kinds))
+        check("jobs: the gates' output reaches the job log, not the event list",
+              any("All gates passed" in ln for ln in j["log_tail"])
+              and not any("All gates passed" in e["status"] for e in j["events"]), j["log_tail"][-5:])
+        # reconnect: a new stream starts from the CURRENT state, not from zero
+        _, again = sse_first(srv, jid, tok)
+        check("jobs: reconnecting to the stream returns the current state (a refresh)",
+              again and again["percent"] == 93 and again["events"] == j["events"], "")
+
+        # a failing gate: reported as a failure of THAT stage, never as progress past it
+        ctx["edit"](os.path.join(folder, "Probe_Report_V1.groovy"), "_data = rows", "data = rows")
+        r = run_gates(plugin, ws, folder)
+        j = srv.snap(jid, tok)
+        gf = [e for e in j["events"] if e["kind"] == "gate_failed"]
+        check("jobs: a failed gate is an error event naming the stage; the earlier pass is void",
+              r.returncode == 1 and gf and gf[-1]["stage"] == "contract" and gf[-1]["level"] == "error"
+              and j["gates"] is None and j["status"] == "running", json.dumps(gf))
+        f = helper(plugin, ws, "fail", "--stage", "contract", "--message",
+                   "the rule and the layout disagree", "--attempts", "1")
+        j = srv.snap(jid, tok)
+        check("jobs: `fail` ends the job as FAILED with the stage, message and a log excerpt",
+              f.returncode == 0 and j["status"] == "failed" and j["failure"]["stage"] == "contract"
+              and "GATE 1 FAILED" in j["failure"]["excerpt"] and j["failure"]["auto_attempts"] == 1,
+              j.get("failure"))
+        ctype, last = sse_first(srv, jid, tok)
+        check("jobs: a finished job's stream sends its final state (and then ends)",
+              last and last["status"] == "failed", "")
+    finally:
+        srv.stop()
+    # without the wrapper the gates print exactly what they always did
+    out = subprocess.run(gates_cmd(plugin), cwd=folder, capture_output=True, text=True).stdout
+    check("jobs: finish.sh prints no JTI-GATE lines unless a job wrapper asks for them",
+          "JTI-GATE" not in out and "GATE 1 FAILED" in out, out[-300:])

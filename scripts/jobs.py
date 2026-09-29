@@ -15,6 +15,11 @@ HELPER (what the /test-report command runs; it talks to the server over 127.0.0.
     jobs.py start <stage> "<status>"     a stage has begun (spinner; percent unchanged)
     jobs.py done  <stage> "<status>"     a stage is complete (percent from the stage table)
     jobs.py log [--level info|warn|error] "<message>"
+    jobs.py run --stage <stage> [--gates] -- <command...>
+                                         run one child process for the job: its output goes
+                                         to the job log; with --gates, finish.sh's structured
+                                         JTI-GATE lines drive the stages, and a pass is
+                                         recorded with the hashes of what was verified
     jobs.py fail --stage <stage> --message "<why>" [--retryable]
     jobs.py complete                     verify and register the deliverables; finish
     jobs.py status                       print the job as the browser sees it
@@ -68,6 +73,11 @@ MAX_STATUS = 300            # characters of a status line or log message kept
 MAX_EVENTS = 2000
 
 EXIT_CANCELLED, EXIT_TIMEOUT, EXIT_NOJOB = 6, 5, 7
+
+# finish.sh / verify_fast.py gate name -> stage in the table. `regenerate` rebuilds the
+# layout for the contract check, so it runs inside the contract stage.
+GATE_STAGE = {"regenerate": "contract", "contract": "contract", "rule": "rule",
+              "render": "render", "truncation": "truncation", "package": "package"}
 
 
 # ── files ─────────────────────────────────────────────────────────────────────────────
@@ -253,6 +263,26 @@ class Store:
         j["status_text"] = clip(status or LABEL.get(stage, stage))
         self.event(j, "done", stage, j["status_text"], level)
 
+    def gate(self, j, kind, gate, message=""):
+        """One structured JTI-GATE line from finish.sh / verify_fast.py."""
+        stage = GATE_STAGE.get(gate)
+        if kind == "started" and stage:
+            if gate == "regenerate":
+                self.start(j, stage, "Regenerating the layout")
+            else:
+                self.start(j, stage, message or f"Checking: {LABEL[stage].lower()}")
+        elif kind == "passed" and stage and gate != "regenerate":
+            self.done(j, stage, LABEL[stage])
+        elif kind == "warn":
+            self.event(j, "warn", stage, clip(message), "warn")
+        elif kind == "failed":
+            j["running"] = False
+            j["status_text"] = clip(f"{LABEL.get(stage, gate)} FAILED - {message}")
+            j.setdefault("gate_failures", []).append(
+                {"stage": stage or gate, "message": clip(message), "ts": time.time()})
+            j["gates"] = None                          # an earlier pass no longer stands
+            self.event(j, "gate_failed", stage or gate, j["status_text"], "error")
+
     def fail(self, j, stage, message, excerpt="", retryable=False, attempts=0):
         j["status"], j["running"] = "failed", False
         j["failure"] = {"stage": stage, "label": LABEL.get(stage, stage),
@@ -327,6 +357,65 @@ def _checked(r):
     return r
 
 
+def sha(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for b in iter(lambda: f.read(1 << 16), b""):
+            h.update(b)
+    return h.hexdigest()
+
+
+def run_child(a):
+    """Run one child for the job. Its output streams to the job log in small batches; with
+    --gates, the structured JTI-GATE lines become stage events and nothing is read from
+    prose. Returns the child's exit code."""
+    import subprocess
+    argv = a.argv[1:] if a.argv[:1] == ["--"] else a.argv
+    if not argv:
+        print("  run: nothing to run (give the command after --)")
+        return 2
+    if a.stage not in PERCENT:
+        print(f"  unknown stage {a.stage!r}")
+        return 2
+    _checked(call("/api/worker/start", {"stage": a.stage,
+                                         "status": f"Running {os.path.basename(argv[0])}"}))
+    env = dict(os.environ, JTI_JOB_STAGES="1") if a.gates else dict(os.environ)
+    p = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                         bufsize=1, env=env, start_new_session=True)
+    _checked(call("/api/worker/child", {"pid": p.pid, "stage": a.stage}))
+    buf, last = [], time.monotonic()
+
+    def flush():
+        nonlocal buf, last
+        if buf:
+            _checked(call("/api/worker/log", {"message": "\n".join(buf)}))
+        buf, last = [], time.monotonic()
+
+    for line in p.stdout:
+        line = line.rstrip("\n")
+        print(line, flush=True)
+        if a.gates and line.startswith("JTI-GATE "):
+            flush()
+            parts = line.split(" ", 3)
+            kind, gate = parts[1], (parts[2] if len(parts) > 2 else "")
+            _checked(call("/api/worker/gate", {"kind": kind, "gate": gate,
+                                                "message": parts[3] if len(parts) > 3 else ""}))
+            continue
+        buf.append(line)
+        if len(buf) >= 40 or time.monotonic() - last > 0.5:
+            flush()
+    rc = p.wait()
+    flush()
+    _checked(call("/api/worker/child", {"pid": None, "stage": a.stage, "rc": rc}))
+    if a.gates and rc == 0:
+        rule, jrxml = argv[1], argv[2]
+        files = {f: sha(f) for f in [rule, jrxml] + sorted(
+            n for n in os.listdir(".") if n.startswith("RULE-") and n.endswith(".zip"))
+            if os.path.isfile(f)}
+        _checked(call("/api/worker/gates", {"ok": True, "cwd": os.getcwd(), "files": files}))
+    return rc
+
+
 def main(argv):
     import argparse
     ap = argparse.ArgumentParser(prog="jobs.py", add_help=True)
@@ -340,6 +429,8 @@ def main(argv):
     f.add_argument("--message", required=True); f.add_argument("--retryable", action="store_true")
     f.add_argument("--attempts", type=int, default=0)
     sub.add_parser("complete"); sub.add_parser("status")
+    rn = sub.add_parser("run"); rn.add_argument("--stage", required=True)
+    rn.add_argument("--gates", action="store_true"); rn.add_argument("argv", nargs=argparse.REMAINDER)
     a = ap.parse_args(argv)
 
     if a.cmd == "wait":
@@ -371,6 +462,8 @@ def main(argv):
         r = _checked(call("/api/worker/complete"))
         print(f"  job COMPLETE - {len(r.get('artifacts') or [])} deliverable(s) registered")
         return 0
+    if a.cmd == "run":
+        return run_child(a)
     if a.cmd == "status":
         print(json.dumps(_checked(call("/api/worker/status")).get("job"), indent=2))
         return 0

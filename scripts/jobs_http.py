@@ -1,4 +1,4 @@
-"""jobs_http.py - the job routes serve_builder.py adds in --jobs mode (/test-report only).
+"""jobs_http.py - the job routes serve_builder.py adds in --jobs mode (/test-report only; port 8789).
 
 Browser routes need the SESSION token (from /api/bootstrap) to submit, and the job's own
 TOKEN for everything about that job. Worker routes need the WORKER token, which only exists
@@ -135,7 +135,47 @@ class Routes:
         if method == "GET" and action == "":
             h._send(200, json.dumps({"ok": True, "job": self.s.public(j)}))
             return True
+        if method == "GET" and action == "events":
+            return self.stream(h, jid)
         raise Refuse(404, "no such action")
+
+    def stream(self, h, jid):
+        """Server-sent events: one full snapshot whenever the job changes, a comment every
+        15 s otherwise. A snapshot rather than a diff, so a page that reconnects (refresh,
+        sleep, network blip) is correct from its first message; EventSource reconnects on
+        its own. The stream ends once a finished job has been sent."""
+        h.send_response(200)
+        h.send_header("Content-Type", "text/event-stream")
+        h.send_header("Cache-Control", "no-store")
+        h.send_header("X-Content-Type-Options", "nosniff")
+        h.end_headers()
+        last, t_ping = None, time.monotonic()
+        try:
+            h.wfile.write(b"retry: 2000\n\n")
+            while True:
+                with self.s.lock:
+                    j = self.s.get(jid)
+                    key = (len(j["events"]), j["updated"])
+                    if key == last:
+                        self.s.changed.wait(timeout=1.0)
+                        j = self.s.get(jid)
+                        key = (len(j["events"]), j["updated"])
+                    snap = self.s.public(j) if key != last else None
+                if snap is not None:
+                    last = key
+                    seq = snap["events"][-1]["seq"] if snap["events"] else 0
+                    h.wfile.write(f"id: {seq}\nevent: snapshot\ndata: {json.dumps(snap)}\n\n"
+                                  .encode())
+                    h.wfile.flush()
+                    if snap["status"] in J.TERMINAL:
+                        return True
+                elif time.monotonic() - t_ping > 15:
+                    h.wfile.write(b": ping\n\n"); h.wfile.flush()
+                    t_ping = time.monotonic()
+                if h._peer_gone():
+                    return True
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            return True
 
     # ------------------------------------------------------------------ worker
     def worker(self, h, action, b):
@@ -179,6 +219,18 @@ class Routes:
                    excerpt="\n".join(s.log_tail(j, 40)), retryable=b.get("retryable"),
                    attempts=b.get("attempts"))
             return None
+        if action == "gate":
+            if b.get("kind") not in ("started", "passed", "failed", "warn"):
+                raise Refuse(400, "bad gate event")
+            s.gate(j, b["kind"], str(b.get("gate") or ""), b.get("message") or "")
+            return None
+        if action == "child":
+            pid = b.get("pid")
+            j["child"] = {"pid": int(pid), "stage": stage, "since": time.time()} \
+                if isinstance(pid, int) else None
+            return None
+        if action == "gates":
+            return self.record_gates(j, b)
         if action == "complete":
             return self.complete(j)
         if action == "status":
@@ -191,6 +243,25 @@ class Routes:
         return {"id": j["id"], "folder": str(folder), "spec_path": str(folder / j["spec"]),
                 "spec": spec, "destination": j["report"]["destination"],
                 "helper": str(pathlib.Path(J.HERE) / "jobs.py")}
+
+    def record_gates(self, j, b):
+        """Every gate passed. The SERVER hashes what was verified - the rule, the .jrxml and
+        the zip, by bare file name inside the job's own folder - so completion can later
+        prove the delivered files are the verified ones."""
+        folder = pathlib.Path(j["report"]["folder"]).resolve()
+        if pathlib.Path(str(b.get("cwd") or "")).resolve() != folder:
+            raise Refuse(400, "the gates did not run in this job's report folder")
+        files = {}
+        for name in b.get("files") or {}:
+            if not isinstance(name, str) or "/" in name or name.startswith("."):
+                raise Refuse(400, f"bad file name {name!r}")
+            p = folder / name
+            if p.is_symlink() or not p.is_file():
+                raise Refuse(400, f"{name} is not a regular file in the report folder")
+            files[name] = J.sha(str(p))
+        j["gates"] = {"ok": True, "files": files, "at": time.time()}
+        self.s.event(j, "gates_passed", "package", "Every gate passed")
+        return None
 
     def complete(self, j):
         s = self.s

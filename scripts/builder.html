@@ -105,6 +105,38 @@
   .p1 { width:45% }
   /* "— optional" beside a section heading: present, not shouting. */
   .opt { font-weight:400; font-size:12px; color:var(--muted); text-transform:none; letter-spacing:0 }
+  /* ---- build screen (/test-report, --jobs mode only) ---- */
+  .build { max-width:860px; margin:0 auto; text-align:left }
+  .bhead { display:flex; justify-content:space-between; align-items:flex-start; gap:16px }
+  .bname { font-size:20px; font-weight:700 }
+  .bstate { font-weight:600; padding:4px 10px; border-radius:12px; background:var(--fill); white-space:nowrap }
+  .bstate.complete { background:#EDF7ED; color:#1E6B34 } .bstate.failed, .bstate.timed_out { background:#FDECEA; color:#8C2F26 }
+  .bstate.waiting { background:#FFF6E5; color:#7A5B12 }
+  .bbar { height:10px; background:var(--fill); border-radius:5px; overflow:hidden; margin:18px 0 8px; border:1px solid var(--rule) }
+  .bbar .fill { height:100%; background:var(--navy); transition:width .4s }
+  .bnow { display:flex; gap:10px; align-items:center; flex-wrap:wrap }
+  .spin1 { display:inline-block; width:12px; height:12px; border:2px solid var(--rule);
+           border-top-color:var(--navy); border-radius:50%; animation:rot .8s linear infinite }
+  @keyframes rot { to { transform:rotate(360deg) } }
+  .bchk { list-style:none; padding:0; margin:16px 0 0; columns:2; column-gap:24px }
+  .bchk li { padding:3px 0; color:var(--muted); break-inside:avoid; display:flex; gap:8px; align-items:center }
+  .bchk li.ok { color:var(--ink) } .bchk li.now { color:var(--navy); font-weight:600 } .bchk li.bad { color:#B3261E; font-weight:600 }
+  .bchk .mk { width:14px; text-align:center } .bchk .pc { margin-left:auto; font-size:11px; color:var(--muted) }
+  .bpanel { border:1px solid var(--rule); border-radius:8px; padding:14px 16px; margin-top:16px }
+  .bpanel h3 { margin:0 0 6px; font-size:15px }
+  .bpanel.bad { background:#FDECEA; border-color:#F0C2BD }
+  .bpanel.ask { background:#FFF6E5; border-color:#F0DFB8 }
+  .bpanel.done { background:#EDF7ED; border-color:#BFE0BF }
+  .blog { max-height:320px; overflow:auto; font-size:12px; white-space:pre-wrap }
+  .warnline { color:#7A5B12 }
+  .thumbs { display:flex; flex-wrap:wrap; gap:10px; margin-top:10px }
+  .thumbs a { display:block; border:1px solid var(--rule); border-radius:4px; overflow:hidden; width:150px }
+  .thumbs img { width:150px; display:block }
+  .thumbs .cap { font-size:11px; color:var(--muted); padding:3px 6px }
+  .arts { margin:10px 0 0; padding:0; list-style:none }
+  .arts li { display:flex; gap:10px; align-items:center; padding:4px 0; border-bottom:1px solid var(--fill) }
+  .arts li .k { font-size:11px; color:var(--muted); width:110px } .arts li a { margin-left:auto }
+  .qopts label { display:flex; gap:8px; align-items:center; color:var(--ink); font-size:14px; margin:6px 0 }
 </style>
 <div id="app" class="spin">Loading…</div>
 <script src="/vendor/react.production.min.js"></script>
