@@ -102,6 +102,63 @@
     </div>`;
   }
 
+  // One question from Claude. The job waits on the server until this is answered, so the
+  // page can be closed and reopened - the question is part of the job's saved state.
+  function QuestionPanel({ job, q }) {
+    const [value, setValue] = useState('');
+    const [text, setText] = useState('');
+    const [busy, setBusy] = useState(false);
+    const [err, setErr] = useState('');
+    const post = (path, body, headers) => {
+      setBusy(true); setErr('');
+      return fetch('/api/jobs/' + job.id + path, { method: 'POST', body,
+        headers: { 'X-JTI-Job': job.token, ...headers } })
+        .then(r => r.json()).then(d => { setBusy(false); if (!d.ok) setErr(d.message); })
+        .catch(() => { setBusy(false); setErr('Could not reach the builder - try again.'); });
+    };
+    const send = extra => post('/answer', JSON.stringify({ id: q.id, value, text, ...extra }),
+                               { 'Content-Type': 'application/json' });
+    const sendFile = e => {
+      const f = e.target.files && e.target.files[0];
+      if (f) post('/upload?q=' + encodeURIComponent(q.id), f,
+                  { 'X-JTI-Filename': encodeURIComponent(f.name) });
+    };
+    const until = new Date(q.deadline * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    return html`<div class="bpanel ask">
+      <h3>${q.title}</h3>
+      <p class="qprompt">${q.prompt}</p>
+      ${q.type === 'choice' && html`<div class="qopts">
+        ${q.options.map(o => html`<label key=${o.value}>
+          <input type="radio" name=${'q-' + q.id} checked=${value === o.value}
+                 onChange=${() => setValue(o.value)}/>
+          <span><b>${o.label}</b>${o.detail && html` <span class="note">${o.detail}</span>`}</span></label>`)}
+        ${q.allowText && html`<input type="text" placeholder="Or type your own answer"
+              value=${text} onInput=${e => setText(e.target.value)}/>`}</div>`}
+      ${q.type === 'text' && html`<input type="text" maxLength="400" value=${text}
+              onInput=${e => setText(e.target.value)}/>`}
+      ${q.type === 'longtext' && html`<textarea maxLength="20000" value=${text}
+              onInput=${e => setText(e.target.value)}/>`}
+      ${q.type === 'file' && html`<${React.Fragment}>
+        <input type="file" disabled=${busy} onChange=${sendFile}/>
+        ${q.options.length > 0 && html`<div class="actions">${q.options.map(o => html`
+          <button key=${o.value} class="mini" disabled=${busy}
+                  onClick=${() => post('/answer', JSON.stringify({ id: q.id, value: o.value }),
+                                       { 'Content-Type': 'application/json' })}>${o.label}</button>`)}</div>`}
+      <//>`}
+      <div class="actions mt12">
+        ${q.type !== 'file' && html`<button class="go sm" disabled=${busy ||
+            (q.type === 'choice' ? !value && !(q.allowText && text.trim()) : !text.trim())}
+            onClick=${() => send()}>${busy ? 'Sending…' : 'Send answer'}</button>`}
+        ${!q.required && html`<button class="mini" disabled=${busy}
+            onClick=${() => send({ skip: true })}>Skip</button>`}
+        ${busy && q.type === 'file' && html`<span class="note">Uploading…</span>`}
+      </div>
+      ${err && html`<p class="note warnline">${err}</p>`}
+      <p class="note">The build is paused until you answer (it waits until ${until}). You can
+        close this page and come back.</p>
+    </div>`;
+  }
+
   function BuildScreen({ job, stages, onAnother }) {
     const [snap, conn] = useJob(job);
     if (conn === 'gone' && !snap) return html`<div class="bpanel bad"><h3>This build is no longer
@@ -134,9 +191,13 @@
         ${Math.round(snap.worker_seen_ago / 60)} min - it may be working on a long step.</p>`}
       ${conn !== 'live' && !term && html`<p class="note">Connection: ${conn}</p>`}
 
+      ${snap.question && html`<${QuestionPanel} key=${snap.question.id + snap.question.asked}
+                                    job=${job} q=${snap.question}/>`}
       ${snap.status === 'failed' && html`<${FailurePanel} snap=${snap}/>`}
       ${snap.status === 'timed_out' && html`<div class="bpanel bad"><h3>Timed out</h3>
-        <p>The build waited for an answer that did not come, and stopped. Nothing was deleted.</p></div>`}
+        <p>The build waited for an answer${snap.timed_out && snap.timed_out.title
+          ? ' to "' + snap.timed_out.title + '"' : ''} that did not come, and stopped. Nothing was
+          deleted.${snap.partial && snap.partial.length ? ' Files it had created: ' + snap.partial.join(', ') : ''}</p></div>`}
       ${snap.status === 'cancelled' && html`<div class="bpanel"><h3>Cancelled</h3>
         <p>Nothing was deleted.${snap.partial && snap.partial.length
           ? ' Files this build had created: ' + snap.partial.join(', ') : ' This build created no files.'}</p></div>`}

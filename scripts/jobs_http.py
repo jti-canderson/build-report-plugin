@@ -14,6 +14,10 @@ import urllib.parse
 import jobs as J
 
 MAX_JSON = 1 * 1024 * 1024
+
+
+def MAXA(kind):
+    return J.MAX_ANSWER.get(kind, 400)
 JOB_PATH = re.compile(r"^/api/jobs/([0-9a-f]{16})(/[a-z]+)?(/[a-z0-9]+)?$")
 
 
@@ -137,6 +141,13 @@ class Routes:
             return True
         if method == "GET" and action == "events":
             return self.stream(h, jid)
+        if method == "POST" and action == "answer":
+            with self.s.lock:
+                r = self.post_answer(h, self.s.get(jid), body_json(h))
+            h._send(200, json.dumps(r)); return True
+        if method == "POST" and action == "upload":
+            h._send(200, json.dumps(self.upload(h, j, (q.get("q") or [""])[0])))
+            return True
         raise Refuse(404, "no such action")
 
     def stream(self, h, jid):
@@ -180,6 +191,8 @@ class Routes:
     # ------------------------------------------------------------------ worker
     def worker(self, h, action, b):
         s = self.s
+        if action == "answer":
+            return self.wait_answer(h, str(b.get("id") or ""), min(max(int(b.get("secs") or 50), 1), 55))
         if action == "claim":
             j = s.claim(min(max(int(b.get("secs") or 50), 1), 55))
             h._send(200, json.dumps({"ok": True, "job": self.claimed(j) if j else None}))
@@ -219,6 +232,14 @@ class Routes:
                    excerpt="\n".join(s.log_tail(j, 40)), retryable=b.get("retryable"),
                    attempts=b.get("attempts"))
             return None
+        if action == "ask":
+            err = J.Store.check_question(b.get("question"))
+            if err:
+                raise Refuse(400, err)
+            if j["question"]:
+                raise Refuse(409, f"question {j['question']['id']!r} is still open - one at a time")
+            s.ask(j, b["question"], b.get("timeout") or 3600)
+            return None
         if action == "gate":
             if b.get("kind") not in ("started", "passed", "failed", "warn"):
                 raise Refuse(400, "bad gate event")
@@ -236,6 +257,125 @@ class Routes:
         if action == "status":
             return {"job": s.public(j)}
         raise Refuse(404, f"no worker action {action!r}")
+
+    def wait_answer(self, h, qid, secs):
+        """Long-poll: the answer, a timeout, or the cancel flag - whichever comes first."""
+        s = self.s
+        end = time.monotonic() + secs
+        with s.lock:
+            while True:
+                j = s.worker_job()
+                if not j:
+                    j = next((x for x in (s.get(i) for i in s.index) if x and x["status"] ==
+                              "timed_out" and (x.get("timed_out") or {}).get("question") == qid), None)
+                    reply = {"ok": True, "timeout": True} if j else \
+                        {"ok": False, "message": "no claimed job"}
+                    break
+                j["worker_seen"] = time.time()
+                if j["cancel_requested"]:
+                    self.finish_cancel(j); s.save(j)
+                    reply = {"ok": True, "cancel": True}
+                    break
+                if qid in j["answers"]:
+                    reply = {"ok": True, "answer": {"id": qid, **j["answers"][qid]}}
+                    break
+                q = j["question"]
+                if not q or q["id"] != qid:
+                    reply = {"ok": False, "message": f"no open question {qid!r}"}
+                    break
+                if time.time() >= q["deadline"]:
+                    s.time_out(j); s.save(j)
+                    reply = {"ok": True, "timeout": True}
+                    break
+                left = end - time.monotonic()
+                if left <= 0:
+                    reply = {"ok": True, "answer": None}
+                    break
+                s.changed.wait(timeout=min(left, 1.0, max(0.05, q["deadline"] - time.time())))
+        h._send(200, json.dumps(reply))
+        return True
+
+    # ------------------------------------------------------------------ browser answers
+    def post_answer(self, h, j, b):
+        q = j["question"]
+        qid = b.get("id")
+        if not q or q["id"] != qid:
+            raise Refuse(409, "that question is no longer open")
+        if time.time() >= q["deadline"]:
+            raise Refuse(409, "that question timed out")
+        if q["type"] == "file":
+            if b.get("skip") and not q["required"]:
+                ans = {"value": None, "skipped": True}
+            elif b.get("value") and b["value"] in [o["value"] for o in q["options"]]:
+                ans = {"value": b["value"]}              # e.g. "skip" offered as an option
+            else:
+                raise Refuse(400, "a file question is answered by uploading the file")
+        elif b.get("skip"):
+            if q["required"]:
+                raise Refuse(400, "this question needs an answer")
+            ans = {"value": None, "skipped": True}
+        elif q["type"] == "choice":
+            v, t = b.get("value"), (b.get("text") or "")
+            if not isinstance(t, str) or len(t) > MAXA("choice"):
+                raise Refuse(400, "answer text too long")
+            if v in [o["value"] for o in q["options"]]:
+                ans = {"value": v, "text": t.strip() or None}
+            elif q["allowText"] and t.strip():
+                ans = {"value": None, "text": t.strip()}
+            else:
+                raise Refuse(400, "pick one of the options")
+        else:
+            t = b.get("text")
+            if not isinstance(t, str) or not t.strip():
+                raise Refuse(400, "type an answer")
+            if len(t) > MAXA(q["type"]):
+                raise Refuse(400, f"answers are limited to {MAXA(q['type'])} characters")
+            ans = {"value": t.strip(), "text": t.strip()}
+        self.s.answer(j, qid, ans)
+        self.s.save(j)
+        return {"ok": True}
+
+    def upload(self, h, j, qid):
+        """The file for a `file` question, streamed to the job's own upload folder. The name
+        is reduced to a safe basename; nothing about the path comes from the browser."""
+        import re as _re
+        q = j["question"]
+        if not q or q["id"] != qid or q["type"] != "file":
+            raise Refuse(409, "no open file question with that id")
+        n = h.headers.get("Content-Length")
+        if n is None:
+            raise Refuse(411, "Content-Length is required")
+        n = int(n)
+        if n <= 0 or n > J.MAX_UPLOAD:
+            raise Refuse(413, f"files are limited to {J.MAX_UPLOAD // (1024 * 1024)} MB")
+        raw = urllib.parse.unquote(h.headers.get("X-JTI-Filename") or "upload")
+        name = _re.sub(r"[^A-Za-z0-9._-]+", "_", pathlib.PurePath(raw).name).lstrip(".")[:120] or "upload"
+        up = pathlib.Path(j["report"]["folder"]) / ".jti-build" / "uploads"
+        if up.is_symlink() or up.parent.is_symlink():
+            raise Refuse(400, "upload folder is a symlink")
+        up.mkdir(mode=0o700, parents=True, exist_ok=True)
+        dest = up / name
+        if dest.exists():
+            dest = up / f"{int(time.time())}-{name}"
+        left = n
+        with open(dest, "xb") as f:
+            while left:
+                chunk = h.rfile.read(min(left, 1 << 20))
+                if not chunk:
+                    break
+                f.write(chunk); left -= len(chunk)
+        if left:
+            dest.unlink()
+            raise Refuse(400, "the upload was cut short")
+        with self.s.lock:
+            j = self.s.get(j["id"])
+            if not j["question"] or j["question"]["id"] != qid:
+                dest.unlink()
+                raise Refuse(409, "that question closed while the file was uploading")
+            self.s.answer(j, qid, {"value": str(dest), "file": str(dest),
+                                   "name": pathlib.PurePath(raw).name[:200], "bytes": n})
+            self.s.save(j)
+        return {"ok": True, "name": name, "bytes": n}
 
     def claimed(self, j):
         folder = pathlib.Path(j["report"]["folder"])

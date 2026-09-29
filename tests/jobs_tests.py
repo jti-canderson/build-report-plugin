@@ -100,6 +100,7 @@ def fresh_ws(root, tag):
 def run(check, skip, ctx):
     run_phase1(check, skip, ctx)
     run_phase2(check, skip, ctx)
+    run_phase3(check, skip, ctx)
 
 
 def run_phase1(check, skip, ctx):
@@ -308,3 +309,94 @@ def run_phase2(check, skip, ctx):
     out = subprocess.run(gates_cmd(plugin), cwd=folder, capture_output=True, text=True).stdout
     check("jobs: finish.sh prints no JTI-GATE lines unless a job wrapper asks for them",
           "JTI-GATE" not in out and "GATE 1 FAILED" in out, out[-300:])
+
+
+# ── phase 3: questions asked in the browser ──────────────────────────────────────────
+def wait_for(fn, secs=10):
+    end = time.time() + secs
+    while time.time() < end:
+        v = fn()
+        if v:
+            return v
+        time.sleep(0.1)
+    return None
+
+
+def run_phase3(check, skip, ctx):
+    plugin, root = ctx["plugin"], ctx["ws"]
+    ws = fresh_ws(root, "ask")
+    srv = Server(plugin, ws).start()
+    try:
+        code, d = srv.submit(spec_for("Ask_Probe"))
+        jid, tok = d["job"], d["token"]
+        helper(plugin, ws, "wait", "--secs", "10")
+        H = {"X-JTI-Job": tok}
+        # 1. a single-choice question, answered in the browser
+        p = helper(plugin, ws, "ask", "--id", "sdk-required", "--title", "Field list needed",
+                   "--prompt", "Which SDK should this report use?", "--type", "choice",
+                   "--option", "current=Still current", "--option", "newer=I'll upload a newer one",
+                   background=True)
+        q = wait_for(lambda: (srv.snap(jid, tok) or {}).get("question"))
+        s1 = srv.snap(jid, tok)
+        c_bad, _ = srv.js("POST", f"/api/jobs/{jid}/answer", {"id": "sdk-required", "value": "zzz"}, H)
+        c_tok, _ = srv.js("POST", f"/api/jobs/{jid}/answer", {"id": "sdk-required", "value": "current"})
+        c_ok, _ = srv.js("POST", f"/api/jobs/{jid}/answer", {"id": "sdk-required", "value": "current"}, H)
+        out, _ = p.communicate(timeout=30)
+        ans = json.loads(out[out.index("{"):]) if "{" in out else {}
+        check("jobs: a question blocks the worker until the browser answers it",
+              q and q["type"] == "choice" and [o["value"] for o in q["options"]] == ["current", "newer"]
+              and s1["status"] == "waiting" and c_ok == 200 and p.returncode == 0
+              and ans.get("value") == "current", out)
+        check("jobs: an answer that is not an option (400), or has no job token (403), is refused",
+              c_bad == 400 and c_tok == 403, (c_bad, c_tok))
+        s2 = srv.snap(jid, tok)
+        check("jobs: after the answer the job is running again and the question is gone",
+              s2["status"] == "running" and s2["question"] is None
+              and [e["kind"] for e in s2["events"]][-2:] == ["question", "answered"], s2["status"])
+
+        # 2. two questions in sequence - text, then longer text - and a refresh in between
+        p = helper(plugin, ws, "ask", "--id", "title", "--title", "Report heading",
+                   "--prompt", "What should the page heading say?", "--type", "text",
+                   background=True)
+        wait_for(lambda: (srv.snap(jid, tok) or {}).get("question"))
+        srv.stop(); srv.start()                         # the page and the server both "refresh"
+        H = {"X-JTI-Job": tok}
+        reread = srv.snap(jid, tok)
+        # the worker's long-poll lost its connection with the restart; it retries by design
+        c1, _ = srv.js("POST", f"/api/jobs/{jid}/answer", {"id": "title", "text": "Open Cases"}, H)
+        out1, _ = p.communicate(timeout=90)
+        p = helper(plugin, ws, "ask", "--id", "notes", "--title", "Anything else?",
+                   "--prompt", "Describe any special handling.", "--type", "longtext",
+                   "--optional", background=True)
+        wait_for(lambda: ((srv.snap(jid, tok) or {}).get("question") or {}).get("id") == "notes")
+        c2, _ = srv.js("POST", f"/api/jobs/{jid}/answer", {"id": "notes", "text": "Line one\nLine two"}, H)
+        out2, _ = p.communicate(timeout=30)
+        check("jobs: two questions in sequence, answered after a server restart and a reload",
+              reread and (reread.get("question") or {}).get("id") == "title" and c1 == 200 and c2 == 200
+              and '"Open Cases"' in out1 and "Line two" in out2, out1[-200:] + out2[-200:])
+
+        # 3. a file question - the SDK the build genuinely needs
+        p = helper(plugin, ws, "ask", "--id", "sdk-file", "--title", "Upload the SDK",
+                   "--prompt", "Send the ecourt-sdk jar.", "--type", "file", background=True)
+        wait_for(lambda: ((srv.snap(jid, tok) or {}).get("question") or {}).get("id") == "sdk-file")
+        code, _, body = srv.req("POST", f"/api/jobs/{jid}/upload?q=sdk-file", raw=b"PK\x03\x04jar",
+                                headers={"X-JTI-Job": tok, "X-JTI-Filename": "../../evil%2F..%2Fsdk.jar",
+                                         "Content-Type": "application/octet-stream"})
+        out3, _ = p.communicate(timeout=30)
+        a3 = json.loads(out3[out3.index("{"):]) if "{" in out3 else {}
+        up = os.path.join(ws, "Proj", "Ask_Probe", ".jti-build", "uploads")
+        check("jobs: a file answer is saved under the job's own upload folder with a safe name",
+              code == 200 and a3.get("file", "").startswith(os.path.realpath(up) + os.sep)
+              and os.path.basename(a3["file"]) == "sdk.jar" and open(a3["file"], "rb").read() == b"PK\x03\x04jar",
+              out3)
+
+        # 4. nobody answers: the job TIMES OUT, visibly, and a late answer is refused
+        r = helper(plugin, ws, "ask", "--id", "late", "--title", "Quick one", "--prompt", "?",
+                   "--type", "text", "--timeout", "2", timeout=30)
+        s4 = srv.snap(jid, tok)
+        c_late, _ = srv.js("POST", f"/api/jobs/{jid}/answer", {"id": "late", "text": "too late"}, H)
+        check("jobs: an unanswered question times out: exit 5, job TIMED_OUT, late answer refused",
+              r.returncode == 5 and s4["status"] == "timed_out" and s4["question"] is None
+              and s4["timed_out"]["question"] == "late" and c_late == 409, r.stdout)
+    finally:
+        srv.stop()

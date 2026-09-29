@@ -20,6 +20,11 @@ HELPER (what the /test-report command runs; it talks to the server over 127.0.0.
                                          to the job log; with --gates, finish.sh's structured
                                          JTI-GATE lines drive the stages, and a pass is
                                          recorded with the hashes of what was verified
+    jobs.py ask --id ID --title T --prompt P --type choice|text|longtext|file
+                [--option VALUE[=LABEL]]... [--allow-text] [--optional] [--timeout SECS]
+                                         put a question in the browser and BLOCK until it is
+                                         answered: prints the answer JSON (exit 0); exit 5 =
+                                         nobody answered in time (the job is now timed out)
     jobs.py fail --stage <stage> --message "<why>" [--retryable]
     jobs.py complete                     verify and register the deliverables; finish
     jobs.py status                       print the job as the browser sees it
@@ -68,6 +73,9 @@ STAGES = [
 PERCENT = {k: p for k, p, _ in STAGES}
 LABEL = {k: l for k, _, l in STAGES}
 TERMINAL = ("complete", "failed", "cancelled", "timed_out")
+QTYPES = ("choice", "text", "longtext", "file")
+MAX_ANSWER = {"text": 400, "longtext": 20000, "choice": 400}
+MAX_UPLOAD = 200 * 1024 * 1024               # an SDK jar is tens of MB
 LEVELS = ("info", "warn", "error")
 MAX_STATUS = 300            # characters of a status line or log message kept
 MAX_EVENTS = 2000
@@ -283,6 +291,58 @@ class Store:
             j["gates"] = None                          # an earlier pass no longer stands
             self.event(j, "gate_failed", stage or gate, j["status_text"], "error")
 
+    # -- questions
+    @staticmethod
+    def check_question(q):
+        """The structured question the worker may ask. Anything else is refused."""
+        if not isinstance(q, dict):
+            return "question must be an object"
+        if not (isinstance(q.get("id"), str) and 0 < len(q["id"]) <= 64
+                and all(c.isalnum() or c in "-_" for c in q["id"])):
+            return "question id: 1-64 letters, digits, - or _"
+        if q.get("type") not in QTYPES:
+            return f"question type must be one of {', '.join(QTYPES)}"
+        for k in ("title", "prompt"):
+            if not (isinstance(q.get(k), str) and q[k].strip()):
+                return f"question {k} is required"
+        opts = q.get("options") or []
+        if q["type"] == "choice":
+            if not opts:
+                return "a choice question needs options"
+            if not all(isinstance(o, dict) and isinstance(o.get("value"), str) and o["value"]
+                       for o in opts):
+                return "each option needs a value"
+        return None
+
+    def ask(self, j, q, timeout):
+        q = {"id": q["id"], "title": clip(q["title"], 200), "prompt": clip(q["prompt"], 4000),
+             "type": q["type"], "options": [{"value": clip(o["value"], 200),
+                                             "label": clip(o.get("label") or o["value"], 200),
+                                             "detail": clip(o.get("detail") or "", 400)}
+                                            for o in (q.get("options") or [])],
+             "allowText": bool(q.get("allowText")), "required": q.get("required", True) is not False,
+             "asked": time.time(), "deadline": time.time() + max(1, min(int(timeout), 24 * 3600)),
+             "stage": j["stage"]}
+        j["question"], j["status"], j["running"] = q, "waiting", False
+        j["answers"].pop(q["id"], None)
+        j["status_text"] = clip("Question: " + q["title"])
+        self.event(j, "question", None, j["status_text"], "warn", question=q["id"])
+
+    def answer(self, j, qid, ans):
+        j["answers"][qid] = dict(ans, at=time.time())
+        j["question"], j["status"], j["running"] = None, "running", True
+        j["status_text"] = "Answer received - continuing"
+        self.event(j, "answered", None, j["status_text"], question=qid)
+
+    def time_out(self, j):
+        q = j["question"] or {}
+        j["status"], j["running"] = "timed_out", False
+        j["timed_out"] = {"question": q.get("id"), "title": q.get("title"), "at": time.time()}
+        j["question"] = None
+        j["status_text"] = "Timed out waiting for an answer"
+        j["partial"] = self.created_files(j)
+        self.event(j, "timed_out", None, j["status_text"], "error", question=q.get("id"))
+
     def fail(self, j, stage, message, excerpt="", retryable=False, attempts=0):
         j["status"], j["running"] = "failed", False
         j["failure"] = {"stage": stage, "label": LABEL.get(stage, stage),
@@ -325,24 +385,34 @@ def _server():
     return s
 
 
+RECONNECT_SECS = 60           # how long a restarting server is waited for
+
+
 def call(path, body=None, timeout=60):
+    """POST to the server as the worker. A server that is restarting (or dropped a long
+    poll) is retried for up to a minute - the job is on disk, so nothing is lost by waiting
+    - and server.json is re-read each time in case the port changed."""
     import urllib.request
     import urllib.error
-    s = _server()
-    req = urllib.request.Request(
-        f"http://127.0.0.1:{s['port']}{path}", data=json.dumps(body or {}).encode(),
-        headers={"Content-Type": "application/json", "X-JTI-Worker": s["worker_token"]},
-        method="POST")
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            return json.loads(r.read() or b"{}")
-    except urllib.error.HTTPError as e:
+    give_up = time.monotonic() + RECONNECT_SECS
+    while True:
+        s = _server()
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{s['port']}{path}", data=json.dumps(body or {}).encode(),
+            headers={"Content-Type": "application/json", "X-JTI-Worker": s["worker_token"]},
+            method="POST")
         try:
-            return {"ok": False, "code": e.code, **json.loads(e.read() or b"{}")}
-        except ValueError:
-            return {"ok": False, "code": e.code, "message": str(e)}
-    except (urllib.error.URLError, OSError) as e:
-        sys.exit(f"  the builder server is not reachable on port {s['port']}: {e}")
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return json.loads(r.read() or b"{}")
+        except urllib.error.HTTPError as e:
+            try:
+                return {"ok": False, "code": e.code, **json.loads(e.read() or b"{}")}
+            except ValueError:
+                return {"ok": False, "code": e.code, "message": str(e)}
+        except (urllib.error.URLError, OSError) as e:
+            if time.monotonic() > give_up:
+                sys.exit(f"  the builder server is not reachable on port {s['port']}: {e}")
+            time.sleep(1)
 
 
 def _checked(r):
@@ -429,6 +499,12 @@ def main(argv):
     f.add_argument("--message", required=True); f.add_argument("--retryable", action="store_true")
     f.add_argument("--attempts", type=int, default=0)
     sub.add_parser("complete"); sub.add_parser("status")
+    q = sub.add_parser("ask")
+    q.add_argument("--id", required=True); q.add_argument("--title", required=True)
+    q.add_argument("--prompt", required=True); q.add_argument("--type", required=True, choices=QTYPES)
+    q.add_argument("--option", action="append", default=[])
+    q.add_argument("--allow-text", action="store_true"); q.add_argument("--optional", action="store_true")
+    q.add_argument("--timeout", type=int, default=3600)
     rn = sub.add_parser("run"); rn.add_argument("--stage", required=True)
     rn.add_argument("--gates", action="store_true"); rn.add_argument("argv", nargs=argparse.REMAINDER)
     a = ap.parse_args(argv)
@@ -464,6 +540,25 @@ def main(argv):
         return 0
     if a.cmd == "run":
         return run_child(a)
+    if a.cmd == "ask":
+        opts = []
+        for o in a.option:
+            v, _, lab = o.partition("=")
+            opts.append({"value": v, "label": lab or v})
+        _checked(call("/api/worker/ask", {"timeout": a.timeout, "question": {
+            "id": a.id, "title": a.title, "prompt": a.prompt, "type": a.type, "options": opts,
+            "allowText": a.allow_text, "required": not a.optional}}))
+        print(f"  asked in the browser: {a.title} - waiting for the answer "
+              f"(up to {a.timeout // 60} min)", flush=True)
+        while True:
+            r = _checked(call("/api/worker/answer", {"id": a.id, "secs": 50}, timeout=70))
+            if r.get("timeout"):
+                print("TIMED OUT - nobody answered in the browser. The job is now marked timed "
+                      "out; stop the build.")
+                return EXIT_TIMEOUT
+            if r.get("answer") is not None:
+                print(json.dumps(r["answer"], indent=2))
+                return 0
     if a.cmd == "status":
         print(json.dumps(_checked(call("/api/worker/status")).get("job"), indent=2))
         return 0
