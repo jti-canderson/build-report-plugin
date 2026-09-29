@@ -47,6 +47,7 @@
   .x:hover { color:#B3261E }
   .go { background:var(--navy); color:#fff; border:none; padding:11px 22px; font-weight:600; font-size:15px }
   .go:disabled { background:#9AA3B0; cursor:not-allowed }
+  a.go { display:inline-block; text-decoration:none }
   .out { margin-top:16px; padding:14px 16px; border-radius:6px }
   .out.ok { background:#EDF7ED; border:1px solid #BFE0BF }
   .out.err { background:#FDECEA; border:1px solid #F0C2BD }
@@ -109,7 +110,8 @@
   .build { max-width:860px; margin:0 auto; text-align:left }
   .bhead { display:flex; justify-content:space-between; align-items:flex-start; gap:16px }
   .bname { font-size:20px; font-weight:700 }
-  .bstate { font-weight:600; padding:4px 10px; border-radius:12px; background:var(--fill); white-space:nowrap }
+  .bstate { font-weight:600; padding:4px 10px; border-radius:12px; background:var(--fill); flex:0 0 auto; max-width:45%; text-align:center }
+  .bhead > div:first-child { min-width:0; flex:1 } .bhead code { word-break:break-all }
   .bstate.complete { background:#EDF7ED; color:#1E6B34 } .bstate.failed, .bstate.timed_out { background:#FDECEA; color:#8C2F26 }
   .bstate.waiting { background:#FFF6E5; color:#7A5B12 }
   .bbar { height:10px; background:var(--fill); border-radius:5px; overflow:hidden; margin:18px 0 8px; border:1px solid var(--rule) }

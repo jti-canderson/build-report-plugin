@@ -159,6 +159,34 @@
     </div>`;
   }
 
+  const KIND = { rule: 'Rule source', jrxml: 'Report layout', 'rule-zip': 'Rule ZIP (import this)',
+                 doc: 'Document', pdf: 'Rendered PDF', page: 'Page image' };
+  function CompletePanel({ job, snap, onAnother }) {
+    const t = '?t=' + encodeURIComponent(job.token);
+    const base = '/api/jobs/' + job.id;
+    const pages = snap.artifacts.filter(a => a.kind === 'page');
+    const files = snap.artifacts.filter(a => a.kind !== 'page');
+    return html`<div class="bpanel done">
+      <h3>Built and verified</h3>
+      <p>Saved in: <code>${snap.report.folder}</code></p>
+      ${pages.length > 0 && html`<div class="thumbs">${pages.map(a => html`
+        <a key=${a.id} href=${base + '/preview/' + a.id + t} target="_blank" rel="noopener">
+          <img src=${base + '/preview/' + a.id + t} alt=${a.name}/><div class="cap">${a.name}</div></a>`)}</div>`}
+      <p class="note mt12">Look at every page before you import - the gates prove the layout
+        compiles and fills, not that it is right.</p>
+      <div class="actions mt12">
+        <a class="go sm" href=${base + '/package' + t} download>Download a copy (report package)</a>
+        <button class="mini" onClick=${onAnother}>Build another report</button>
+      </div>
+      <ul class="arts">${files.map(a => html`<li key=${a.id}><span class="k">${KIND[a.kind] || a.kind}</span>
+        <code>${a.rel}</code><span class="note">${Math.max(1, Math.round(a.bytes / 1024))} KB</span>
+        <a href=${base + '/file/' + a.id + t} download>Download</a></li>`)}</ul>
+      <p class="note">Downloads are copies: the report itself stays in the folder above. Your
+        browser decides where a download is saved (usually Downloads).</p>
+      <p class="note"><b>Importing is a write.</b> Import the rule ZIP into eSeries yourself.</p>
+    </div>`;
+  }
+
   function BuildScreen({ job, stages, onAnother }) {
     const [snap, conn] = useJob(job);
     if (conn === 'gone' && !snap) return html`<div class="bpanel bad"><h3>This build is no longer
@@ -193,6 +221,7 @@
 
       ${snap.question && html`<${QuestionPanel} key=${snap.question.id + snap.question.asked}
                                     job=${job} q=${snap.question}/>`}
+      ${snap.status === 'complete' && html`<${CompletePanel} job=${job} snap=${snap} onAnother=${onAnother}/>`}
       ${snap.status === 'failed' && html`<${FailurePanel} snap=${snap}/>`}
       ${snap.status === 'timed_out' && html`<div class="bpanel bad"><h3>Timed out</h3>
         <p>The build waited for an answer${snap.timed_out && snap.timed_out.title
@@ -207,7 +236,8 @@
       <details class="mt12"><summary>Technical log (${snap.log_tail.length} recent lines)</summary>
         <pre class="blog">${snap.log_tail.join('\n') || '(nothing yet)'}</pre></details>
 
-      ${term && html`<div class="mt12"><button class="go sm" onClick=${onAnother}>Build another report</button></div>`}
+      ${term && snap.status !== 'complete' && html`<div class="mt12"><button class="go sm"
+            onClick=${onAnother}>Build another report</button></div>`}
     </div>`;
   }
 

@@ -101,6 +101,7 @@ def run(check, skip, ctx):
     run_phase1(check, skip, ctx)
     run_phase2(check, skip, ctx)
     run_phase3(check, skip, ctx)
+    run_phase4(check, skip, ctx)
 
 
 def run_phase1(check, skip, ctx):
@@ -168,8 +169,10 @@ def run_phase1(check, skip, ctx):
 
         c = helper(plugin, ws, "complete")
         j = srv.snap(jid, tok)
-        check("jobs: complete ends the job at 100%", c.returncode == 0 and j["status"] == "complete"
-              and j["percent"] == 100, c.stdout)
+        check("jobs: `complete` is refused until the gates have passed - it cannot claim success",
+              c.returncode == 1 and "gates have not passed" in c.stdout and j["status"] == "running"
+              and j["artifacts"] == [], c.stdout)
+        helper(plugin, ws, "fail", "--stage", "fixtures", "--message", "test stops here")
         open(os.path.join(folder, "Flow_Probe.jrxml"), "w").write("<jasperReport/>")
         c, d3 = srv.submit(spec_for("Flow_Probe"))
         check("jobs: a folder that already holds a report is never built over (409)",
@@ -398,5 +401,95 @@ def run_phase3(check, skip, ctx):
         check("jobs: an unanswered question times out: exit 5, job TIMED_OUT, late answer refused",
               r.returncode == 5 and s4["status"] == "timed_out" and s4["question"] is None
               and s4["timed_out"]["question"] == "late" and c_late == 409, r.stdout)
+    finally:
+        srv.stop()
+
+
+# ── phase 4: artifacts, previews and downloads ───────────────────────────────────────
+def raw_get(srv, path):
+    """GET a path exactly as written (no client-side normalisation of .. or %2e)."""
+    import http.client
+    c = http.client.HTTPConnection("127.0.0.1", srv.port, timeout=30)
+    c.putrequest("GET", path, skip_host=True)
+    c.putheader("Host", f"127.0.0.1:{srv.port}")
+    c.endheaders()
+    r = c.getresponse()
+    body = r.read()
+    c.close()
+    return r.status, dict(r.getheaders()), body
+
+
+def run_phase4(check, skip, ctx):
+    import io
+    import zipfile
+    plugin, root = ctx["plugin"], ctx["ws"]
+    if not ctx["jrs"]:
+        return skip("jobs: artifacts and downloads", "no JasperReports install")
+    ws = fresh_ws(root, "arts")
+    srv = Server(plugin, ws).start()
+    try:
+        jid, tok, folder = probe_job(plugin, ctx, srv, ws)
+        t = "?t=" + tok
+        r = run_gates(plugin, ws, folder)
+        rule = os.path.join(folder, "Probe_Report_V1.groovy")
+        orig = open(rule).read()
+        open(rule, "a").write("\n// edited after the gates\n")
+        c1 = helper(plugin, ws, "complete")
+        open(rule, "w").write(orig)                        # back to exactly what was verified
+        helper(plugin, ws, "done", "review", "Looked at every page")
+        helper(plugin, ws, "done", "documentation", "NOTES filled")
+        c2 = helper(plugin, ws, "complete")
+        j = srv.snap(jid, tok)
+        kinds = sorted({a["kind"] for a in j["artifacts"]})
+        check("jobs: a file edited after the gates passed blocks completion",
+              r.returncode == 0 and c1.returncode == 1 and "changed after the gates passed" in c1.stdout,
+              c1.stdout)
+        check("jobs: a verified build completes at 100% with its deliverables registered",
+              c2.returncode == 0 and j["status"] == "complete" and j["percent"] == 100
+              and kinds == ["doc", "jrxml", "page", "pdf", "rule", "rule-zip"], (c2.stdout, kinds))
+        check("jobs: the selected report folder stays the canonical output",
+              all(os.path.isfile(os.path.join(folder, a["rel"])) for a in j["artifacts"])
+              and not [f for f in os.listdir(os.path.join(ws, ".jti-builder"))
+                       if f.endswith((".pdf", ".zip", ".jrxml", ".groovy"))], j["artifacts"])
+
+        page = next(a for a in j["artifacts"] if a["kind"] == "page")
+        code, hd, body = srv.get(f"/api/jobs/{jid}/preview/{page['id']}{t}")
+        check("jobs: a page preview is served inline as a PNG",
+              code == 200 and hd.get("Content-Type") == "image/png" and body[:4] == b"\x89PNG"
+              and hd.get("Content-Disposition", "").startswith("inline"), (code, hd))
+        zipa = next(a for a in j["artifacts"] if a["kind"] == "rule-zip")
+        code, hd, body = srv.get(f"/api/jobs/{jid}/file/{zipa['id']}{t}")
+        check("jobs: a file downloads as an attachment with a safe name, byte-identical",
+              code == 200 and hd.get("Content-Disposition") == f'attachment; filename="{zipa["name"]}"'
+              and body == open(os.path.join(folder, zipa["rel"]), "rb").read(), hd)
+        code, hd, body = srv.get(f"/api/jobs/{jid}/package{t}")
+        names = sorted(zipfile.ZipFile(io.BytesIO(body)).namelist()) if code == 200 else []
+        check("jobs: the report package holds the rule, layout, zip, documents and PDFs (no PNGs)",
+              code == 200 and hd.get("Content-Disposition") == 'attachment; filename="Probe_Report-package.zip"'
+              and "Probe_Report_V1.groovy" in names and "Probe_Report.jrxml" in names
+              and "JRXML_CONTRACT.txt" in names and "RULE_REGISTRATION.txt" in names
+              and any(n.startswith("RULE-") for n in names)
+              and any(n.endswith(".pdf") for n in names) and not any(n.endswith(".png") for n in names),
+              names)
+
+        # the allowlist: ids the server issued, for this job, with its token - nothing else
+        probes = [f"/api/jobs/{jid}/file/a999{t}", f"/api/jobs/{jid}/file/../../../../etc/passwd{t}",
+                  f"/api/jobs/{jid}/file/%2e%2e%2f%2e%2e%2fetc%2fpasswd{t}",
+                  f"/api/jobs/{jid}/file/{zipa['rel']}{t}", f"/api/jobs/{jid}/preview/{zipa['id']}{t}",
+                  f"/api/jobs/{jid}/file/{zipa['id']}?t=wrong", f"/api/jobs/{jid}/package",
+                  f"/api/jobs/../../etc/passwd"]
+        codes = [raw_get(srv, pth)[0] for pth in probes]
+        check("jobs: unregistered ids, traversal, raw paths, a non-page preview and bad tokens are refused",
+              codes[:5] == [404] * 5 and codes[5] == 403 and codes[6] == 403 and codes[7] == 404, codes)
+        doc = next(a for a in j["artifacts"] if a["name"] == "JRXML_CONTRACT.txt")
+        open(os.path.join(folder, doc["rel"]), "a").write("tampered\n")
+        c_t = srv.get(f"/api/jobs/{jid}/file/{doc['id']}{t}")[0]
+        pdf = next(a for a in j["artifacts"] if a["kind"] == "pdf")
+        p = os.path.join(folder, pdf["rel"])
+        os.replace(p, p + ".bak"); os.symlink("/etc/hosts", p)
+        c_s = srv.get(f"/api/jobs/{jid}/file/{pdf['id']}{t}")[0]
+        c_p = srv.get(f"/api/jobs/{jid}/package{t}")[0]
+        check("jobs: a file changed, or swapped for a symlink, after completion is not served",
+              c_t == 409 and c_s == 409 and c_p == 409, (c_t, c_s, c_p))
     finally:
         srv.stop()

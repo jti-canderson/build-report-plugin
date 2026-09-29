@@ -21,6 +21,39 @@ def MAXA(kind):
 JOB_PATH = re.compile(r"^/api/jobs/([0-9a-f]{16})(/[a-z]+)?(/[a-z0-9]+)?$")
 
 
+def safe_file(folder, rel):
+    """The regular file at folder/rel, or None. Resolved first, so no `..`, no absolute path
+    and no symlink anywhere along the way can reach outside the report folder."""
+    folder = pathlib.Path(folder).resolve()
+    if not isinstance(rel, str) or not rel or rel.startswith("/") or "\\" in rel:
+        return None
+    p = folder / rel
+    cur = folder
+    for part in pathlib.PurePosixPath(rel).parts:
+        if part in ("..", "."):
+            return None
+        cur = cur / part
+        if cur.is_symlink():
+            return None
+    try:
+        r = p.resolve(strict=True)
+    except (OSError, RuntimeError):
+        return None
+    if folder not in r.parents or not r.is_file():
+        return None
+    return r
+
+
+def safe_name(name):
+    import re as _re
+    return _re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip("._") or "download"
+
+
+CTYPE = {".pdf": "application/pdf", ".png": "image/png", ".zip": "application/zip",
+         ".txt": "text/plain; charset=utf-8", ".jrxml": "application/xml",
+         ".groovy": "text/plain; charset=utf-8"}
+
+
 class Refuse(Exception):
     def __init__(self, code, message):
         super().__init__(message)
@@ -126,9 +159,13 @@ class Routes:
         prior = J.Store._read(folder / ".jti-build" / "job.json")
         files = [str(p.relative_to(folder)) for p in folder.rglob("*")
                  if p.is_file() and not str(p.relative_to(folder)).startswith(".jti-build")]
-        ours = prior and prior.get("status") in ("failed", "cancelled", "timed_out")
-        real = [f for f in files if f.endswith((".jrxml", ".groovy")) or f.startswith("RULE-")]
-        if real and not ours:
+        # Files an earlier UNFINISHED builder job recorded creating may be rebuilt; any other
+        # report file - including one that appeared after that job ended - is the user's.
+        ours = set(prior.get("partial") or []) \
+            if prior and prior.get("status") in ("failed", "cancelled", "timed_out") else set()
+        real = [f for f in files if (f.endswith((".jrxml", ".groovy")) or f.startswith("RULE-"))
+                and f not in ours]
+        if real:
             return None, (f"{folder.name} already holds a report ({real[0]}). Pick another "
                           f"report name - an existing report is never overwritten.")
         return files, None
@@ -141,6 +178,8 @@ class Routes:
             return True
         if method == "GET" and action == "events":
             return self.stream(h, jid)
+        if method == "GET" and action in ("file", "preview", "package"):
+            return self.download(h, j, action, arg)
         if method == "POST" and action == "answer":
             with self.s.lock:
                 r = self.post_answer(h, self.s.get(jid), body_json(h))
@@ -377,6 +416,40 @@ class Routes:
             self.s.save(j)
         return {"ok": True, "name": name, "bytes": n}
 
+    def download(self, h, j, action, aid):
+        """Only a COMPLETE job's registered artifacts, looked up by the id the server gave
+        them - never by a path from the URL - re-checked inside the folder and against the
+        hash recorded at completion."""
+        if j["status"] != "complete":
+            raise Refuse(409, "nothing to download - this build did not complete")
+        folder = pathlib.Path(j["report"]["folder"])
+
+        def load(a):
+            p = safe_file(folder, a["rel"])
+            if not p or J.sha(str(p)) != a["sha256"]:
+                raise Refuse(409, f"{a['name']} changed or moved since the build finished")
+            return p.read_bytes()
+        if action == "package":
+            import io
+            import zipfile
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+                for a in j["artifacts"]:
+                    if a["kind"] != "page":                 # page images are previews only
+                        z.writestr(a["rel"], load(a))
+            name = safe_name(j["report"]["name"]) + "-package.zip"
+            h._send(200, buf.getvalue(), "application/zip",
+                    {"Content-Disposition": f'attachment; filename="{name}"'})
+            return True
+        a = next((x for x in j["artifacts"] if x["id"] == aid), None)
+        if not a or (action == "preview" and a["kind"] != "page"):
+            raise Refuse(404, "no such file in this build")
+        ext = pathlib.PurePath(a["name"]).suffix.lower()
+        disp = "inline" if action == "preview" else "attachment"
+        h._send(200, load(a), CTYPE.get(ext, "application/octet-stream"),
+                {"Content-Disposition": f'{disp}; filename="{safe_name(a["name"])}"'})
+        return True
+
     def claimed(self, j):
         folder = pathlib.Path(j["report"]["folder"])
         spec = J.Store._read(folder / j["spec"]) or {}
@@ -404,10 +477,48 @@ class Routes:
         return None
 
     def complete(self, j):
+        """Finish ONLY a verified build. Every gate must have passed with no failure since,
+        and the rule, .jrxml and zip must still be byte-for-byte what was verified. Then the
+        deliverables are registered by the server - the browser can download those and
+        nothing else."""
         s = self.s
-        s.done(j, "complete", "Complete")
+        g = j.get("gates")
+        if not g or not g.get("ok"):
+            raise Refuse(409, "the gates have not passed for this job - nothing is complete "
+                              "until `jobs.py run --gates` passes")
+        folder = pathlib.Path(j["report"]["folder"]).resolve()
+        for name, want in g["files"].items():
+            p = safe_file(folder, name)
+            if not p or J.sha(str(p)) != want:
+                raise Refuse(409, f"{name} changed after the gates passed - run them again")
+        arts = []
+
+        def add(kind, rel):
+            p = safe_file(folder, rel)
+            if p:
+                arts.append({"id": f"a{len(arts) + 1}", "kind": kind, "name": p.name,
+                             "rel": str(p.relative_to(folder)), "bytes": p.stat().st_size,
+                             "sha256": J.sha(str(p))})
+        for name in g["files"]:
+            add("rule" if name.endswith(".groovy") else "jrxml" if name.endswith(".jrxml")
+                else "rule-zip", name)
+        for name in ("RULE_REGISTRATION.txt", "JRXML_CONTRACT.txt"):
+            add("doc", name)
+        vdir = folder / "verification"
+        if vdir.is_dir() and not vdir.is_symlink():
+            for p in sorted(vdir.glob("*.pdf")):
+                add("pdf", f"verification/{p.name}")
+            for p in sorted(vdir.glob("*.png")):
+                add("page", f"verification/{p.name}")
+        kinds = {a["kind"] for a in arts}
+        missing = [k for k in ("rule", "jrxml", "rule-zip", "doc", "pdf") if k not in kinds]
+        if missing:
+            raise Refuse(409, f"cannot complete - no verified {', '.join(missing)} in the report folder")
+        j["artifacts"] = arts
+        s.done(j, "complete", "Report built and verified")
         j["status"], j["running"] = "complete", False
-        return {"artifacts": j["artifacts"]}
+        s.event(j, "complete", "complete", f"{len(arts)} files ready")
+        return {"artifacts": arts}
 
     def finish_cancel(self, j):
         j["status"], j["running"] = "cancelled", False
