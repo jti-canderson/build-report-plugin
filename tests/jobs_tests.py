@@ -410,6 +410,20 @@ def run_phase3(check, skip, ctx):
               reread and (reread.get("question") or {}).get("id") == "title" and c1 == 200 and c2 == 200
               and '"Open Cases"' in out1 and "Line two" in out2, out1[-200:] + out2[-200:])
 
+        # 2b. the worker's shell call dies mid-wait; asking the SAME question resumes it
+        p = helper(plugin, ws, "ask", "--id", "resume", "--title", "Resume", "--prompt", "?",
+                   "--type", "text", background=True)
+        first = wait_for(lambda: ((srv.snap(jid, tok) or {}).get("question") or {}).get("asked"))
+        p.kill(); p.wait()
+        p = helper(plugin, ws, "ask", "--id", "resume", "--title", "Resume", "--prompt", "?",
+                   "--type", "text", background=True)
+        time.sleep(1)
+        again = (srv.snap(jid, tok) or {}).get("question") or {}
+        srv.js("POST", f"/api/jobs/{jid}/answer", {"id": "resume", "text": "still here"}, H)
+        outr, _ = p.communicate(timeout=30)
+        check("jobs: re-running the same `ask` after a cut-off resumes it - not asked twice",
+              again.get("asked") == first and p.returncode == 0 and "still here" in outr, outr)
+
         # 3. a file question - the SDK the build genuinely needs
         p = helper(plugin, ws, "ask", "--id", "sdk-file", "--title", "Upload the SDK",
                    "--prompt", "Send the ecourt-sdk jar.", "--type", "file", background=True)

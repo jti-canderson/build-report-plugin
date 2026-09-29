@@ -304,6 +304,10 @@ class Routes:
             err = J.Store.check_question(b.get("question"))
             if err:
                 raise Refuse(400, err)
+            if j["question"] and j["question"]["id"] == b["question"]["id"]:
+                # The same question again: the worker's shell call timed out while the user
+                # was still deciding. Resume waiting on it - do not re-ask or reset its clock.
+                return {"resumed": True}
             if j["question"]:
                 raise Refuse(409, f"question {j['question']['id']!r} is still open - one at a time")
             s.ask(j, b["question"], b.get("timeout") or 3600)

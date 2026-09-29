@@ -127,6 +127,10 @@ python3 "$J" ask --id <short-id> --title "<short title>" --prompt "<the question
     --type choice|text|longtext|file [--option value=Label ...] [--allow-text] [--optional] [--timeout 3600]
 ```
 
+A shell call is cut off after 10 minutes, but a question waits up to its `--timeout`. If the
+call ends with no answer printed and no exit 5 or 6, **run exactly the same `ask` again**: it
+resumes waiting on the question already open and does not ask twice.
+
 It blocks until the page answers, then prints the answer as JSON (`value`, `text`, and for a
 file, `file`: the uploaded file's path inside the job folder). One question at a time. Types:
 
