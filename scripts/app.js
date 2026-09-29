@@ -248,8 +248,13 @@ function App() {
       if (d.projects.length) setProject(d.projects[0].name);
       if (d.jobs && window.JTIBuild) {
         SESSION.h = { 'X-JTI-Session': d.jobs.session };
-        const j = window.JTIBuild.recall();       // a refresh comes back to its build
-        if (j) setJob(j);
+        // A refresh comes back to its build - if the server still knows it. A job from an
+        // earlier server's workspace (same address, different run) is forgotten, not
+        // waited on forever.
+        const j = window.JTIBuild.recall();
+        if (j) fetch('/api/jobs/' + j.id + '?t=' + encodeURIComponent(j.token))
+          .then(r => (r.ok ? setJob(j) : window.JTIBuild.remember(null)))
+          .catch(() => setJob(j));
       }
     });
   }, []);

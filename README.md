@@ -133,6 +133,16 @@ Checks      = ~/JaspersoftWorkspace/MyReports/OKDAC Reports/Checks
 Nothing is read until a shortcut is clicked — the list is built with `stat`, which macOS
 does not gate, so opening the picker never triggers a file-access prompt.
 
+## /test-report: the whole build in the browser (unreleased)
+
+`/test-report` runs this checkout, not the installed plugin, and keeps the build on one page:
+the form, live progress, any follow-up question, the rendered pages and the downloads. The
+command starts `serve_builder.py --jobs` (port 8789) and is the worker. It claims the job the
+page submits and reports each step through `scripts/jobs.py`. Job state is on disk in
+`<report>/.jti-build/`, so a refresh or a restart resumes. One build at a time. Details and a
+recorded run: `docs/test-report/E2E.md`. `/build-report` is unchanged, and so is the builder
+without `--jobs`.
+
 ## Rollout switches
 
 Each optimisation has its OWN switch, so any one can be turned on without the others. **Every

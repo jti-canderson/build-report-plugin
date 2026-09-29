@@ -595,8 +595,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 import jobs as J
                 act = JOBS.s.active()
                 boot["jobs"] = {"session": JOBS.s.session_token,
-                                "stages": [{"key": k, "percent": p, "label": l}
-                                           for k, p, l in J.STAGES],
+                                "stages": [{"key": k, "percent": p, "label": l, "doing": d,
+                                            "name": J.NAME[k]} for k, p, l, d in J.STAGES],
                                 "active": {"name": act["report"]["name"]} if act else None}
             return self._send(200, json.dumps(boot))
         if path.startswith("/preview/"):

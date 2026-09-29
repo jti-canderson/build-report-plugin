@@ -133,10 +133,28 @@ class Routes:
             folder, err = self.app.report_folder(payload)
             if err:
                 raise Refuse(400, err)
+            raw = str(payload.get("project") or "").strip()
+            given = pathlib.Path(raw).expanduser() if raw.startswith(("/", "~")) \
+                else self.app.P.ROOT / raw
+            if given.absolute() != given.resolve():
+                raise Refuse(400, f"{raw!r} goes through a symlink (it is really "
+                                  f"{given.resolve()}) - browse to the real folder instead")
+            if not __import__("os").access(folder.parent, __import__("os").W_OK):
+                raise Refuse(400, f"{folder.parent} is not writable - pick another destination")
             pre, err = self.preexisting(folder)
             if err:
                 raise Refuse(409, err)
-            ok, msg = self.app.write_spec(payload)
+            # Lists the scaffold expects: a hand-posted spec that omits them would store null,
+            # and the generated gen_jrxml.py then dies on `META = null`.
+            for k in ("meta", "tiles", "sections", "params"):
+                if not isinstance(payload.get(k), list):
+                    payload[k] = []
+            if not isinstance(payload.get("variants"), list) or not payload["variants"]:
+                payload["variants"] = ["full", "none"]
+            try:
+                ok, msg = self.app.write_spec(payload)
+            except OSError as e:
+                raise Refuse(400, f"could not write the report folder: {e.strerror or e}")
             if not ok:
                 raise Refuse(400, msg)
             report = {"name": payload["name"].strip(),
@@ -180,6 +198,10 @@ class Routes:
             return self.stream(h, jid)
         if method == "GET" and action in ("file", "preview", "package"):
             return self.download(h, j, action, arg)
+        if method == "POST" and action == "cancel":
+            with self.s.lock:
+                r = self.cancel(self.s.get(jid))
+            h._send(200, json.dumps(r)); return True
         if method == "POST" and action == "answer":
             with self.s.lock:
                 r = self.post_answer(h, self.s.get(jid), body_json(h))
@@ -239,6 +261,13 @@ class Routes:
         with s.lock:
             j = s.worker_job()
             if not j:
+                last = s.last_claimed()
+                if last and action not in ("claim",):
+                    # The build the worker was on has ENDED. Say how, so the helper stops
+                    # with the right exit code instead of a confusing "no job".
+                    h._send(200, json.dumps({"ok": True, "cancel": last["status"] == "cancelled",
+                                             "ended": last["status"]}))
+                    return True
                 raise Refuse(409, "no claimed job - run `jobs.py wait` first")
             j["worker_seen"] = time.time()
             if j["cancel_requested"] and j["status"] not in J.TERMINAL:
@@ -293,6 +322,8 @@ class Routes:
             return self.record_gates(j, b)
         if action == "complete":
             return self.complete(j)
+        if action == "ping":
+            return None
         if action == "status":
             return {"job": s.public(j)}
         raise Refuse(404, f"no worker action {action!r}")
@@ -491,6 +522,16 @@ class Routes:
             p = safe_file(folder, name)
             if not p or J.sha(str(p)) != want:
                 raise Refuse(409, f"{name} changed after the gates passed - run them again")
+        # The documents must have been WRITTEN, not just generated: a NOTES block still
+        # holding contract_docs' "TODO before this ships" seed is an unfinished handoff.
+        import contract_docs as CD
+        for name in ("RULE_REGISTRATION.txt", "JRXML_CONTRACT.txt"):
+            p = safe_file(folder, name)
+            t = p.read_text(encoding="utf8", errors="replace") if p else ""
+            i = t.find(CD.BEGIN)
+            if i >= 0 and t[i + len(CD.BEGIN):].lstrip().startswith("TODO before this ships"):
+                raise Refuse(409, f"{name} still has its unfilled NOTES seed - fill it (the "
+                                  f"documentation stage) before completing")
         arts = []
 
         def add(kind, rel):
@@ -519,6 +560,25 @@ class Routes:
         j["status"], j["running"] = "complete", False
         s.event(j, "complete", "complete", f"{len(arts)} files ready")
         return {"artifacts": arts}
+
+    STALE_WORKER = 300          # seconds without a helper call before cancel stops waiting
+
+    def cancel(self, j):
+        """Set the persistent cancel flag. The worker sees it on its very next helper call
+        (every call reports it; a running child is polled every half second and stopped).
+        Nothing is deleted. A job nobody is working on is cancelled at once."""
+        if j["status"] in J.TERMINAL:
+            raise Refuse(409, f"this build already ended ({j['status']})")
+        j["cancel_requested"] = True
+        seen = j.get("worker_seen") or 0
+        if j["status"] == "submitted" or time.time() - seen > self.STALE_WORKER:
+            self.finish_cancel(j)
+        else:
+            j["status"], j["running"] = "cancelling", False
+            j["status_text"] = "Cancelling - waiting for the current step to stop"
+            self.s.event(j, "cancel_requested", j["stage"], j["status_text"], "warn")
+        self.s.save(j)
+        return {"ok": True, "status": j["status"]}
 
     def finish_cancel(self, j):
         j["status"], j["running"] = "cancelled", False

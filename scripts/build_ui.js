@@ -80,7 +80,7 @@
         const failed = snap.failure && snap.failure.stage === s.key;
         return html`<li key=${s.key} class=${done ? 'ok' : failed ? 'bad' : now ? 'now' : ''}>
           <span class="mk">${done ? '✓' : failed ? '✕' : now ? html`<span class="spin1"/>` : '·'}</span>
-          ${s.label}<span class="pc">${s.percent}%</span></li>`;
+          ${failed ? s.name + ' - failed' : s.label}<span class="pc">${s.percent}%</span></li>`;
       })}
     </ol>`;
   }
@@ -194,7 +194,10 @@
       <button class="go sm" onClick=${onAnother}>Build another report</button></div>`;
     if (!snap) return html`<div class="spin">Connecting to the build…</div>`;
     const term = TERMINAL.includes(snap.status);
-    const stageLabel = (stages.find(s => s.key === snap.stage) || {}).label || snap.stage;
+    // While a stage runs (or waits on a question) show what is being DONE; once it is done,
+    // its completed label. The checklist always uses the completed labels.
+    const st = stages.find(s => s.key === snap.stage) || {};
+    const stageLabel = snap.done.includes(snap.stage) ? st.label : (st.doing || st.label || snap.stage);
     const stale = snap.status === 'running' && snap.worker_seen_ago > 180;
     return html`<div class="build">
       <div class="bhead">
@@ -236,6 +239,11 @@
       <details class="mt12"><summary>Technical log (${snap.log_tail.length} recent lines)</summary>
         <pre class="blog">${snap.log_tail.join('\n') || '(nothing yet)'}</pre></details>
 
+      ${!term && html`<div class="mt12"><button class="mini" disabled=${snap.status === 'cancelling'}
+            onClick=${() => { if (confirm('Cancel this build? Files it already created are kept.'))
+              fetch('/api/jobs/' + job.id + '/cancel', { method: 'POST', body: '{}',
+                headers: { 'X-JTI-Job': job.token, 'Content-Type': 'application/json' } }); }}>
+            ${snap.status === 'cancelling' ? 'Cancelling…' : 'Cancel build'}</button></div>`}
       ${term && snap.status !== 'complete' && html`<div class="mt12"><button class="go sm"
             onClick=${onAnother}>Build another report</button></div>`}
     </div>`;

@@ -52,26 +52,29 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
-# key, percent when DONE, label shown in the checklist
+# key, percent when DONE, label once done (checklist), label while it runs
 STAGES = [
-    ("submitted", 0, "Submitted"),
-    ("validated", 5, "Specification validated"),
-    ("destination", 12, "Destination and SDK checked"),
-    ("requirements", 22, "Requirements and field sources resolved"),
-    ("plan", 35, "Rule and build plan prepared"),
-    ("scaffold", 45, "Report scaffolded"),
-    ("fixtures", 55, "Fixtures prepared"),
-    ("contract", 62, "Contract check passed"),
-    ("rule", 72, "Rule execution passed"),
-    ("render", 84, "Rendered"),
-    ("truncation", 90, "Truncation check passed"),
-    ("package", 93, "Rule package written"),
-    ("review", 96, "Every rendered page looked at"),
-    ("documentation", 98, "Documentation written"),
-    ("complete", 100, "Complete"),
+    ("submitted", 0, "Submitted", "Waiting for Claude"),
+    ("validated", 5, "Specification validated", "Validating the specification"),
+    ("destination", 12, "Destination and SDK checked", "Checking the destination and SDK"),
+    ("requirements", 22, "Requirements and field sources resolved", "Resolving requirements and field sources"),
+    ("plan", 35, "Rule and build plan prepared", "Preparing the rule"),
+    ("scaffold", 45, "Report scaffolded", "Scaffolding the report"),
+    ("fixtures", 55, "Fixtures prepared", "Preparing fixture rows"),
+    ("contract", 62, "Contract check passed", "Checking the rule/layout contract"),
+    ("rule", 72, "Rule execution passed", "Running the rule"),
+    ("render", 84, "Rendered", "Rendering the pages"),
+    ("truncation", 90, "Truncation check passed", "Checking for cut-off values"),
+    ("package", 93, "Rule package written", "Writing the rule package"),
+    ("review", 96, "Every rendered page looked at", "Looking at every rendered page"),
+    ("documentation", 98, "Documentation written", "Writing the documentation"),
+    ("complete", 100, "Complete", "Completing"),
 ]
-PERCENT = {k: p for k, p, _ in STAGES}
-LABEL = {k: l for k, _, l in STAGES}
+PERCENT = {k: p for k, p, _, _ in STAGES}
+LABEL = {k: l for k, _, l, _ in STAGES}
+DOING = {k: d for k, _, _, d in STAGES}
+# The neutral name, for a stage that FAILED - "Failed at: Contract check passed" contradicts itself.
+NAME = {'submitted': 'Submission', 'validated': 'Specification', 'destination': 'Destination and SDK', 'requirements': 'Requirements and fields', 'plan': 'Rule', 'scaffold': 'Scaffold', 'fixtures': 'Fixtures', 'contract': 'Contract check', 'rule': 'Rule execution', 'render': 'Render', 'truncation': 'Truncation check', 'package': 'Rule package', 'review': 'Page review', 'documentation': 'Documentation', 'complete': 'Completion'}
 TERMINAL = ("complete", "failed", "cancelled", "timed_out")
 QTYPES = ("choice", "text", "longtext", "file")
 MAX_ANSWER = {"text": 400, "longtext": 20000, "choice": 400}
@@ -198,14 +201,19 @@ class Store:
             j["events"] = j["events"][:50] + j["events"][-(MAX_EVENTS - 50):]
         return ev
 
+    @staticmethod
+    def log_path(j):
+        # One log per JOB: a rebuild in the same folder must not show the last build's lines.
+        return pathlib.Path(j["report"]["folder"]) / ".jti-build" / f"log-{j['id']}.txt"
+
     def log(self, j, text):
-        p = pathlib.Path(j["report"]["folder"]) / ".jti-build" / "log.txt"
+        p = self.log_path(j)
         with open(p, "a", encoding="utf8") as f:
             for line in str(text).splitlines() or [""]:
                 f.write(time.strftime("%H:%M:%S ") + line + "\n")
 
     def log_tail(self, j, n=200):
-        p = pathlib.Path(j["report"]["folder"]) / ".jti-build" / "log.txt"
+        p = self.log_path(j)
         try:
             return p.read_text(encoding="utf8", errors="replace").splitlines()[-n:]
         except OSError:
@@ -252,6 +260,15 @@ class Store:
             finally:
                 self.claim_waiters -= 1
 
+    def last_claimed(self):
+        """The job the worker most recently claimed, whatever state it is in now."""
+        best = None
+        for jid in list(self.index):
+            j = self.get(jid)
+            if j and j.get("claimed") and (not best or j["claimed"] > best["claimed"]):
+                best = j
+        return best
+
     def worker_job(self):
         """The job the worker is on: the active, claimed one."""
         j = self.active()
@@ -259,7 +276,7 @@ class Store:
 
     def start(self, j, stage, status):
         j["stage"], j["running"] = stage, True
-        j["status_text"] = clip(status or LABEL.get(stage, stage))
+        j["status_text"] = clip(status or DOING.get(stage, stage))
         self.event(j, "start", stage, j["status_text"])
 
     def done(self, j, stage, status, level="info"):
@@ -278,14 +295,14 @@ class Store:
             if gate == "regenerate":
                 self.start(j, stage, "Regenerating the layout")
             else:
-                self.start(j, stage, message or f"Checking: {LABEL[stage].lower()}")
+                self.start(j, stage, message or DOING[stage])
         elif kind == "passed" and stage and gate != "regenerate":
             self.done(j, stage, LABEL[stage])
         elif kind == "warn":
             self.event(j, "warn", stage, clip(message), "warn")
         elif kind == "failed":
             j["running"] = False
-            j["status_text"] = clip(f"{LABEL.get(stage, gate)} FAILED - {message}")
+            j["status_text"] = clip(f"{NAME.get(stage, gate)} FAILED - {message}")
             j.setdefault("gate_failures", []).append(
                 {"stage": stage or gate, "message": clip(message), "ts": time.time()})
             j["gates"] = None                          # an earlier pass no longer stands
@@ -345,10 +362,10 @@ class Store:
 
     def fail(self, j, stage, message, excerpt="", retryable=False, attempts=0):
         j["status"], j["running"] = "failed", False
-        j["failure"] = {"stage": stage, "label": LABEL.get(stage, stage),
+        j["failure"] = {"stage": stage, "label": NAME.get(stage, stage),
                         "message": clip(message, 1000), "excerpt": clip(excerpt, 6000),
                         "retryable": bool(retryable), "auto_attempts": int(attempts or 0)}
-        j["status_text"] = f"Failed at: {LABEL.get(stage, stage)}"
+        j["status_text"] = f"Failed at: {NAME.get(stage, stage)}"
         j["partial"] = self.created_files(j)
         self.event(j, "failed", stage, clip(message), "error")
 
@@ -421,6 +438,12 @@ def _checked(r):
         print("CANCELLED - the user cancelled this build in the browser. Stop now; do not "
               "start another step.")
         sys.exit(EXIT_CANCELLED)
+    if r.get("ended") == "timed_out":
+        print("TIMED OUT - this build already timed out waiting for an answer. Stop now.")
+        sys.exit(EXIT_TIMEOUT)
+    if r.get("ended"):
+        print(f"  this build already ended ({r['ended']}) - nothing more to report for it")
+        sys.exit(1)
     if not r.get("ok", True):
         print(f"  refused: {r.get('message') or r}")
         sys.exit(1)
@@ -439,6 +462,7 @@ def run_child(a):
     """Run one child for the job. Its output streams to the job log in small batches; with
     --gates, the structured JTI-GATE lines become stage events and nothing is read from
     prose. Returns the child's exit code."""
+    import signal
     import subprocess
     argv = a.argv[1:] if a.argv[:1] == ["--"] else a.argv
     if not argv:
@@ -450,15 +474,47 @@ def run_child(a):
     _checked(call("/api/worker/start", {"stage": a.stage,
                                          "status": f"Running {os.path.basename(argv[0])}"}))
     env = dict(os.environ, JTI_JOB_STAGES="1") if a.gates else dict(os.environ)
+    # The gates use THIS checkout's templates. Without it, a harness looks for them by walking
+    # up from the report folder and then in ~/.claude/plugins/cache - which is the INSTALLED
+    # plugin, silently a different version than the one under test (found by --core-only).
+    env.setdefault("JTI_PLUGIN", os.path.dirname(HERE))
     p = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                          bufsize=1, env=env, start_new_session=True)
-    _checked(call("/api/worker/child", {"pid": p.pid, "stage": a.stage}))
+    cancelled = threading.Event()
+
+    def stop_child():
+        """The child runs in its own process group: stop the whole group, politely first."""
+        cancelled.set()
+        for sig, wait in ((signal.SIGTERM, 5), (signal.SIGKILL, 5)):
+            try:
+                os.killpg(p.pid, sig)
+            except (ProcessLookupError, PermissionError):
+                return
+            try:
+                p.wait(wait)
+                return
+            except subprocess.TimeoutExpired:
+                continue
+
+    def ck(r):
+        if r.get("cancel"):
+            stop_child()
+        return _checked(r)                     # exits 6 on cancel - the child is gone first
+
+    def watch():
+        while p.poll() is None and not cancelled.is_set():
+            if call("/api/worker/ping").get("cancel"):
+                stop_child()
+                return
+            time.sleep(0.5)
+    ck(call("/api/worker/child", {"pid": p.pid, "stage": a.stage}))
+    threading.Thread(target=watch, daemon=True).start()
     buf, last = [], time.monotonic()
 
     def flush():
         nonlocal buf, last
         if buf:
-            _checked(call("/api/worker/log", {"message": "\n".join(buf)}))
+            ck(call("/api/worker/log", {"message": "\n".join(buf)}))
         buf, last = [], time.monotonic()
 
     for line in p.stdout:
@@ -468,15 +524,19 @@ def run_child(a):
             flush()
             parts = line.split(" ", 3)
             kind, gate = parts[1], (parts[2] if len(parts) > 2 else "")
-            _checked(call("/api/worker/gate", {"kind": kind, "gate": gate,
-                                                "message": parts[3] if len(parts) > 3 else ""}))
+            ck(call("/api/worker/gate", {"kind": kind, "gate": gate,
+                                          "message": parts[3] if len(parts) > 3 else ""}))
             continue
         buf.append(line)
         if len(buf) >= 40 or time.monotonic() - last > 0.5:
             flush()
     rc = p.wait()
+    if cancelled.is_set():
+        print(f"CANCELLED - the user cancelled this build; {os.path.basename(argv[0])} was "
+              f"stopped. Stop now; do not start another step.")
+        return EXIT_CANCELLED
     flush()
-    _checked(call("/api/worker/child", {"pid": None, "stage": a.stage, "rc": rc}))
+    ck(call("/api/worker/child", {"pid": None, "stage": a.stage, "rc": rc}))
     if a.gates and rc == 0:
         rule, jrxml = argv[1], argv[2]
         files = {f: sha(f) for f in [rule, jrxml] + sorted(

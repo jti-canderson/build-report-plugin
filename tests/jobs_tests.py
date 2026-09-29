@@ -102,6 +102,7 @@ def run(check, skip, ctx):
     run_phase2(check, skip, ctx)
     run_phase3(check, skip, ctx)
     run_phase4(check, skip, ctx)
+    run_phase5(check, skip, ctx)
 
 
 def run_phase1(check, skip, ctx):
@@ -177,6 +178,14 @@ def run_phase1(check, skip, ctx):
         c, d3 = srv.submit(spec_for("Flow_Probe"))
         check("jobs: a folder that already holds a report is never built over (409)",
               c == 409 and "never overwritten" in d3.get("message", ""), d3)
+        bare = {"project": "Proj", "name": "Bare_Spec", "template": "tabular_list", "intent": "x"}
+        c, d4 = srv.submit(bare)
+        spec = json.load(open(os.path.join(ws, "Proj", "Bare_Spec", "spec.json"))) if c == 200 else {}
+        check("jobs: a spec posted without the list fields gets empty lists, never null",
+              c == 200 and spec.get("meta") == [] and spec.get("tiles") == []
+              and spec.get("variants") == ["full", "none"], spec)
+        helper(plugin, ws, "wait", "--secs", "5")
+        helper(plugin, ws, "fail", "--stage", "validated", "--message", "test stops here")
     finally:
         srv.stop()
 
@@ -226,6 +235,19 @@ def probe_job(plugin, ctx, srv, ws, name="Probe_Report"):
     t = re.sub(r'"(rptSubtitle|rptSlug)": "TODO [^"]*"', lambda m: f'"{m.group(1)}": "probe"', t)
     open(fx, "w").write(t)
     return d["job"], d["token"], folder
+
+
+def fill_notes(plugin, folder):
+    """What the worker does in the documentation stage: replace each untouched seed."""
+    import re
+    sys.path.insert(0, os.path.join(plugin, "scripts"))
+    import contract_docs as CD
+    for fn in ("JRXML_CONTRACT.txt", "RULE_REGISTRATION.txt"):
+        p = os.path.join(folder, fn)
+        t = open(p).read()
+        m = re.search(re.escape(CD.BEGIN) + r"\n(.*?)\n" + re.escape(CD.END), t, re.S)
+        if m and m.group(1).startswith("TODO before this ships"):
+            open(p, "w").write(t[:m.start(1)] + "Filled by the test worker." + t[m.end(1):])
 
 
 def gates_cmd(plugin, name="Probe_Report"):
@@ -301,8 +323,18 @@ def run_phase2(check, skip, ctx):
         j = srv.snap(jid, tok)
         check("jobs: `fail` ends the job as FAILED with the stage, message and a log excerpt",
               f.returncode == 0 and j["status"] == "failed" and j["failure"]["stage"] == "contract"
+              and j["failure"]["label"] == "Contract check" and j["status_text"] == "Failed at: Contract check"
               and "GATE 1 FAILED" in j["failure"]["excerpt"] and j["failure"]["auto_attempts"] == 1,
               j.get("failure"))
+        # a rebuild in the same folder (allowed: this job created the report files) starts clean
+        code, d = srv.submit(json.load(open(os.path.join(folder, "spec.json"))) | {"project": "Proj"})
+        again = srv.snap(d.get("job"), d.get("token")) if code == 200 else None
+        check("jobs: a rebuild over an unfinished build's own files is allowed, with its own log",
+              code == 200 and again and not any("GATE 1 FAILED" in ln for ln in again["log_tail"]),
+              (code, d))
+        if code == 200:
+            helper(plugin, ws, "wait", "--secs", "5")
+            helper(plugin, ws, "fail", "--stage", "validated", "--message", "test stops here")
         ctype, last = sse_first(srv, jid, tok)
         check("jobs: a finished job's stream sends its final state (and then ends)",
               last and last["status"] == "failed", "")
@@ -437,8 +469,12 @@ def run_phase4(check, skip, ctx):
         c1 = helper(plugin, ws, "complete")
         open(rule, "w").write(orig)                        # back to exactly what was verified
         helper(plugin, ws, "done", "review", "Looked at every page")
+        c_notes = helper(plugin, ws, "complete")           # NOTES still hold the TODO seed
+        fill_notes(plugin, folder)
         helper(plugin, ws, "done", "documentation", "NOTES filled")
         c2 = helper(plugin, ws, "complete")
+        check("jobs: completion is refused while a NOTES block still holds its TODO seed",
+              c_notes.returncode == 1 and "unfilled NOTES seed" in c_notes.stdout, c_notes.stdout)
         j = srv.snap(jid, tok)
         kinds = sorted({a["kind"] for a in j["artifacts"]})
         check("jobs: a file edited after the gates passed blocks completion",
@@ -491,5 +527,130 @@ def run_phase4(check, skip, ctx):
         c_p = srv.get(f"/api/jobs/{jid}/package{t}")[0]
         check("jobs: a file changed, or swapped for a symlink, after completion is not served",
               c_t == 409 and c_s == 409 and c_p == 409, (c_t, c_s, c_p))
+    finally:
+        srv.stop()
+
+
+# ── phase 5: cancellation and the local-server security rules ────────────────────────
+def pid_alive(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+def run_phase5(check, skip, ctx):
+    import http.client
+    plugin, root = ctx["plugin"], ctx["ws"]
+    ws = fresh_ws(root, "cancel")
+    srv = Server(plugin, ws).start()
+    try:
+        # a file the user already had in the report folder, before the job existed
+        folder = os.path.join(ws, "Proj", "Cancel_Probe")
+        os.makedirs(folder)
+        open(os.path.join(folder, "my-notes.txt"), "w").write("mine\n")
+        code, d = srv.submit(spec_for("Cancel_Probe"))
+        jid, tok = d["job"], d["token"]
+        helper(plugin, ws, "wait", "--secs", "10")
+        # a long child: writes a partial file, prints its pid, then sleeps
+        child = ("import os,time; open('partial.txt','w').write('x'); "
+                 "print('CHILD', os.getpid(), flush=True); time.sleep(120)")
+        p = subprocess.Popen([sys.executable, os.path.join(plugin, "scripts", "jobs.py"), "run",
+                              "--stage", "render", "--", sys.executable, "-c", child],
+                             cwd=folder, env=dict(os.environ, JTI_PROJECT_ROOT=ws),
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        cpid = wait_for(lambda: ((srv.snap(jid, tok) or {}).get("child") or {}).get("pid"))
+        wait_for(lambda: os.path.exists(os.path.join(folder, "partial.txt")))
+        t0 = time.time()
+        c_no, _ = srv.js("POST", f"/api/jobs/{jid}/cancel", {})
+        c_ok, r = srv.js("POST", f"/api/jobs/{jid}/cancel", {}, {"X-JTI-Job": tok})
+        out, _ = p.communicate(timeout=30)
+        took = time.time() - t0
+        j = srv.snap(jid, tok)
+        check("jobs: cancel during a running child stops it (whole process group) within seconds",
+              c_no == 403 and c_ok == 200 and p.returncode == 6 and "CANCELLED" in out
+              and cpid and not pid_alive(cpid) and took < 10, f"rc={p.returncode} {took:.1f}s {out[-300:]}")
+        check("jobs: a cancelled job is CANCELLED - never successful - and lists what it created",
+              j["status"] == "cancelled" and j["artifacts"] == [] and "partial.txt" in j["partial"]
+              and "spec.json" in j["partial"] and "my-notes.txt" not in j["partial"], j["partial"])
+        check("jobs: cancelling leaves every file in place, the user's own included",
+              open(os.path.join(folder, "my-notes.txt")).read() == "mine\n"
+              and os.path.exists(os.path.join(folder, "partial.txt")), os.listdir(folder))
+        after = [helper(plugin, ws, *a).returncode for a in (("done", "fixtures"), ("complete",))]
+        c_pkg = srv.get(f"/api/jobs/{jid}/package?t={tok}")[0]
+        c_again, _ = srv.js("POST", f"/api/jobs/{jid}/cancel", {}, {"X-JTI-Job": tok})
+        check("jobs: after a cancel every helper call exits 6, nothing downloads, cancel is final",
+              after == [6, 6] and c_pkg == 409 and c_again == 409, (after, c_pkg, c_again))
+
+        # cancel while the worker is blocked on a question
+        code, d = srv.submit(spec_for("Cancel_Ask"))
+        jid2, tok2 = d["job"], d["token"]
+        helper(plugin, ws, "wait", "--secs", "10")
+        q = helper(plugin, ws, "ask", "--id", "x", "--title", "t", "--prompt", "p", "--type", "text",
+                   background=True)
+        wait_for(lambda: (srv.snap(jid2, tok2) or {}).get("question"))
+        srv.js("POST", f"/api/jobs/{jid2}/cancel", {}, {"X-JTI-Job": tok2})
+        qo, _ = q.communicate(timeout=30)
+        check("jobs: cancel reaches a worker that is waiting on a question (exit 6)",
+              q.returncode == 6 and srv.snap(jid2, tok2)["status"] == "cancelled", qo)
+        # cancel before anyone claimed it: immediate
+        code, d = srv.submit(spec_for("Cancel_Early"))
+        srv.js("POST", f"/api/jobs/{d['job']}/cancel", {}, {"X-JTI-Job": d["token"]})
+        check("jobs: a job nobody has claimed is cancelled at once",
+              srv.snap(d["job"], d["token"])["status"] == "cancelled", "")
+
+        # ---- security -----------------------------------------------------------------
+        def raw(method, path, headers, body=b""):
+            c = http.client.HTTPConnection("127.0.0.1", srv.port, timeout=10)
+            c.putrequest(method, path, skip_host=True, skip_accept_encoding=True)
+            for k, v in headers.items():
+                c.putheader(k, v)
+            c.endheaders(body or None)
+            r = c.getresponse(); b = r.read(); c.close()
+            return r.status, b
+        host = f"127.0.0.1:{srv.port}"
+        codes = {
+            "rebinding Host": raw("GET", "/api/bootstrap", {"Host": f"evil.example:{srv.port}"})[0],
+            "cross-origin POST": raw("POST", "/api/jobs", {"Host": host, "Origin": "http://evil.example",
+                                     "X-JTI-Session": srv.session, "Content-Length": "2"}, b"{}")[0],
+            "no Content-Length": raw("POST", "/api/jobs", {"Host": host, "X-JTI-Session": srv.session})[0],
+            "oversized body": raw("POST", "/api/jobs", {"Host": host, "X-JTI-Session": srv.session,
+                                  "Content-Length": str(2 * 1024 * 1024)})[0],
+            "GET on a mutation": raw("GET", "/api/jobs", {"Host": host})[0],
+            "worker GET": raw("GET", "/api/worker/claim", {"Host": host})[0],
+            "old spec route": raw("POST", "/api/spec", {"Host": host, "Content-Length": "2"}, b"{}")[0],
+            "upload without session": raw("POST", "/api/look?name=a.png", {"Host": host,
+                                          "Content-Length": "8"}, b"\x89PNG\r\n\x1a\n")[0],
+        }
+        check("jobs: wrong Host (DNS rebinding), cross-origin POST, no/oversized body, GET on a "
+              "mutation, the old spec route and an unauthenticated upload are all refused",
+              codes == {"rebinding Host": 421, "cross-origin POST": 403, "no Content-Length": 411,
+                        "oversized body": 413, "GET on a mutation": 405, "worker GET": 405,
+                        "old spec route": 404, "upload without session": 403}, codes)
+        bad = [spec_for("../../escape"), dict(spec_for("Abs_Path"), project="/etc"),
+               dict(spec_for("Link_Dest"), project="Proj/link")]
+        os.symlink("/tmp", os.path.join(ws, "Proj", "link"))
+        res = [srv.submit(b)[0] for b in bad]
+        check("jobs: a path in the report name, an unwritable destination and a destination "
+              "reached through a symlink are all refused; nothing is written outside",
+              res == [400, 400, 400] and not os.path.exists(os.path.join(ws, "escape"))
+              and not os.path.exists("/etc/Abs_Path") and not os.path.exists("/tmp/Link_Dest"), res)
+        src = open(os.path.join(plugin, "scripts", "serve_builder.py")).read()
+        state = os.path.join(ws, ".jti-builder", "server.json")
+        check("jobs: the server binds 127.0.0.1 only, and its worker token file is private (0600)",
+              'Server(("127.0.0.1", a.port)' in src and 'Server(("0.0.0.0"' not in src
+              and 'Server(("", ' not in src
+              and oct(os.stat(state).st_mode & 0o777) == "0o600"
+              and oct(os.stat(os.path.dirname(state)).st_mode & 0o777) == "0o700",
+              oct(os.stat(state).st_mode))
+        cmd = open(os.path.join(plugin, "commands", "test-report.md")).read()
+        front = cmd.split("---")[1]
+        check("commands/test-report.md asks through the browser only - no chat question tool",
+              "AskUserQuestion" not in front and '"$J" ask' in cmd and '"$J" wait' in cmd
+              and 'J="$P/scripts/jobs.py"' in cmd and "Never ask a question here" in cmd
+              and "--gates" in cmd and "Never import" in cmd, front)
     finally:
         srv.stop()
