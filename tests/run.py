@@ -30,6 +30,7 @@ Both tiers need the local TOOLS: JasperReports (its JDK too) and PyMuPDF.
                                        integration input can be reached, and those tests are
                                        reported as not run
 """
+import glob
 import json
 import os
 import re
@@ -992,6 +993,21 @@ print("RESOLVE", same, wrong, refused, typo)
           rc == 0 and "JaspersoftWorkspace" not in src.split("MADE_BY")[0]
           and r1.returncode == 0 and "wrote" in r1.stdout
           and r2.returncode != 0 and "JTI_PLUGIN" in r2.stderr, (r1.stderr[-200:], r2.stderr[-200:]))
+    shutil.rmtree(tw, ignore_errors=True)
+
+    # ---- Wide Table scaffolds (the page offers it; until 0.34.0 scaffold refused it) ----
+    tw = tempfile.mkdtemp(prefix="jti-wide-")
+    ws_spec = json.load(open(os.path.join(FIX, "good_spec.json")))
+    ws_spec["template"] = "wide_table"
+    json.dump(ws_spec, open(os.path.join(tw, "spec.json"), "w"))
+    rc, out = run(["python3", os.path.join(PLUGIN, "scripts", "scaffold.py"),
+                   os.path.join(tw, "spec.json"), "--out", os.path.join(tw, "R")])
+    jr = glob.glob(os.path.join(tw, "R", "*.jrxml"))
+    body = open(jr[0]).read() if jr else ""
+    check("scaffold: a Wide Table spec builds a landscape layout with the spec's own fields "
+          "(no sample grand total)",
+          rc == 0 and 'pageWidth="792"' in body and 'name="caseNumber"' in body
+          and "GrandTotal" not in body and 'name="amt"' not in body, out[-400:])
     shutil.rmtree(tw, ignore_errors=True)
 
     # ---- /build-report: the browser-contained build (job coordinator + helper) --------

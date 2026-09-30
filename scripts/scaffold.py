@@ -56,8 +56,8 @@ def build_kwargs(module):
     """Which keyword arguments this template's build() actually accepts.
 
     The templates do NOT share one signature - found by forward-testing 2026-09-08.
-    record_summary and eseries_summary take `sections`; tabular_list takes `columns`;
-    grouped_summary, statement and wide_table take NOTHING and read module-level
+    record_summary and eseries_summary take `sections`; tabular_list and wide_table (since
+    0.34.0) take `columns`; grouped_summary and statement take NOTHING and read module-level
     constants, so a report cannot parameterise them without editing the shared template
     and corrupting it for every other report. Emitting a call this template cannot
     accept produces a gen_jrxml.py that dies with a TypeError on first run, so this is
@@ -442,7 +442,8 @@ def main():
               f"  Its build() takes no arguments - it reads module-level COLUMNS and NAME, so a\n"
               f"  report using it would have to edit the shared template and break it for every\n"
               f"  other report. Use a template whose build() accepts sections= or columns=\n"
-              f"  (record_summary, eseries_summary, tabular_list), or open this one up first.")
+              f"  (record_summary, eseries_summary, tabular_list, wide_table), or compose the\n"
+              f"  generator from jti_style primitives (build-procedure.md, Custom layouts).")
         sys.exit(2)
 
     out = os.path.abspath(sys.argv[sys.argv.index('--out') + 1]) if '--out' in sys.argv \
