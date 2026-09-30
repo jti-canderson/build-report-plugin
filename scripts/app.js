@@ -352,7 +352,7 @@ function App() {
               <li><span>3</span>Get verified, ready-to-import files</li>
             </ol>
           </div>
-          <img class="mark" src="/brand/journal-mark.png" alt=""/>
+          <img class="mark" src="/brand/journal-mark.png" alt="" onError=${hideImg}/>
         </div>
 
         <div class="form">
@@ -558,12 +558,15 @@ function App() {
 }
 
 /* --------------------------------------------------------------------- chrome */
+// A builder server started before the /brand route existed answers 404 for the logo while
+// still serving this page from disk: hide the image rather than show a broken-image icon.
+const hideImg = e => { e.target.style.display = 'none'; };
 // The Journal Technologies mark, the product name, the workspace, and Claude's state -
 // the same header on the form and on the build screen.
 function AppBar({ boot, watching, jobsMode }) {
   return html`<header class="appbar"><div class="in">
     <div class="brand">
-      <img src="/brand/journal-j.png" alt="Journal Technologies"/>
+      <img src="/brand/journal-j.png" alt="" onError=${hideImg}/>
       <span class="sep"/>
       <div>
         <div class="ttl">Report Builder${jobsMode && html`<span class="tag">Test build</span>`}</div>
@@ -579,7 +582,7 @@ function AppBar({ boot, watching, jobsMode }) {
 }
 
 function Foot({ boot }) {
-  return html`<footer class="foot"><img src="/brand/journal-j.png" alt=""/>
+  return html`<footer class="foot"><img src="/brand/journal-j.png" alt="" onError=${hideImg}/>
     Journal Technologies · JTI Report Builder${boot.version && boot.version.mine
       ? ' ' + boot.version.mine : ''}</footer>`;
 }
