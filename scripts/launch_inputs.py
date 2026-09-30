@@ -64,7 +64,10 @@ def inputs(spec):
                     "path": c.get("path") or "", "rel": rel(c.get("path")), "operator": op,
                     "dtype": dtype, "lookup": c.get("lookup"), "multi": bool(c.get("multi")),
                     "required": bool(c.get("required")), "hidden": bool(c.get("hidden")),
-                    "default": c.get("default") or ""})
+                    "default": c.get("default") or "",
+                    # where: False - a computed (not stored) property: read the input, but the
+                    # rule matches it after find(); a Where on it cannot run in the query
+                    "where": c.get("where", True) is not False})
         seen |= set(names)
     classes = {n: cls for n, cls in (spec.get("params") or [])}
     for n, cls in (spec.get("params") or []):
@@ -72,7 +75,7 @@ def inputs(spec):
             out.append({"names": [n], "label": n, "path": "", "rel": "", "operator": "EQUALS",
                         "dtype": "date" if cls == "java.util.Date" else "text", "lookup": None,
                         "multi": False, "required": False, "hidden": False, "default": "",
-                        "plain": True})
+                        "where": True, "plain": True})
     for i in out:
         i["classes"] = [classes.get(n, JAVA.get(i["dtype"], "java.lang.String")) for n in i["names"]]
     return out
@@ -80,7 +83,14 @@ def inputs(spec):
 
 def validate(spec):
     errs, seen = [], {}
+    root = (spec.get("root") or "").strip()
     for i in inputs(spec):
+        # A path is a traversal FROM the report's root: "Person.fml" on a Case report would
+        # become a Case filter on `fml` - silently wrong. Reach it from the root instead.
+        if root and i["path"] and i["path"].split(".")[0] != root:
+            errs.append(f"{i['label']!r} filters {i['path']}, but the report is a list of {root} - "
+                        f"give the path from {root} (e.g. {root}.parties[].person."
+                        f"{i['path'].split('.', 1)[-1]})")
         for n in i["names"]:
             if not NAME_OK.match(n):
                 errs.append(f"launch input {n!r}: use letters, digits and underscores, starting "
@@ -201,6 +211,11 @@ def gen_block(spec):
         v = camel(i["names"][0] if i["names"] else i["label"])
         n = i["names"]
         p, op, dt = i["rel"], i["operator"], i["dtype"]
+        if not i["where"] and p:
+            post.append(f"// {n[0] if n else i['label']}: {i['path']} is computed, not stored - no Where "
+                        f"call can use it. Keep only records whose {i['path']} "
+                        f"{'contains' if op == 'CONTAINS' else 'matches'} `{v}` (when set), after find().")
+            p = ""
         note = f"// {i['path'] or '(typed by hand)'} - {op.replace('_', ' ').lower()}" + \
                (f", pick-list {i['lookup']}" if i["lookup"] else "") + (", REQUIRED" if i["required"] else "")
         L.append(note)
@@ -268,6 +283,10 @@ def gen_check(spec):
     cases = []
     for i in ins:
         op, dt, n = i["operator"], i["dtype"], i["names"]
+        if not i["where"]:
+            cases.append({"what": i["label"], "skip": f"{i['path']} is computed - the rule matches it "
+                                                      f"after find(); not a query filter, not checked here"})
+            continue
         if dt == "date" and op in ("RANGE", "range") and len(n) == 2:
             cases.append({"what": i["label"], "set": {n[0]: "01/15/2026", n[1]: "02/15/2026"},
                           "alt": {n[0]: "2026-01-15", n[1]: "2026-02-15"},

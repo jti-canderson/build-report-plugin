@@ -459,7 +459,7 @@ def write_spec(payload):
             for key, cap in (("label", 120), ("lookup", 80), ("default", 200), ("type", 20)):
                 if c.get(key):
                     k[key] = str(c[key])[:cap]
-            for key in ("multi", "required", "hidden"):
+            for key in ("multi", "required", "hidden", "where"):
                 if key in c:
                     k[key] = bool(c[key])
             keep.append(k)

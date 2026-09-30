@@ -174,6 +174,18 @@ def criteria_tests(ws):
     check("launch inputs: a spaced name and a hidden criterion with no default are refused",
           any("'Last Name'" in e for e in errs) and any("hidden but has no default" in e for e in errs), errs)
     check("launch inputs: the fixture itself validates clean", LI.validate(spec) == [], LI.validate(spec))
+    off = json.loads(json.dumps(spec))
+    off["criteria"][2]["path"] = "Person.lastName"
+    errs = LI.validate(off)
+    check("launch inputs: a path that does not start at the report's root is refused (it would filter the wrong record)",
+          any("Person.lastName" in e and "list of Case" in e for e in errs), errs)
+    calc = json.loads(json.dumps(spec))
+    calc["criteria"][2]["where"] = False
+    blk = LI.gen_block(calc)
+    chk = LI.gen_check(calc)
+    check("launch inputs: a computed criterion is read by name but never put in the query, and the check says so",
+          "launchInput('_LastName')" in blk and "addContains('parties.person.lastName'" not in blk
+          and "is computed, not stored" in blk and "matches it after find()" in chk, blk[-600:])
 
     proj = os.path.join(ws, "Probe Project")
     ds = os.path.join(proj, "dup_spec.json")
