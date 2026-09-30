@@ -91,7 +91,9 @@ DONE_TTL = 6 * 3600    # a Done nobody collected is forgotten, so it cannot end 
 # checks back in within a second or two - so a beacon with no return within the grace
 # period is a closed tab.
 PAGE_TTL = int(os.environ.get("JTI_PAGE_TTL") or 180)          # env: tests only
-CLOSE_GRACE = int(os.environ.get("JTI_CLOSE_GRACE") or 20)
+# 5 s: a reload checks back in within about a second on localhost, and a longer wait made
+# a real close look like it had not worked (the user gave up on it before 20 s).
+CLOSE_GRACE = int(os.environ.get("JTI_CLOSE_GRACE") or 5)
 
 # finish.sh / verify_fast.py gate name -> stage in the table. `regenerate` rebuilds the
 # layout for the contract check, so it runs inside the contract stage.

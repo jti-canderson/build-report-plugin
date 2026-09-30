@@ -121,6 +121,8 @@ class Routes:
                 if not J.same(str(body_json(h).get("session") or ""), self.s.session_token):
                     raise Refuse(403, "session token missing or wrong")
                 self.s.page_closed()
+                print(f"  builder tab closed - Claude stops in {J.CLOSE_GRACE} s unless the page comes back",
+                      flush=True)
                 h._send(200, json.dumps({"ok": True}))
                 return True
             if u.path == "/api/jobs":
@@ -276,6 +278,8 @@ class Routes:
         if action == "claim":
             j = s.claim(min(max(int(b.get("secs") or 50), 1), 55))
             if j in ("DONE", "CLOSED"):
+                print("  telling Claude to stop: " + ("the tab was closed" if j == "CLOSED" else "Done was clicked"),
+                      flush=True)
                 h._send(200, json.dumps({"ok": True, "job": None, "finished": True,
                                          "reason": "closed" if j == "CLOSED" else "done"}))
                 return True
