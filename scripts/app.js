@@ -259,7 +259,11 @@ function App() {
   // only learns that from the result box learns it too late to restart anything.
   useEffect(() => {
     let alive = true;
-    const tick = () => fetch('/api/watching').then(r => r.json())
+    // One id per page load. A poll already in flight when the tab closes can land AFTER the
+    // close beacon; carrying the id lets the server ignore that straggler, while a reload
+    // (a new id) still cancels the close.
+    const page = Math.random().toString(36).slice(2);
+    const tick = () => fetch('/api/watching?page=' + page).then(r => r.json())
       .then(d => { if (alive) { setWatching(d.watching); setStopping(!!d.stopping); } }).catch(() => {});
     tick();
     const t = setInterval(tick, 3000);
@@ -267,7 +271,7 @@ function App() {
     // at once and cancels it; a real close lets Claude stop without anyone returning to it.
     const bye = () => { const s = SESSION.h['X-JTI-Session'];
       if (s && navigator.sendBeacon) navigator.sendBeacon('/api/session/closed',
-        new Blob([JSON.stringify({ session: s })], { type: 'application/json' })); };
+        new Blob([JSON.stringify({ session: s, page })], { type: 'application/json' })); };
     window.addEventListener('pagehide', bye);
     return () => { alive = false; clearInterval(t); window.removeEventListener('pagehide', bye); };
   }, []);

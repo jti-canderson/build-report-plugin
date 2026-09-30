@@ -118,9 +118,10 @@ class Routes:
                 # back in at once and cancels it (Store.page_gone).
                 if method != "POST":
                     raise Refuse(405, "POST only")
-                if not J.same(str(body_json(h).get("session") or ""), self.s.session_token):
+                b = body_json(h)
+                if not J.same(str(b.get("session") or ""), self.s.session_token):
                     raise Refuse(403, "session token missing or wrong")
-                self.s.page_closed()
+                self.s.page_closed(str(b.get("page") or ""))
                 print(f"  builder tab closed - Claude stops in {J.CLOSE_GRACE} s unless the page comes back",
                       flush=True)
                 h._send(200, json.dumps({"ok": True}))

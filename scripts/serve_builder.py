@@ -646,7 +646,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             return self._send(200, json.dumps(browse((q.get("path") or [""])[0])))
         if path == "/api/watching" and JOBS:
-            JOBS.s.touch_page()      # the page's check-in: how a closed tab is noticed
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            JOBS.s.touch_page((q.get("page") or [""])[0])   # the page's check-in: how a closed tab is noticed
             return self._send(200, json.dumps({"watching": JOBS.s.worker_connected(),
                                                "stopping": bool(JOBS.s.done_at)}))
         if path == "/api/watching":

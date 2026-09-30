@@ -154,6 +154,7 @@ class Store:
         self.done_at = None          # the user said "Done": the next claim ends the worker
         self.page_seen = None        # the builder page's last check-in (None: never opened)
         self.page_closing = None     # the page sent its close beacon at this time
+        self.closed_page = ""        # ...and this was its per-load id
         self.stopped = False         # the worker collected Done / Closed and has exited
 
     @staticmethod
@@ -287,14 +288,19 @@ class Store:
                 return True, "Claude will stop as soon as this build ends."
             return True, "Claude is stopping."
 
-    def touch_page(self):
+    def touch_page(self, page=""):
+        """A check-in from the builder page. `page` is its per-load id: a check-in from the
+        page that just sent its close beacon is a request that was already in flight, not the
+        page coming back, so it must not cancel the close (a reload has a new id)."""
         with self.lock:
+            if page and self.page_closing and page == self.closed_page:
+                return
             self.page_seen, self.page_closing = time.time(), None
 
-    def page_closed(self):
+    def page_closed(self, page=""):
         with self.lock:
             if self.page_seen:
-                self.page_closing = time.time()
+                self.page_closing, self.closed_page = time.time(), page
                 self.changed.notify_all()
 
     def page_gone(self):

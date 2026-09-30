@@ -955,6 +955,13 @@ def run_closed(check, skip, ctx):
         check("closed: a RELOAD (beacon, then the page checks straight back in) does not stop Claude",
               w.returncode == 7, (w.returncode, w.stdout[-200:]))
 
+        # What the real page does: a per-load id on every check-in and on the beacon.
+        beacon_p = lambda page: srv.js("POST", "/api/session/closed", {"session": srv.session, "page": page})
+        srv.js("GET", "/api/watching?page=A"); beacon_p("A"); srv.js("GET", "/api/watching?page=B")
+        w = helper(plugin, ws, "wait", "--secs", "5")
+        check("closed: a reload (a NEW page id checks in after the beacon) does not stop Claude",
+              w.returncode == 7, (w.returncode, w.stdout[-200:]))
+
         srv.js("GET", "/api/watching"); beacon()
         t0 = time.time(); w = helper(plugin, ws, "wait", "--secs", "20")
         check("closed: closing the tab stops a waiting worker (exit 8, says the page was closed)",
@@ -967,6 +974,18 @@ def run_closed(check, skip, ctx):
         t0 = time.time(); w = helper(plugin, ws, "wait", "--secs", "25")
         check("closed: a page that stops checking in for the timeout stops the worker",
               w.returncode == 8 and 7 < time.time() - t0 < 20, (w.returncode, round(time.time() - t0, 1)))
+    finally:
+        srv.stop()
+    # The straggler, on a server whose page timeout is far away, so only the close can end it.
+    ws = fresh_ws(root, "closed_late")
+    srv = Server(plugin, ws, env={"JTI_CLOSE_GRACE": "2", "JTI_PAGE_TTL": "120"}).start()
+    try:
+        beacon_p = lambda page: srv.js("POST", "/api/session/closed", {"session": srv.session, "page": page})
+        srv.js("GET", "/api/watching?page=C"); beacon_p("C"); srv.js("GET", "/api/watching?page=C")
+        t0 = time.time(); w = helper(plugin, ws, "wait", "--secs", "15")
+        check("closed: a check-in still in flight from the CLOSED tab (same id, after its beacon) "
+              "does not cancel the close - Claude stops after the grace, not the page timeout",
+              w.returncode == 8 and time.time() - t0 < 10, (w.returncode, round(time.time() - t0, 1)))
     finally:
         srv.stop()
 
