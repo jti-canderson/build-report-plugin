@@ -107,6 +107,7 @@ def run(check, skip, ctx):
     run_dd(check, skip, ctx)
     run_done(check, skip, ctx)
     run_closed(check, skip, ctx)
+    run_marks_done(check, skip, ctx)
 
 
 def run_done(check, skip, ctx):
@@ -909,5 +910,30 @@ def run_closed(check, skip, ctx):
         t0 = time.time(); w = helper(plugin, ws, "wait", "--secs", "25")
         check("closed: a page that stops checking in for the timeout stops the worker",
               w.returncode == 8 and 7 < time.time() - t0 < 20, (w.returncode, round(time.time() - t0, 1)))
+    finally:
+        srv.stop()
+
+
+def run_marks_done(check, skip, ctx):
+    """`jobs.py run` marks its stage done when the child succeeds - and not when it fails."""
+    plugin, root = ctx["plugin"], ctx["ws"]
+    ws = fresh_ws(root, "rundone")
+    srv = Server(plugin, ws).start()
+    try:
+        code, d = srv.submit(spec_for("Run_Done"))
+        helper(plugin, ws, "wait", "--secs", "5")
+        folder = os.path.join(ws, "Proj", "Run_Done")
+        ok = subprocess.run([sys.executable, os.path.join(plugin, "scripts", "jobs.py"), "run", "--stage", "scaffold",
+                             "--", sys.executable, "-c", "print('hi')"], cwd=folder, capture_output=True, text=True,
+                            env=dict(os.environ, JTI_PROJECT_ROOT=ws))
+        s1 = srv.snap(d["job"], d["token"])
+        bad = subprocess.run([sys.executable, os.path.join(plugin, "scripts", "jobs.py"), "run", "--stage", "fixtures",
+                              "--", sys.executable, "-c", "raise SystemExit(3)"], cwd=folder, capture_output=True,
+                             text=True, env=dict(os.environ, JTI_PROJECT_ROOT=ws))
+        s2 = srv.snap(d["job"], d["token"])
+        check("jobs: `run` marks its stage done on success, and leaves a failed step not done",
+              ok.returncode == 0 and "scaffold" in (s1 or {}).get("done", []) and bad.returncode == 3
+              and "fixtures" not in (s2 or {}).get("done", []), (ok.returncode, (s1 or {}).get("done"), bad.returncode))
+        helper(plugin, ws, "fail", "--stage", "fixtures", "--message", "test stops here")
     finally:
         srv.stop()

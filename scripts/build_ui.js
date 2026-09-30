@@ -20,11 +20,16 @@
     if (job) history.replaceState(null, '', '#job=' + job.id + '&t=' + encodeURIComponent(job.token));
     else history.replaceState(null, '', location.pathname);
   }
+  /** {id, token, linked}: `linked` when the ADDRESS names the job (a reload of that tab, or
+   * a link opened on purpose) - shown whatever its state. One only remembered from an
+   * earlier visit is shown only while it is still running: a finished build must not greet
+   * the next /test-report as if the form were already filled in. */
   function recall() {
     const m = /[#&]job=([0-9a-f]{16})&t=([^&]+)/.exec(location.hash);
-    if (m) return { id: m[1], token: decodeURIComponent(m[2]) };
+    if (m) return { id: m[1], token: decodeURIComponent(m[2]), linked: true };
     try { return JSON.parse(localStorage.getItem(KEY) || 'null'); } catch (e) { return null; }
   }
+  function forget() { try { localStorage.removeItem(KEY); } catch (e) { /* nothing kept */ } }
 
   const TERMINAL = ['complete', 'failed', 'cancelled', 'timed_out'];
   const HEADLINE = {
@@ -249,5 +254,5 @@
     </div>`;
   }
 
-  window.JTIBuild = { BuildScreen, remember, recall };
+  window.JTIBuild = { BuildScreen, remember, recall, forget, TERMINAL };
 })();

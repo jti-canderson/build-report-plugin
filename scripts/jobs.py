@@ -640,6 +640,12 @@ def run_child(a):
         return EXIT_CANCELLED
     flush()
     ck(call("/api/worker/child", {"pid": None, "stage": a.stage, "rc": rc}))
+    if not a.gates and rc == 0:
+        # A step that succeeded is DONE - reported here, not left to a separate `done` call
+        # a worker can forget (the Defendant_Test build left "Report scaffolded" unticked).
+        # The gates report their own stages from JTI-GATE lines.
+        _checked(call("/api/worker/done", {"stage": a.stage,
+                                            "status": "Finished"}))
     if a.gates and rc == 0:
         rule, jrxml = argv[1], argv[2]
         files = {f: sha(f) for f in [rule, jrxml] + sorted(

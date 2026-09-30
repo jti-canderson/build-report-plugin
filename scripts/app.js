@@ -233,8 +233,14 @@ function App() {
         // waited on forever.
         const j = window.JTIBuild.recall();
         if (j) fetch('/api/jobs/' + j.id + '?t=' + encodeURIComponent(j.token))
-          .then(r => (r.ok ? setJob(j) : window.JTIBuild.remember(null)))
-          .catch(() => setJob(j));
+          .then(r => (r.ok ? r.json() : null))
+          .then(d => {
+            const st = d && d.job && d.job.status;
+            if (!st) return window.JTIBuild.remember(null);
+            if (j.linked || !window.JTIBuild.TERMINAL.includes(st)) return setJob({ id: j.id, token: j.token });
+            window.JTIBuild.forget();          // finished and not asked for: start on a clean form
+          })
+          .catch(() => setJob({ id: j.id, token: j.token }));
       }
     });
   }, []);
@@ -325,7 +331,8 @@ function App() {
                  + 'Your reports stay where they are. Run /test-report again to build more.')) return;
     fetch('/api/session/done', { method: 'POST', body: '{}',
                                  headers: { ...SESSION.h, 'Content-Type': 'application/json' } })
-      .then(r => r.json()).then(d => { setDoneMsg(d.message || 'Claude is stopping.'); setStopping(!!d.stopping); })
+      .then(r => r.json()).then(d => { setDoneMsg(d.message || 'Claude is stopping.'); setStopping(!!d.stopping);
+        window.JTIBuild.forget(); })          // the next session opens on a clean form
       .catch(() => setDoneMsg('Could not reach the builder - it may already be closed.'));
   };
   const another = () => { window.JTIBuild.remember(null); setJob(null); setRes(null); setName(''); };

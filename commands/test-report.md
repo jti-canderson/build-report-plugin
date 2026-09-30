@@ -68,7 +68,8 @@ The stages and their percentages are fixed in `jobs.py`. Report each one when it
 "<one-line result>"`). Keep status lines short and in plain English. Never report a stage as
 done that is not.
 
-**`jobs.py run` exits with its child's exit code.** Non-zero means that stage FAILED: never
+**`jobs.py run` exits with its child's exit code**, and on success it marks that stage done
+itself (no separate `done` call). Non-zero means that stage FAILED: never
 report it done. Read the log, fix the cause and run it again, or `fail` the job (see "When a
 gate fails").
 
