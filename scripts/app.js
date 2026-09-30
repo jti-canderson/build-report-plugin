@@ -316,195 +316,272 @@ function App() {
   };
   const another = () => { window.JTIBuild.remember(null); setJob(null); setRes(null); setName(''); };
 
+  const tplObj = boot.templates.find(t => t.module === tpl);
+  const projObj = boot.projects.find(p => p.name === project);
+  const tplDone = !!tpl && (tpl !== PICTURE || !!look);
+  const contentDone = realCols > 0 || hasBrief || (tpl === PICTURE && !!look);
+  const namedInputs = params.filter(p => p.name.trim()).map(p => p.name.trim());
+  const canBuild = !(busy || !tpl || (tpl === PICTURE && !look) || needsSay);
+  const Num = ({ n, done }) => html`<div class="num">${done ? '✓' : n}</div>`;
+
   if (jobsMode && job) return html`
     <${React.Fragment}>
-      <header>
-        <h1>JTI Report Builder — test build</h1>
-        <div class="root">workspace ${boot.root} — ${boot.rootWhy}</div>
-      </header>
-      <main><${window.JTIBuild.BuildScreen} job=${job} stages=${boot.jobs.stages}
-              onAnother=${another}/></main>
+      <${AppBar} boot=${boot} watching=${watching} jobsMode=${jobsMode}/>
+      <main class="shell one">
+        <${window.JTIBuild.BuildScreen} job=${job} stages=${boot.jobs.stages} onAnother=${another}/>
+      </main>
+      <${Foot} boot=${boot}/>
     <//>`;
 
   return html`
     <${React.Fragment}>
-      <header>
-        <h1>JTI Report Builder</h1>
-        <div class="root">workspace ${boot.root} — ${boot.rootWhy}</div>
-      </header>
+      <${AppBar} boot=${boot} watching=${watching} jobsMode=${jobsMode}/>
       ${boot.version && boot.version.stale && html`
         <div class="banner">⚠︎ ${boot.version.message}</div>`}
-      <main>
-        <h2>Project</h2>
-        <div class="row end">
-          <select value=${project} onChange=${e => setProject(e.target.value)}>
-            ${boot.projects.map(p => html`
-              <option key=${p.name} value=${p.name}>
-                ${p.label} — ${p.reports} report${p.reports === 1 ? '' : 's'},
-                ${p.sdk ? ' field list (SDK) on file' : ' no field list (SDK)'}${p.environment ? ', ' + p.environment : ''}
-              </option>`)}
-            ${!known && html`<option value=${project}>${project}  (browsed)</option>`}
-          </select>
-          <button class="mini fix"
-                  onClick=${() => setBrowsing(true)}>Browse…</button>
+      <main class="shell">
+        <div class="hero">
+          <div class="copy">
+            <div class="eyebrow">Journal Technologies · eSeries</div>
+            <h1>Build a report</h1>
+            <p>Choose where it goes and what it looks like, then say what it should show.
+              Claude writes the rule and the layout, and every build runs through the same
+              verification gates before you see it.</p>
+            <ol class="how">
+              <li><span>1</span>Pick a project and a template</li>
+              <li><span>2</span>Describe it in plain words</li>
+              <li><span>3</span>Get verified, ready-to-import files</li>
+            </ol>
+          </div>
+          <img class="mark" src="/brand/journal-mark.png" alt=""/>
         </div>
-        <div class="hint">Not listed? <b>Browse</b> to any folder on this Mac — including
-          Downloads or Home. Anything outside the workspace still works; it just will not
-          show up in this list next time.</div>
 
-        <h2>Template</h2>
-        <div class="cards">
-          ${boot.templates.map(t => html`
-            <button key=${t.module} class=${'card' + (tpl === t.module ? ' sel' : '')}
-                    onClick=${() => setTpl(t.module)} title=${t.detail}>
-              ${t.preview && html`<img src=${t.preview} alt=${t.title}/>`}
-              <div class="t">${t.title}</div>
-              <div class="d">${t.one_liner}</div>
-            </button>`)}
-          <button class=${'card' + (tpl === PICTURE ? ' sel' : '')}
-                  onClick=${() => setTpl(PICTURE)}
-                  title="Send a screenshot, a PDF, or a report from another system">
-            ${look && look.kind !== 'application/pdf'
-              ? html`<img src=${look.url} alt=${look.name}/>`
-              : html`<div class="ph">${look ? '\u{1F4C4} ' + look.name : '\u2295'}</div>`}
-            <div class="t">None of these — match a picture</div>
-            <div class="d">Upload a screenshot, a PDF, or a report from another system.</div>
-          </button>
-        </div>
-        ${tpl === PICTURE && html`
-          <div class="pick">
-            <div class="hint">Claude reads the picture, starts from whichever template is
-              closest, and matches its columns, grouping and section order. Say in the brief
-              below if you want the picture's colours and fonts too — otherwise the JTI
-              masthead and styling stay. Charts and anything interactive cannot be
-              reproduced: a report is paper.</div>
-            <input type="file" accept="image/*,.pdf" onChange=${onLook}/>
-            ${lookErr && html`<div class="out err">${lookErr}</div>`}
-            ${look && html`<div class="out ok">Attached <b>${look.name}</b> —
-              ${Math.max(1, Math.round(look.bytes / 1024))} KB. It gets copied into the
-              report folder as <code>reference/${look.name}</code> so the build can look at
-              it.</div>`}
-          </div>`}
-
-        <h2>Start from a folder view (optional)</h2>
-        <div class="hint">Export a folder view from eSeries — <b>System Setup → Screens →
-          Folder Views</b>, then Export — and drop the <code>FORM-*.zip</code> here. Its
-          panels become sections and its columns become columns, with the real field paths
-          already filled in.</div>
-        <input type="file" accept=".zip,.xml" onChange=${onFile}/>
-        ${impErr && html`<div class="out err">${impErr}</div>`}
-        ${imported && imported.choose && html`
-          <div class="out ok">
-            <div>That archive holds ${imported.choose.length} folder views — which one?</div>
-            <div class="actions" style=${undefined}>
-              ${imported.choose.map(f => html`
-                <button key=${f.code} class="mini" onClick=${() => applyForm(f)}>
-                  ${f.formName} (${f.panels.length} panels)</button>`)}
+        <div class="form">
+          <section class=${'step' + (projObj || project ? ' done' : '')}>
+            <div class="step-h"><${Num} n="1" done=${!!(projObj || project)}/>
+              <div><h2>Project</h2><p class="lead">The folder the report is built in.</p></div></div>
+            <div class="row end">
+              <select value=${project} onChange=${e => setProject(e.target.value)}>
+                ${boot.projects.map(p => html`
+                  <option key=${p.name} value=${p.name}>
+                    ${p.label} — ${p.reports} report${p.reports === 1 ? '' : 's'},
+                    ${p.sdk ? ' field list (SDK) on file' : ' no field list (SDK)'}${p.environment ? ', ' + p.environment : ''}
+                  </option>`)}
+                ${!known && html`<option value=${project}>${project || 'Workspace folder'}  (browsed)</option>`}
+              </select>
+              <button class="mini fix" onClick=${() => setBrowsing(true)}>Browse…</button>
             </div>
-          </div>`}
-        ${imported && !imported.choose && html`
-          <div class="out ok">Loaded <b>${imported.formName}</b> — root entity
-            <code>${imported.root}</code>, ${imported.panels.length} panels filled in below.
-            Widths are evenly split; adjust them and drop any column you do not want.</div>`}
+            <div class="hint">Not listed? <b>Browse</b> to any folder on this Mac — including
+              Downloads or Home. Anything outside the workspace still works; it just will not
+              show up in this list next time.</div>
+          </section>
 
-        <h2>Report</h2>
-        <div class="row">
-          <div><label>File name — letters, digits, underscores</label>
-            <input type="text" placeholder="Cases_By_Type" value=${name}
-                   onInput=${e => setName(e.target.value)}/></div>
-          <div><label>Title on the page</label>
-            <input type="text" placeholder="Cases By Type" value=${title}
-                   onInput=${e => setTitle(e.target.value)}/></div>
+          <section class=${'step' + (tplDone ? ' done' : '')}>
+            <div class="step-h"><${Num} n="2" done=${tplDone}/>
+              <div><h2>Template</h2><p class="lead">The house layout to start from. Every one
+                carries the JTI masthead and styling.</p></div></div>
+            <div class="cards">
+              ${boot.templates.map(t => html`
+                <button key=${t.module} class=${'card' + (tpl === t.module ? ' sel' : '')}
+                        onClick=${() => setTpl(t.module)} title=${t.detail}>
+                  ${t.preview ? html`<img src=${t.preview} alt=${t.title}/>` : html`<div class="ph"/>`}
+                  <div class="t">${t.title}</div>
+                  <div class="d">${t.one_liner}</div>
+                </button>`)}
+              <button class=${'card' + (tpl === PICTURE ? ' sel' : '')}
+                      onClick=${() => setTpl(PICTURE)}
+                      title="Send a screenshot, a PDF, or a report from another system">
+                ${look && look.kind !== 'application/pdf'
+                  ? html`<img src=${look.url} alt=${look.name}/>`
+                  : html`<div class="ph">${look ? '\u{1F4C4} ' + look.name : '⊕'}</div>`}
+                <div class="t">None of these — match a picture</div>
+                <div class="d">Upload a screenshot, a PDF, or a report from another system.</div>
+              </button>
+            </div>
+            ${tpl === PICTURE && html`
+              <div class="pick">
+                <div class="hint">Claude reads the picture, starts from whichever template is
+                  closest, and matches its columns, grouping and section order. Say in the brief
+                  below if you want the picture's colours and fonts too — otherwise the JTI
+                  masthead and styling stay. Charts and anything interactive cannot be
+                  reproduced: a report is paper.</div>
+                <div class="mt12"><input type="file" accept="image/*,.pdf" onChange=${onLook}/></div>
+                ${lookErr && html`<div class="out err">${lookErr}</div>`}
+                ${look && html`<div class="out ok">Attached <b>${look.name}</b> —
+                  ${Math.max(1, Math.round(look.bytes / 1024))} KB. It gets copied into the
+                  report folder as <code>reference/${look.name}</code> so the build can look at
+                  it.</div>`}
+              </div>`}
+          </section>
+
+          <section class=${'step' + (imported && !imported.choose ? ' done' : '')}>
+            <div class="step-h"><${Num} n="3" done=${!!(imported && !imported.choose)}/>
+              <div><h2>Start from a folder view<span class="opt">optional</span></h2>
+                <p class="lead">Export one from eSeries — <b>System Setup → Screens → Folder
+                  Views</b>, then Export — and drop the <code>FORM-*.zip</code> here. Its panels
+                  become sections and its columns become columns, with the real field paths
+                  already filled in.</p></div></div>
+            <input type="file" accept=".zip,.xml" onChange=${onFile}/>
+            ${impErr && html`<div class="out err">${impErr}</div>`}
+            ${imported && imported.choose && html`
+              <div class="out ok">
+                <div>That archive holds ${imported.choose.length} folder views — which one?</div>
+                <div class="actions">
+                  ${imported.choose.map(f => html`
+                    <button key=${f.code} class="mini" onClick=${() => applyForm(f)}>
+                      ${f.formName} (${f.panels.length} panels)</button>`)}
+                </div>
+              </div>`}
+            ${imported && !imported.choose && html`
+              <div class="out ok">Loaded <b>${imported.formName}</b> — root entity
+                <code>${imported.root}</code>, ${imported.panels.length} panels filled in below.
+                Widths are evenly split; adjust them and drop any column you do not want.</div>`}
+          </section>
+
+          <section class=${'step' + (name.trim() && contentDone ? ' done' : '')}>
+            <div class="step-h"><${Num} n="4" done=${!!(name.trim() && contentDone)}/>
+              <div><h2>Report</h2><p class="lead">Its name, its title, and in plain words what
+                it should show.</p></div></div>
+            <div class="row">
+              <div><label>File name — letters, digits, underscores</label>
+                <input type="text" placeholder="Cases_By_Type" value=${name}
+                       onInput=${e => setName(e.target.value)}/></div>
+              <div><label>Title on the page</label>
+                <input type="text" placeholder="Cases By Type" value=${title}
+                       onInput=${e => setTitle(e.target.value)}/></div>
+            </div>
+            <div class="mt12">
+              <label>What should it show? Plain words — this is the brief, not a spec.</label>
+              <textarea value=${intent} onInput=${e => setIntent(e.target.value)}
+                placeholder="Every case filed in a date range, one row each, with its type and jurisdiction."></textarea>
+              <div class="hint">If you leave the columns blank, Claude builds them from this — so a
+                clear sentence here can be the whole report. Fill the columns in only when you
+                already know the exact fields you want.</div>
+            </div>
+          </section>
+
+          <section class=${'step' + (secOpen ? ' open' : '') + (realCols > 0 ? ' done' : '')}>
+            <button type="button" class="step-h" onClick=${() => setSecOpen(o => !o)}>
+              <${Num} n="5" done=${realCols > 0}/>
+              <div><h2>Sections and columns<span class="opt">optional</span></h2>
+                <p class="lead h2sum">${realCols > 0
+                  ? `${sections.length} section${sections.length === 1 ? '' : 's'}, ${realCols} column${realCols === 1 ? '' : 's'}${secOpen ? '' : ' — click to edit'}`
+                  : hasBrief
+                    ? 'None typed — Claude will build them from your brief'
+                    : 'None yet — type them here, or describe the report in the brief above'}</p></div>
+              <span class="right chev">${secOpen ? '−' : '+'}</span>
+            </button>
+            ${secOpen && html`<${React.Fragment}>
+              <div class="hint">One section per grid. Widths are relative — they get scaled to
+                the page, so they need not add to 100.</div>
+              ${sections.map(s => html`
+                <${Section} key=${s.id} s=${s} only=${sections.length === 1}
+                  set=${u => setSections(xs => xs.map(x => (x.id === s.id ? u : x)))}
+                  remove=${() => setSections(xs => xs.filter(x => x.id !== s.id))}/>`)}
+              <button class="mini" onClick=${() => setSections(xs => [...xs, newSection()])}>
+                + section</button>
+            <//>`}
+          </section>
+
+          <section class="step">
+            <div class="step-h"><${Num} n="6" done=${namedInputs.length > 0}/>
+              <div><h2>Launch inputs</h2><p class="lead">What the person running the report
+                fills in. Leave empty for a report that takes none.</p></div></div>
+            <table>
+              <thead><tr><th class="p1">Name</th><th>Type</th><th class="c4"></th></tr></thead>
+              <tbody>
+                ${params.map(p => html`
+                  <tr key=${p.id}>
+                    <td><input type="text" placeholder="StartDate" value=${p.name}
+                          onInput=${e => setParams(xs => xs.map(x => x.id === p.id ? { ...x, name: e.target.value } : x))}/></td>
+                    <td><select value=${p.type}
+                          onChange=${e => setParams(xs => xs.map(x => x.id === p.id ? { ...x, type: e.target.value } : x))}>
+                          ${TYPES.map(([v, l]) => html`<option key=${v} value=${v}>${l}</option>`)}
+                        </select></td>
+                    <td><button class="x" onClick=${() => setParams(xs => xs.filter(x => x.id !== p.id))}>×</button></td>
+                  </tr>`)}
+              </tbody>
+            </table>
+            <div class="actions"><button class="mini" onClick=${() => setParams(xs => [...xs, newParam()])}>+ input</button></div>
+          </section>
         </div>
-        <div class="mt12">
-          <label>What should it show? Plain words — this is the brief, not a spec.</label>
-          <textarea value=${intent} onInput=${e => setIntent(e.target.value)}
-            placeholder="Every case filed in a date range, one row each, with its type and jurisdiction."></textarea>
-          <div class="hint">If you leave the columns below blank, Claude builds them from this
-            — so a clear sentence here can be the whole report. Fill the columns in only when
-            you already know the exact fields you want.</div>
-        </div>
 
-        <button type="button" class="h2btn" onClick=${() => setSecOpen(o => !o)}>
-          <h2>Sections and columns <span class="opt">\u2014 optional</span></h2>
-          <span class="chev">${secOpen ? '\u2212' : '+'}</span>
-          <span class="h2sum">${realCols > 0
-            ? `${sections.length} section${sections.length === 1 ? '' : 's'}, ${realCols} column${realCols === 1 ? '' : 's'}${secOpen ? '' : ' \u2014 click to edit'}`
-            : hasBrief
-              ? 'none typed \u2014 Claude will build them from your brief'
-              : 'none yet \u2014 type them here, or describe the report in the brief above'}</span>
-        </button>
-        ${secOpen && html`<${React.Fragment}>
-          <div class="hint">One section per grid. Widths are relative — they get scaled to
-            the page, so they need not add to 100.</div>
-          ${sections.map(s => html`
-            <${Section} key=${s.id} s=${s} only=${sections.length === 1}
-              set=${u => setSections(xs => xs.map(x => (x.id === s.id ? u : x)))}
-              remove=${() => setSections(xs => xs.filter(x => x.id !== s.id))}/>`)}
-          <button class="mini" onClick=${() => setSections(xs => [...xs, newSection()])}>
-            + section</button>
-        <//>`}
-
-        <h2>Launch inputs</h2>
-        <div class="hint">What the person running the report fills in. Leave empty for a
-          report that takes none.</div>
-        <table>
-          <thead><tr><th class="p1">Name</th><th>Type</th><th class="c4"></th></tr></thead>
-          <tbody>
-            ${params.map(p => html`
-              <tr key=${p.id}>
-                <td><input type="text" placeholder="StartDate" value=${p.name}
-                      onInput=${e => setParams(xs => xs.map(x => x.id === p.id ? { ...x, name: e.target.value } : x))}/></td>
-                <td><select value=${p.type}
-                      onChange=${e => setParams(xs => xs.map(x => x.id === p.id ? { ...x, type: e.target.value } : x))}>
-                      ${TYPES.map(([v, l]) => html`<option key=${v} value=${v}>${l}</option>`)}
-                    </select></td>
-                <td><button class="x" onClick=${() => setParams(xs => xs.filter(x => x.id !== p.id))}>×</button></td>
-              </tr>`)}
-          </tbody>
-        </table>
-        <button class="mini" onClick=${() => setParams(xs => [...xs, newParam()])}>+ input</button>
-
-        <div class="foot2">
-          <button class="go" disabled=${busy || !tpl || (tpl === PICTURE && !look) || needsSay}
-                  onClick=${submit}>
-            ${jobsMode ? (busy ? 'Starting…' : 'Build report')
-                       : (busy ? 'Writing…' : 'Write spec.json')}</button>
-          <span class=${'watch' + (watching ? ' on' : '')}>
-            ${watching === null ? ''
-              : jobsMode ? (watching ? 'Claude is ready — the build starts as soon as you click'
-                                     : 'Claude is not waiting yet — the build starts when /test-report picks it up')
-              : watching ? 'Claude is watching — clicking Write hands it straight over'
-                         : 'Claude is not watching — you will get a command to paste'}</span>
-          ${jobsMode && boot.jobs.active && !job && html`<div class="out err">A build is already
-            running (${boot.jobs.active.name}). One build at a time.</div>`}
-          ${!tpl && html`<span class="hint ml12">Pick a template first.</span>`}
-          ${tpl === PICTURE && !look && html`
-            <span class="hint ml12">Attach the picture you want it to look like.</span>`}
-          ${needsSay && html`<span class="hint ml12">Add columns, or describe the report in
-            the brief above — one of the two.</span>`}
-          ${res && html`
-            <div class=${'out ' + (res.ok ? 'ok' : 'err')}>
-              ${res.ok ? html`
-                <${React.Fragment}>
-                  <div>Wrote <code>${res.message}</code>.</div>
-                  ${res.watched
-                    ? html`<div class="note mt8"><b>Claude is watching and has picked this
-                        up — go back to the chat.</b> Nothing to copy.</div>`
-                    : html`<${React.Fragment}>
-                        <div>Now run this in Claude Code:</div>
-                        <pre>/jti-reports:build-report ${res.message}</pre>
-                      <//>`}
-                  <div class="note mt8">
-                    Everything still goes through the gates — nothing here bypasses
-                    verification.</div>
-                <//>` : res.message}
-            </div>`}
-        </div>
+        <aside class="rail">
+          <div class="summary"><div class="in">
+            <h3>Your report</h3>
+            ${(tplObj && tplObj.preview) || (look && look.kind !== 'application/pdf')
+              ? html`<div class="thumb"><img src=${tplObj ? tplObj.preview : look.url} alt=""/></div>` : ''}
+            <dl class="kv">
+              <dt>Project</dt><dd class=${projObj || project ? '' : 'empty'}>${projObj ? projObj.label : (project || 'Workspace folder')}</dd>
+              <dt>Template</dt><dd class=${tpl ? '' : 'empty'}>${tpl === PICTURE ? 'Match a picture' : tplObj ? tplObj.title : 'Not chosen'}</dd>
+              <dt>File name</dt><dd class=${name.trim() ? '' : 'empty'}>${name.trim() || 'Not set'}</dd>
+              <dt>Content</dt><dd class=${contentDone ? '' : 'empty'}>${realCols > 0
+                ? `${realCols} column${realCols === 1 ? '' : 's'}`
+                : hasBrief ? 'From your brief' : (tpl === PICTURE && look) ? 'From the picture' : 'Not described'}</dd>
+              <dt>Inputs</dt><dd class=${namedInputs.length ? '' : 'empty'}>${namedInputs.join(', ') || 'None'}</dd>
+            </dl>
+            <button class="go block" disabled=${!canBuild} onClick=${submit}>
+              ${jobsMode ? (busy ? 'Starting…' : 'Build report')
+                         : (busy ? 'Writing…' : 'Write spec.json')}</button>
+            ${!tpl && html`<div class="todo">Pick a template first.</div>`}
+            ${tpl === PICTURE && !look && html`<div class="todo">Attach the picture you want it to look like.</div>`}
+            ${needsSay && html`<div class="todo">Add columns, or describe the report in the brief — one of the two.</div>`}
+            ${watching !== null && html`<div class=${'watch' + (watching ? ' on' : '')}><span class="dot"/>
+              <span>${jobsMode ? (watching ? 'Claude is ready — the build starts as soon as you click.'
+                                           : 'Claude is not waiting yet — the build starts when /test-report picks it up.')
+                : watching ? 'Claude is watching — clicking Write hands it straight over.'
+                           : 'Claude is not watching — you will get a command to paste.'}</span></div>`}
+            ${jobsMode && boot.jobs.active && !job && html`<div class="out err">A build is already
+              running (${boot.jobs.active.name}). One build at a time.</div>`}
+            ${res && html`
+              <div class=${'out ' + (res.ok ? 'ok' : 'err')}>
+                ${res.ok ? html`
+                  <${React.Fragment}>
+                    <div>Wrote <code>${res.message}</code>.</div>
+                    ${res.watched
+                      ? html`<div class="note mt8"><b>Claude is watching and has picked this
+                          up — go back to the chat.</b> Nothing to copy.</div>`
+                      : html`<${React.Fragment}>
+                          <div>Now run this in Claude Code:</div>
+                          <pre>/jti-reports:build-report ${res.message}</pre>
+                        <//>`}
+                  <//>` : res.message}
+              </div>`}
+            <div class="assure">Nothing here bypasses verification — every build runs the same
+              gates, and you look at every page before anything is imported.</div>
+          </div></div>
+        </aside>
       </main>
+      <${Foot} boot=${boot}/>
       ${browsing && html`<${FolderBrowser} onClose=${() => setBrowsing(false)}
                            onPick=${p => setProject(p)}/>`}
     <//>`;
+}
+
+/* --------------------------------------------------------------------- chrome */
+// The Journal Technologies mark, the product name, the workspace, and Claude's state -
+// the same header on the form and on the build screen.
+function AppBar({ boot, watching, jobsMode }) {
+  return html`<header class="appbar"><div class="in">
+    <div class="brand">
+      <img src="/brand/journal-j.png" alt="Journal Technologies"/>
+      <span class="sep"/>
+      <div>
+        <div class="ttl">Report Builder${jobsMode && html`<span class="tag">Test build</span>`}</div>
+        <div class="sub">Journal Technologies · eSeries reports</div>
+      </div>
+    </div>
+    <span class="grow"/>
+    <span class="chip" title=${boot.root + ' — ' + boot.rootWhy}>
+      <span class="ico">\u{1F4C1}</span>${boot.root}</span>
+    ${watching !== null && html`<span class=${'status' + (watching ? ' on' : '')}>
+      <span class="dot"/>${watching ? 'Claude ready' : 'Claude not connected'}</span>`}
+  </div></header>`;
+}
+
+function Foot({ boot }) {
+  return html`<footer class="foot"><img src="/brand/journal-j.png" alt=""/>
+    Journal Technologies · JTI Report Builder${boot.version && boot.version.mine
+      ? ' ' + boot.version.mine : ''}</footer>`;
 }
 
 ReactDOM.createRoot(document.getElementById('app')).render(html`<${App}/>`);

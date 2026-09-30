@@ -599,6 +599,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                                             "name": J.NAME[k]} for k, p, l, d in J.STAGES],
                                 "active": {"name": act["report"]["name"]} if act else None}
             return self._send(200, json.dumps(boot))
+        if path in ("/brand/journal-mark.png", "/brand/journal-j.png"):
+            # The Journal Technologies mark the reports print, and the J alone (favicon).
+            # Transparent web copies; templates/journal_mark.png itself (white background) is
+            # what the reports embed and is left alone.
+            fn = "journal_mark_web.png" if path.endswith("mark.png") else "journal_j.png"
+            with open(os.path.join(PLUGIN, "templates", fn), "rb") as f:
+                return self._send(200, f.read(), "image/png")
         if path.startswith("/preview/"):
             fn = os.path.basename(path)
             full = os.path.join(PREVIEW, fn)
