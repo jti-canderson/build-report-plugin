@@ -157,7 +157,8 @@ function Section({ s, set, remove, only }) {
                     ${['Left', 'Right', 'Center'].map(a => html`<option key=${a}>${a}</option>`)}
                   </select></td>
               <td><input type="text" placeholder="caseNumber" value=${c.field}
-                         onInput=${e => col(c.id, { field: e.target.value })}/></td>
+                         onInput=${e => col(c.id, { field: e.target.value })}/>
+                  ${c.path && html`<div class="fp-code" title="from the field browser">${c.path}</div>`}</td>
               <td>${s.cols.length > 1 && html`<button class="x"
                     onClick=${() => set({ ...s, cols: s.cols.filter(x => x.id !== c.id) })}>×</button>`}</td>
             </tr>`)}
@@ -165,6 +166,78 @@ function Section({ s, set, remove, only }) {
       </table>
       <button class="mini" onClick=${() => set({ ...s, cols: [...s.cols, newCol()] })}>+ column</button>
     </div>`;
+}
+
+/* ---------------------------------------------------------------- field browser */
+// Click through the fields the project's SDK really has: start at the root entity, drill into
+// related records and lists, and add a field as a column (mode "column") or as a launch input
+// that filters on it (mode "criteria"). Paths are exactly what the build resolves later.
+const human = n => n.replace(/^cf_/, '').replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+  .replace(/_/g, ' ').replace(/^./, c => c.toUpperCase());
+
+function FieldPicker({ project, mode, added, onAdd }) {
+  const [root, setRoot] = useState('Case');
+  const [stack, setStack] = useState([]);          // [{seg, list, entity}] below the root
+  const [data, setData] = useState(null);
+  const [q, setQ] = useState('');
+  const [busy, setBusy] = useState(false);
+  const here = stack.length ? stack[stack.length - 1].entity : root;
+  useEffect(() => { setStack([]); }, [project, root]);
+  useEffect(() => {
+    let alive = true;
+    setBusy(true);
+    fetch('/api/fields?project=' + encodeURIComponent(project) + '&entity=' + encodeURIComponent(here))
+      .then(r => r.json()).then(d => { if (alive) { setData(d); setBusy(false); setQ(''); } })
+      .catch(() => alive && (setData({ ok: false, message: 'Could not reach the builder.' }), setBusy(false)));
+    return () => { alive = false; };
+  }, [project, here]);
+  const pathOf = f => [root, ...stack.map(x => x.seg + (x.list ? '[]' : '')), f.name].join('.');
+  if (data && !data.ok) return html`<div class="fp"><div class="fp-empty">${data.message}</div></div>`;
+  const all = (data && data.fields) || [];
+  const ql = q.trim().toLowerCase();
+  const shown = all.filter(f => !ql || f.name.toLowerCase().includes(ql) || human(f.name).toLowerCase().includes(ql));
+  const used = !ql && shown.filter(f => f.used > 0 && f.kind === 'value').sort((a, b) => b.used - a.used).slice(0, 8);
+  const Row = ({ f }) => {
+    const pth = pathOf(f);
+    if (f.kind === 'opaque') return html`<div class="fp-row dim">
+        <span class="fp-name">${human(f.name)}<span class="fp-code">${f.name}</span></span>
+        <span class="fp-type" title="the SDK does not say what this list holds">list, contents unknown</span></div>`;
+    if (f.kind !== 'value') return html`
+      <button class="fp-row nav" onClick=${() => setStack(s => [...s, { seg: f.name, list: f.kind === 'collection', entity: f.target }])}>
+        <span class="fp-name">${human(f.name)}<span class="fp-code">${f.name}</span></span>
+        <span class="fp-type">${f.kind === 'collection' ? 'list of ' + f.targetShort : f.targetShort}</span>
+        <span class="fp-go">›</span></button>`;
+    const on = added.has(pth);
+    return html`<div class="fp-row">
+      <span class="fp-name">${human(f.name)}<span class="fp-code">${f.name}</span>
+        ${f.used > 0 && html`<span class="fp-used" title=${'A property with this name is read by ' + f.used + ' rule(s) in this workspace - on any kind of record, so it is a hint, not proof.'}>in your rules</span>`}
+        ${f.display && html`<span class="fp-used warnish" title="a display field eSeries builds for the screen; it may carry HTML">display</span>`}</span>
+      <span class="fp-type">${f.label}</span>
+      <button class=${'mini' + (on ? ' on' : '')} disabled=${on} onClick=${() => onAdd(f, pth)}>
+        ${on ? '✓ Added' : mode === 'column' ? '+ Column' : '+ Filter'}</button></div>`;
+  };
+  return html`<div class="fp">
+    <div class="fp-bar">
+      ${data && data.roots && html`<select class="fp-root" value=${root} onChange=${e => setRoot(e.target.value)}>
+        ${data.roots.map(r => html`<option key=${r} value=${r}>${r}</option>`)}</select>`}
+      <div class="fp-crumbs">
+        <button class="fp-crumb" onClick=${() => setStack([])}>${root}</button>
+        ${stack.map((x, i) => html`<${React.Fragment} key=${i}><span class="fp-sep">›</span>
+          <button class="fp-crumb" onClick=${() => setStack(s => s.slice(0, i + 1))}>${human(x.seg)}${x.list ? ' (each)' : ''}</button><//>`)}
+      </div>
+      <input type="text" class="fp-q" placeholder="Search fields" value=${q} onInput=${e => setQ(e.target.value)}/>
+    </div>
+    ${busy ? html`<div class="fp-empty"><span class="spin1"/> Reading ${here} from the SDK…</div>` : html`
+      <div class="fp-list">
+        ${used && used.length > 0 && html`<div class="fp-group">Names your rules already read</div>
+          ${used.map(f => html`<${Row} key=${'u' + f.name} f=${f}/>`)}
+          <div class="fp-group">All fields on ${data.entity}</div>`}
+        ${shown.map(f => html`<${Row} key=${f.name} f=${f}/>`)}
+        ${shown.length === 0 && html`<div class="fp-empty">No field on ${here} matches "${q}".</div>`}
+      </div>
+      <div class="fp-foot">From ${data ? data.sdk : 'the SDK'} · ${all.length} fields on ${data && data.entity}.
+        Lists (“each”) give one value per related record.</div>`}
+  </div>`;
 }
 
 /* ------------------------------------------------------------------------- app */
@@ -177,7 +250,9 @@ function App() {
   const [title, setTitle] = useState('');
   const [intent, setIntent] = useState('');
   const [sections, setSections] = useState([newSection()]);
-  const [params, setParams] = useState([newParam()]);
+  const [params, setParams] = useState([]);          // optional: none until someone adds one
+  const [pickCols, setPickCols] = useState(false);
+  const [pickCrit, setPickCrit] = useState(false);
   const [busy, setBusy] = useState(false);
   const [res, setRes] = useState(null);
   const [imported, setImported] = useState(null);
@@ -305,6 +380,11 @@ function App() {
                       .map(c => [c.header.trim(), Number(c.width) || 20, c.align, c.field.trim()]),
         })).filter(s => s.cols.length),
         params: params.filter(p => p.name.trim()).map(p => [p.name.trim(), p.type]),
+        paths: Object.fromEntries(sections.flatMap(s => s.cols.filter(c => c.path && c.field.trim())
+          .map(c => [c.field.trim(), c.path]))),
+        criteria: Object.values(params.filter(p => p.path && p.name.trim()).reduce((acc, p) => {
+          (acc[p.group] = acc[p.group] || { path: p.path, kind: p.kind, params: [] }).params.push(p.name.trim());
+          return acc; }, {})),
       }),
     }).then(r => r.json()).then(d => {
       setBusy(false);
@@ -315,6 +395,35 @@ function App() {
     });
   };
   const another = () => { window.JTIBuild.remember(null); setJob(null); setRes(null); setName(''); };
+
+  // ---- field-browser picks: a column, or a launch input that filters on the field
+  const colPaths = new Set(sections.flatMap(s => s.cols.filter(c => c.path).map(c => c.path)));
+  const critPaths = new Set(params.filter(p => p.path).map(p => p.path));
+  const addColumn = (f, pth) => {
+    setSections(xs => {
+      const taken = new Set(xs.flatMap(s => s.cols.map(c => c.field)));
+      const segs = pth.split('.').slice(1).map(x => x.replace('[]', ''));
+      let key = f.name.replace(/^cf_/, '');
+      for (let i = segs.length - 2; taken.has(key) && i >= 0; i--)
+        key = segs[i] + key[0].toUpperCase() + key.slice(1);
+      const col = { id: uid(), header: human(f.name), width: 20, align: 'Left', field: key, path: pth };
+      const [first, ...rest] = xs;
+      const keep = first.cols.filter(c => c.header.trim() || c.field.trim());
+      return [{ ...first, key: first.key || 'ROWS', cols: [...keep, col] }, ...rest];
+    });
+    setSecOpen(true);
+  };
+  const addCriteria = (f, pth) => {
+    const base = human(f.name).replace(/\s+/g, '');
+    const date = f.label === 'date', num = f.label === 'number';
+    const group = uid();
+    const rows = date
+      ? [['From', 'java.util.Date'], ['To', 'java.util.Date']].map(([sfx, t]) =>
+          ({ id: uid(), name: base + sfx, type: t, path: pth, kind: 'range', group }))
+      : [{ id: uid(), name: base, type: num ? 'java.lang.Integer' : 'java.lang.String', path: pth,
+           kind: num ? 'equals' : 'in', group }];
+    setParams(xs => [...xs.filter(p => p.name.trim()), ...rows]);
+  };
 
   const tplObj = boot.templates.find(t => t.module === tpl);
   const projObj = boot.projects.find(p => p.name === project);
@@ -471,6 +580,13 @@ function App() {
               <span class="right chev">${secOpen ? '−' : '+'}</span>
             </button>
             ${secOpen && html`<${React.Fragment}>
+              <div class="pickbar">
+                <button class=${'mini' + (pickCols ? ' on' : '')} onClick=${() => setPickCols(o => !o)}>
+                  ${pickCols ? 'Hide fields' : 'Browse fields'}</button>
+                <span class="hint">Click through the fields this project's eSeries really has, and
+                  add them as columns — or type them below.</span>
+              </div>
+              ${pickCols && html`<${FieldPicker} project=${project} mode="column" added=${colPaths} onAdd=${addColumn}/>`}
               <div class="hint">One section per grid. Widths are relative — they get scaled to
                 the page, so they need not add to 100.</div>
               ${sections.map(s => html`
@@ -484,10 +600,21 @@ function App() {
 
           <section class="step">
             <div class="step-h"><${Num} n="6" done=${namedInputs.length > 0}/>
-              <div><h2>Launch inputs</h2><p class="lead">What the person running the report
-                fills in. Leave empty for a report that takes none.</p></div></div>
+              <div><h2>Launch inputs<span class="opt">optional</span></h2><p class="lead">What
+                the person running the report fills in to narrow it down — a date range, a case
+                type.</p></div></div>
+            <div class="pickbar">
+              <button class=${'mini' + (pickCrit ? ' on' : '')} onClick=${() => setPickCrit(o => !o)}>
+                ${pickCrit ? 'Hide fields' : 'Browse fields'}</button>
+              <span class="hint">Pick a field to filter on: a date becomes a From / To pair, anything
+                else one input.</span>
+            </div>
+            ${pickCrit && html`<${FieldPicker} project=${project} mode="criteria" added=${critPaths} onAdd=${addCriteria}/>`}
+            ${params.length === 0 ? html`<div class="empty-note">None yet. Leave it that way and
+              Claude works out any inputs from your brief — asking only if it genuinely cannot
+              tell — or add them here.</div>` : html`
             <table>
-              <thead><tr><th class="p1">Name</th><th>Type</th><th class="c4"></th></tr></thead>
+              <thead><tr><th class="p1">Name</th><th>Type</th><th></th><th class="c4"></th></tr></thead>
               <tbody>
                 ${params.map(p => html`
                   <tr key=${p.id}>
@@ -497,10 +624,11 @@ function App() {
                           onChange=${e => setParams(xs => xs.map(x => x.id === p.id ? { ...x, type: e.target.value } : x))}>
                           ${TYPES.map(([v, l]) => html`<option key=${v} value=${v}>${l}</option>`)}
                         </select></td>
+                    <td>${p.path && html`<span class="fp-code" title=${p.path}>filters ${p.path.split('.').slice(1).join(' › ')}</span>`}</td>
                     <td><button class="x" onClick=${() => setParams(xs => xs.filter(x => x.id !== p.id))}>×</button></td>
                   </tr>`)}
               </tbody>
-            </table>
+            </table>`}
             <div class="actions"><button class="mini" onClick=${() => setParams(xs => [...xs, newParam()])}>+ input</button></div>
           </section>
         </div>

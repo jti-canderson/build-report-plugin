@@ -78,6 +78,12 @@ ask nothing**. It already carries the project, the template, the report name, th
 and columns, the launch inputs, and the brief in `intent`. Asking again is asking someone
 to repeat what they just typed into a form.
 
+When it has them, `paths` maps each column picked in the builder's field browser to its SDK
+path (`Case.parties[].person.lastName`; `[]` is one value per related record), and `criteria`
+lists the launch inputs made from a field: the path each filters and whether it is a `range`
+(From/To), `in` or `equals`. They were read from the project's own SDK, so use them as the
+traversals and filters. No columns and no inputs picked: derive both from the brief.
+
 ```bash
 cat "<the spec.json>"
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/scaffold.py" "<the spec.json>" --out "<its folder>"

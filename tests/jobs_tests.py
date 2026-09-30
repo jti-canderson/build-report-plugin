@@ -103,6 +103,7 @@ def run(check, skip, ctx):
     run_phase3(check, skip, ctx)
     run_phase4(check, skip, ctx)
     run_phase5(check, skip, ctx)
+    run_fields(check, skip, ctx)
 
 
 def run_phase1(check, skip, ctx):
@@ -201,15 +202,9 @@ def run_phase1(check, skip, ctx):
               and os.path.isfile(os.path.join(ws, "Proj", "Old_Path", "spec.json")), (c1, c2, d))
     finally:
         srv.stop()
-    md = os.path.join(plugin, "commands", "build-report.md")
-    g = subprocess.run(["git", "-C", plugin, "show", "9bcbe03:commands/build-report.md"],
-                       capture_output=True)
-    if g.returncode == 0:
-        check("commands/build-report.md is byte-identical to the pre-/test-report commit",
-              hashlib.sha256(open(md, "rb").read()).hexdigest()
-              == hashlib.sha256(g.stdout).hexdigest(), "build-report.md changed")
-    else:
-        skip("commands/build-report.md is unchanged", "no git history for commit 9bcbe03")
+    md = open(os.path.join(plugin, "commands", "build-report.md"), encoding="utf8").read()
+    check("/build-report never uses the job machinery (that is /test-report's)",
+          "jobs.py" not in md and "--jobs" not in md and "/api/jobs" not in md, "build-report.md")
 
 
 # ── phase 2: event transport and gate-driven stages ──────────────────────────────────
@@ -666,5 +661,72 @@ def run_phase5(check, skip, ctx):
               "AskUserQuestion" not in front and '"$J" ask' in cmd and '"$J" wait' in cmd
               and 'J="$P/scripts/jobs.py"' in cmd and "Never ask a question here" in cmd
               and "--gates" in cmd and "Never import" in cmd, front)
+    finally:
+        srv.stop()
+
+
+# ── the field browser, picked paths in the spec, and finding the job server ──────────
+def run_fields(check, skip, ctx):
+    import glob
+    plugin, root = ctx["plugin"], ctx["ws"]
+    if not ctx["jrs"]:
+        return skip("field browser", "no JasperReports install (javac/javap)")
+    ws = fresh_ws(root, "fields")
+    jdk = os.path.join(ctx["jrs"], "java", "bin")
+    cls = os.path.join(ws, "classes"); os.makedirs(cls)
+    subprocess.run([os.path.join(jdk, "javac"), "-d", cls, *sorted(glob.glob(os.path.join(
+        ctx["fix"], "fake_sdk", "com", "sustain", "cases", "model", "*.java")))], check=True)
+    jar = os.path.join(ws, "ecourt-sdk-fake.jar")
+    subprocess.run([os.path.join(jdk, "jar"), "cf", jar, "com"], cwd=cls, check=True)
+    subprocess.run([sys.executable, os.path.join(plugin, "scripts", "project.py"), "sdk-register",
+                    os.path.join(ws, "Proj"), jar], env=dict(os.environ, JTI_PROJECT_ROOT=ws),
+                   capture_output=True, check=True)
+    os.makedirs(os.path.join(ws, "NoSdk"))
+    srv = Server(plugin, ws, jobs=False).start()
+    try:
+        c, d = srv.js("GET", "/api/fields?project=Proj&entity=Case")
+        f = {x["name"]: x for x in d.get("fields", [])}
+        check("fields: the browser lists an entity's real fields from the project's SDK",
+              c == 200 and d.get("ok") and f.get("caseNumber", {}).get("kind") == "value"
+              and f.get("parent", {}).get("kind") == "entity"
+              and f.get("parties", {}).get("kind") == "collection"
+              and f["parties"].get("targetShort") == "Party"
+              and "id" in f and "class" not in f and "Case" in d.get("roots", []), d)
+        c, d2 = srv.js("GET", "/api/fields?project=Proj&entity=" + f["parties"]["target"])
+        check("fields: drilling into a list lands on its element type",
+              d2.get("ok") and d2.get("entity") == "Party"
+              and any(x["name"] == "lastName" for x in d2["fields"]), d2)
+        bad = [srv.js("GET", "/api/fields?project=Proj&entity=" + e)[1]
+               for e in ("java.lang.Runtime", "Nope", "../../etc/passwd")]
+        nosdk = srv.js("GET", "/api/fields?project=NoSdk")[1]
+        check("fields: only classes IN the jar are read; a project with no SDK says so",
+              all(not b.get("ok") for b in bad) and nosdk.get("reason") == "no-sdk", (bad, nosdk))
+        spec = spec_for("Picked")
+        spec["paths"] = {"caseNumber": "Case.caseNumber", "partyLastName": "Case.parties[].lastName"}
+        spec["criteria"] = [{"path": "Case.filingDate", "kind": "range",
+                             "params": ["FilingDateFrom", "FilingDateTo"]}]
+        c, _ = srv.js("POST", "/api/spec", spec)
+        spec2 = dict(spec_for("Picked_Bad"), paths=["not", "a", "map"], criteria="nope")
+        srv.js("POST", "/api/spec", spec2)
+        s1 = json.load(open(os.path.join(ws, "Proj", "Picked", "spec.json")))
+        s2 = json.load(open(os.path.join(ws, "Proj", "Picked_Bad", "spec.json")))
+        check("fields: picked paths and filters are kept in spec.json; malformed ones dropped",
+              c == 200 and s1.get("paths") == spec["paths"]
+              and s1.get("criteria") == spec["criteria"]
+              and "paths" not in s2 and "criteria" not in s2, (s1.get("paths"), s2))
+    finally:
+        srv.stop()
+
+    # a job server running for ANOTHER workspace is still found by the helper
+    other = fresh_ws(root, "otherws")
+    srv = Server(plugin, ws).start()
+    try:
+        stale = os.path.join(other, ".jti-builder"); os.makedirs(stale, mode=0o700)
+        open(os.path.join(stale, "server.json"), "w").write(json.dumps(
+            {"port": 1, "pid": 999999, "worker_token": "x"}))
+        r = helper(plugin, other, "wait", "--secs", "2", timeout=60)
+        check("jobs: the helper finds a job server started from another workspace (and ignores "
+              "a leftover state file from a dead one)",
+              r.returncode == 7 and "NO JOB YET" in r.stdout, r.stdout + r.stderr)
     finally:
         srv.stop()

@@ -426,6 +426,19 @@ def write_spec(payload):
     spec = {k: payload.get(k) for k in
             ("name", "title", "template", "why", "sections", "meta", "tiles",
              "params", "variants", "root", "id", "intent")}
+    # Picked in the field browser: `paths` maps a column's field to its SDK traversal, and
+    # `criteria` lists the launch inputs made from a field and what they filter. Only kept
+    # when well-formed; the build treats them as SDK-checked starting points, not proof.
+    paths = payload.get("paths")
+    if isinstance(paths, dict) and paths and all(
+            isinstance(k, str) and isinstance(v, str) and len(v) < 300 for k, v in paths.items()):
+        spec["paths"] = paths
+    crit = payload.get("criteria")
+    if isinstance(crit, list) and crit and all(
+            isinstance(c, dict) and isinstance(c.get("path"), str)
+            and isinstance(c.get("params"), list) for c in crit):
+        spec["criteria"] = [{"path": c["path"], "kind": str(c.get("kind") or "equals")[:20],
+                             "params": [str(x)[:60] for x in c["params"]][:2]} for c in crit][:20]
     if look:
         # Copied, not referenced: a temp file disappears on reboot and the spec has to stay
         # readable weeks later, next to the report it describes.
@@ -573,6 +586,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     return self._send(200, f.read(), rec["ctype"])
             except OSError:
                 return self._send(404, b"upload is gone", "text/plain")
+        if path == "/api/fields":
+            # The field browser: read-only, from the project's own registered SDK.
+            import fields_api as FA
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            folder, err = destination({"name": "Browse",
+                                       "project": (q.get("project") or [""])[0]})
+            if err:
+                return self._send(200, json.dumps({"ok": False, "reason": "no-project",
+                                                   "message": err}))
+            return self._send(200, json.dumps(FA.browse(folder, (q.get("entity") or ["Case"])[0])))
         if path == "/api/checkdir":
             q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             return self._send(200, json.dumps(checkdir((q.get("path") or [""])[0])))

@@ -152,6 +152,19 @@ class Store:
         atomic_write(self.dir / "server.json", json.dumps(
             {"port": port, "pid": os.getpid(), "worker_token": self.worker_token,
              "started": time.time()}, indent=2))
+        # Where THIS server keeps its state, for a helper started from another folder: a job
+        # server reused from a different workspace was unreachable (found 09-30). The
+        # pointer holds a path only - the worker token stays in the 0600 server.json.
+        try:
+            home = pathlib.Path.home() / ".jti-builder"
+            home.mkdir(mode=0o700, exist_ok=True)
+            for old in home.glob("server-*.json"):          # prune servers that have exited
+                if not _alive(Store._read(old) or {}):
+                    old.unlink()
+            atomic_write(home / f"server-{port}.json", json.dumps(
+                {"state_dir": str(self.dir), "port": port, "pid": os.getpid()}))
+        except OSError:
+            pass
 
     # -- load / save
     def job_file(self, folder):
@@ -395,8 +408,29 @@ class Store:
 
 
 # ── the helper (worker side) ─────────────────────────────────────────────────────────
+def _alive(s):
+    try:
+        os.kill(int(s.get("pid")), 0)
+        return True
+    except (OSError, TypeError, ValueError):
+        return False
+
+
 def _server():
     s = Store._read(state_dir() / "server.json")
+    if s and not _alive(s):
+        s = None                                     # a leftover from a server that has exited
+    if not s:
+        # The running job server may belong to another workspace: follow the pointer of a
+        # LIVE one, the standard port first (test servers on random ports never win).
+        ptrs = [Store._read(f) or {} for f in (pathlib.Path.home() / ".jti-builder").glob("server-*.json")]
+        live = sorted((x for x in ptrs if x.get("state_dir") and _alive(x)),
+                      key=lambda x: (x.get("port") != 8789, -int(x.get("pid") or 0)))
+        for x in live:
+            s = Store._read(pathlib.Path(x["state_dir"]) / "server.json")
+            if s and _alive(s):
+                break
+            s = None
     if not s:
         sys.exit("  no builder server state - start it: serve_builder.py --jobs")
     return s
