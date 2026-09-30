@@ -303,6 +303,10 @@ def run_phase1(check, skip, ctx):
              if re.search(r"/test-report(?!` is the old name)|unreleased|Test build|TEST BUILD",
                           open(os.path.join(plugin, f), encoding="utf8").read())]
     check("no test / unreleased labels left in the shipped builder, command or README", not stale, stale)
+    app = open(os.path.join(plugin, "scripts", "app.js"), encoding="utf8").read()
+    ok_branch = app[app.index("if (jobsMode && d.ok)"):][:600]
+    check("a submitted build clears the form draft, so the next session opens on a clean form",
+          "localStorage.removeItem(DRAFT)" in ok_branch, ok_branch[:200])
 
 
 # ── phase 2: event transport and gate-driven stages ──────────────────────────────────

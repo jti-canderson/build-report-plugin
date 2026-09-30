@@ -322,6 +322,10 @@ function App() {
       setBusy(false);
       if (jobsMode && d.ok) {
         const j = { id: d.job, token: d.token };
+        // The job holds the submission now; a draft left behind would greet the next
+        // session with a report that is already built.
+        try { localStorage.removeItem(DRAFT); } catch (e) { /* ignore */ }
+        setDraftAt(null);
         window.JTIBuild.remember(j); setJob(j); window.scrollTo(0, 0);
       } else setRes(d);
     });
