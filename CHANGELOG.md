@@ -30,6 +30,20 @@
   templates. A builder left running by an older copy is replaced when idle.
 - `/test-report` is kept as an alias of `/build-report`.
 
+**Fixed during the release browser run:**
+
+- **Wide Table builds.** The page offers it, but `wide_table.build()` took no arguments, so
+  a Wide Table build stopped at the scaffold stage. It now takes `columns=` like the List;
+  the sample layout is unchanged.
+- **A submitted build clears the form draft.** The next `/build-report` opened pre-filled
+  with the report just built.
+- **A check-in already in flight from a closed tab no longer cancels the close** (the page
+  sends a per-load id); before, that race left Claude waiting until the 180 s page timeout.
+
+**Known limitation:** Grouped Summary and Statement still cannot be scaffolded (their
+`build()` takes no arguments); a build that picks one composes its generator from
+`jti_style` primitives, which takes longer.
+
 **Removed:** the four-question chat interview. It is in 0.33.0 if you need it (see
 INSTALL.md, "Rolling back"). The build know-how the interview carried is now
 `skills/jasper-reports/references/build-procedure.md`.
