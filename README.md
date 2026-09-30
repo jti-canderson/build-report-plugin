@@ -167,7 +167,8 @@ overrides the alias. A misspelt value of any switch warns and uses the default.
 
 Tests: `python3 tests/run.py --core-only` is the self-contained suite (HOME pointed at an
 empty temp dir); plain `python3 tests/run.py` adds the integration tier, which reads private
-exports in `~/Downloads`. Totals are printed per tier.
+exports in `~/Downloads`. Totals are printed per tier. What was run for this release, and the
+results: [VALIDATION.md](VALIDATION.md).
 
 Only the fast verifier reads `JTI_JVM_OPTS` (default `-XX:TieredStopAtLevel=1`; `""` turns it
 off). Measurements (in the git repository; `docs/` is left out of the release package):
