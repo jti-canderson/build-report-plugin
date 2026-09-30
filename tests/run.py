@@ -356,8 +356,8 @@ def main():
     json.dump(s, open(sp, "w"))
     rc, out = run(["python3", os.path.join(PLUGIN, "scripts", "scaffold.py"), sp,
                    "--out", os.path.join(ws, "nope2")])
-    check("scaffold refuses a match-a-picture spec and names build-report",
-          rc != 0 and "build-report" in out and "missing" not in out, out)
+    check("scaffold refuses a match-a-picture spec and points at the build procedure",
+          rc != 0 and "build-procedure.md" in out and "missing" not in out, out)
 
     # the upload round trip, in-process: a PNG is accepted, a text file is not, and writing
     # the spec COPIES the picture into the report folder instead of leaving a temp path.
@@ -417,7 +417,7 @@ print(json.dumps({'briefAccepted': brief[0], 'intentKept': bool(spec.get('intent
                   'noSections': spec.get('sections') == [],
                   'emptyRefused': not empty[0], 'emptyWhy': empty[1],
                   'scaffoldRefused': sc.returncode != 0,
-                  'scaffoldNamesBuildReport': 'build-report' in (sc.stdout + sc.stderr)}))
+                  'scaffoldNamesBuildReport': 'build-procedure.md' in (sc.stdout + sc.stderr)}))
 """ % (os.path.join(PLUGIN, "scripts"), os.path.join(PLUGIN, "scripts"))
     rc, out = run(["python3", "-c", brief_probe], env={"JTI_PROJECT_ROOT": ws})
     try:
@@ -428,7 +428,7 @@ print(json.dumps({'briefAccepted': brief[0], 'intentKept': bool(spec.get('intent
           rc == 0 and b.get("briefAccepted") and b.get("intentKept") and b.get("noSections"), out)
     check("a spec with a template but nothing said about the page is refused",
           bool(b.get("emptyRefused")) and "page" in (b.get("emptyWhy") or ""), out)
-    check("scaffold refuses a brief-only spec and names build-report (not 'missing sections')",
+    check("scaffold refuses a brief-only spec and points at the build procedure (not 'missing sections')",
           bool(b.get("scaffoldRefused")) and bool(b.get("scaffoldNamesBuildReport")), out)
 
     # THE LISTENER. Two things have to hold or the Write button lies to the user: a spec
@@ -794,11 +794,14 @@ print("RESOLVE", same, wrong, refused, typo)
           rc0 == 10 and rc2 == 10 and "days old" in o2 and rc3 == 10 and "cannot be read" in o3,
           f"none={rc0} stale={rc2} {o2.strip()} unreadable={rc3} {o3.strip()}")
     cmd_md = open(os.path.join(PLUGIN, "commands", "build-report.md"), encoding="utf8").read()
-    check("build-report: unattended decides the SDK in code, confirm keeps its confirmation",
-          "sdk-decide" in cmd_md and "INTERACTION: unattended" in cmd_md and '"derived"' in cmd_md
-          and "**Still current** / **I'll send a newer one**" in cmd_md
-          and "**`interaction: confirm`:** confirm the derived columns" in cmd_md
-          and "scripts/build_mode.py" in cmd_md, "command text")
+    proc = open(os.path.join(PLUGIN, "skills", "jasper-reports", "references",
+                             "build-procedure.md"), encoding="utf8").read()
+    check("build-report: the SDK is decided in code (sdk-decide), asked on the page only when "
+          "it must be, and derived columns are recorded under \"derived\"",
+          "sdk-decide" in cmd_md and "--type file" in cmd_md and "scripts/build_mode.py" in cmd_md
+          and "INTERACTION on the page" in proc and '"derived"' in proc
+          and "AskUserQuestion" not in cmd_md + proc and "SendUserFile" not in cmd_md,
+          "command text")
 
     # ---- rollout switches: each independent, the old variable only an alias -------------
     bm = build_mode.resolve
@@ -966,7 +969,32 @@ print("RESOLVE", same, wrong, refused, typo)
         skip("formexport --spec on a non-folder-view export", "no RULE-*.zip on hand")
 
     tier("core")
-    # ---- /test-report: the browser-contained build (job coordinator + helper) --------
+    # ---- a scaffolded report finds its templates from an INSTALLED copy too ----------
+    # gen_jrxml.py used to hard-code ~/JaspersoftWorkspace/.../jti-reports-plugin/templates,
+    # so a report scaffolded by an installed plugin failed on any machine without that checkout.
+    tw = tempfile.mkdtemp(prefix="jti-tpl-")
+    rc, _ = run(["python3", os.path.join(PLUGIN, "scripts", "scaffold.py"),
+                 os.path.join(FIX, "good_spec.json"), "--out", os.path.join(tw, "R")])
+    g = os.path.join(tw, "R", "gen_jrxml.py")
+    fake = os.path.join(tw, "home")
+    os.makedirs(os.path.join(fake, ".claude", "plugins", "cache", "m", "jti-reports"))
+    os.symlink(os.path.realpath(PLUGIN),
+               os.path.join(fake, ".claude", "plugins", "cache", "m", "jti-reports", "0.34.0"))
+    src = open(g).read() if rc == 0 else ""
+    open(g, "w").write(re.sub(r"MADE_BY = .*", "MADE_BY = '/nonexistent'", src))
+    env = {k: v for k, v in os.environ.items() if k != "JTI_PLUGIN"}
+    r1 = subprocess.run(["python3", g], cwd=os.path.dirname(g), capture_output=True, text=True,
+                        env=dict(env, HOME=fake))
+    r2 = subprocess.run(["python3", g], cwd=os.path.dirname(g), capture_output=True, text=True,
+                        env=dict(env, HOME=os.path.join(tw, "empty")))
+    check("scaffold: gen_jrxml.py finds templates from an installed copy, and without one "
+          "says to set JTI_PLUGIN (no hard-coded checkout path)",
+          rc == 0 and "JaspersoftWorkspace" not in src.split("MADE_BY")[0]
+          and r1.returncode == 0 and "wrote" in r1.stdout
+          and r2.returncode != 0 and "JTI_PLUGIN" in r2.stderr, (r1.stderr[-200:], r2.stderr[-200:]))
+    shutil.rmtree(tw, ignore_errors=True)
+
+    # ---- /build-report: the browser-contained build (job coordinator + helper) --------
     import jobs_tests
     jobs_tests.run(check, skip, {"plugin": PLUGIN, "ws": ws, "jrs": JRS, "fix": FIX,
                                  "build_good": build_good, "rule": rule, "fixture": fixture,

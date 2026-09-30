@@ -45,6 +45,7 @@ import json
 import re
 import subprocess
 import os
+import pathlib
 import sys
 
 
@@ -102,8 +103,34 @@ def gen_jrxml(s):
          + (f' ({s["letter"]}).' if s.get("letter") else '.'), '']
     if s.get("why"):
         L += [f'WHY THIS TEMPLATE: {s["why"]}', '']
-    L += ['    python3 gen_jrxml.py', '"""', 'import pathlib', 'import sys', '',
-          'TPL = pathlib.Path.home() / "JaspersoftWorkspace/MyReports/jti-reports-plugin/templates"',
+    # FIND the plugin, as run.sh does - never a home-directory path. Until 0.34.0 this was
+    # TPL = ~/JaspersoftWorkspace/MyReports/jti-reports-plugin/templates, so every generated
+    # layout worked only on a machine with that exact checkout, and an installed plugin on
+    # anyone else's failed at its first gate.
+    L += ['    python3 gen_jrxml.py', '"""', 'import os', 'import pathlib', 'import re', 'import sys', '',
+          f'MADE_BY = {str(pathlib.Path(__file__).resolve().parent.parent)!r}   # the plugin that scaffolded this',
+          '',
+          '',
+          'def _plugin():',
+          '    ok = lambda d: d and (pathlib.Path(d) / "templates").is_dir()',
+          '    if ok(os.environ.get("JTI_PLUGIN")):',
+          '        return pathlib.Path(os.environ["JTI_PLUGIN"])',
+          '    here = pathlib.Path(__file__).resolve().parent',
+          '    for d in [here, *here.parents]:            # a report inside the workspace, beside a checkout',
+          '        if ok(d / "jti-reports-plugin"):',
+          '            return d / "jti-reports-plugin"',
+          '        if ok(d) and (d / "skills" / "jasper-reports").is_dir():',
+          '            return d',
+          '    if ok(MADE_BY):',
+          '        return pathlib.Path(MADE_BY)',
+          '    ver = lambda p: [int(x) for x in re.findall(r"\\d+", p.parent.name)]',
+          '    cache = sorted(pathlib.Path.home().glob(".claude/plugins/cache/*/jti-reports/*/templates"), key=ver)',
+          '    if cache:                                 # the installed plugin snapshot, newest version',
+          '        return cache[-1].parent',
+          '    sys.exit("cannot find jti-reports-plugin - set JTI_PLUGIN to its folder")',
+          '',
+          '',
+          'TPL = _plugin() / "templates"',
           'sys.path.insert(0, str(TPL))', 'sys.path.insert(0, str(TPL / "templates"))',
           f'import {s["template"]} as T   # noqa: E402', '',
           f'NAME = "{s["name"]}"', '',
@@ -374,8 +401,8 @@ def main():
     # that, rather than "spec is missing 'template'", which reads like a corrupt file.
     if not spec.get('template') and spec.get('look_like'):
         print(f"  this spec says: match {spec['look_like']} - no template chosen yet.\n"
-              f"  A picture has to be read before a starting template can be named, so run\n"
-              f"  /jti-reports:build-report on it instead of scaffolding it directly.")
+              f"  A picture has to be read before a starting template can be named: read it,\n"
+              f"  write the template into the spec (build-procedure.md, `look_like`), then scaffold.")
         sys.exit(2)
     # A brief-only spec: a template is chosen but the columns were left to the brief rather
     # than typed. The columns do not exist yet, so scaffolding would emit an empty grid. Say
@@ -384,8 +411,8 @@ def main():
     if spec.get('template') and not spec.get('sections') and (spec.get('intent') or '').strip():
         print(f"  this spec has a brief but no columns yet:\n"
               f"    \"{spec['intent'].strip()[:72]}\"\n"
-              f"  The columns come from that brief, and something has to derive them first, so\n"
-              f"  run /jti-reports:build-report on it instead of scaffolding it directly.")
+              f"  The columns come from that brief: derive them into the spec first\n"
+              f"  (build-procedure.md, \"A spec with a brief but no columns\"), then scaffold.")
         sys.exit(2)
     for k in ('name', 'title', 'template', 'sections'):
         if not spec.get(k):

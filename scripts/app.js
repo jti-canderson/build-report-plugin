@@ -25,7 +25,7 @@ const newCol = () => ({ id: uid(), header: '', width: 20, align: 'Left', field: 
                         aggregate: 'None', format: '', customFormat: '', truncate: '', open: true });
 const newSection = () => ({ id: uid(), key: '', title: '', cols: [newCol(), newCol()] });
 const newParam = () => ({ id: uid(), name: '', type: TYPES[0][0] });
-// --jobs mode (/test-report) only: its session token on every upload. Empty in the default
+// --jobs mode (/build-report) only: its session token on every upload. Empty in the default
 // mode, so those requests are exactly what they always were.
 const SESSION = { h: {} };
 window.SESSION_HEADERS = () => SESSION.h;
@@ -150,7 +150,7 @@ function App() {
   const [look, setLook] = useState(null);
   const [lookErr, setLookErr] = useState('');
   const [watching, setWatching] = useState(null);
-  // The "Done" button (--jobs mode): tells the /test-report worker to stop waiting, so the
+  // The "Done" button (--jobs mode): tells the /build-report worker to stop waiting, so the
   // Claude session ends its run instead of polling for a build that is never coming.
   const [stopping, setStopping] = useState(false);
   const [doneMsg, setDoneMsg] = useState(null);
@@ -327,8 +327,8 @@ function App() {
     });
   };
   const finish = () => {
-    if (!confirm('Done for now?\n\nClaude stops waiting for builds and ends its /test-report run. '
-                 + 'Your reports stay where they are. Run /test-report again to build more.')) return;
+    if (!confirm('Done for now?\n\nClaude stops waiting for builds and ends its /build-report run. '
+                 + 'Your reports stay where they are. Run /build-report again to build more.')) return;
     fetch('/api/session/done', { method: 'POST', body: '{}',
                                  headers: { ...SESSION.h, 'Content-Type': 'application/json' } })
       .then(r => r.json()).then(d => { setDoneMsg(d.message || 'Claude is stopping.'); setStopping(!!d.stopping);
@@ -562,7 +562,7 @@ function App() {
             ${critIssues.length > 0 && html`<div class="todo">Fix ${critIssues.length === 1 ? 'a search criterion' : critIssues.length + ' search criteria'} first — ${critIssues[0].msg}</div>`}
             ${watching !== null && html`<div class=${'watch' + (watching ? ' on' : '')}><span class="dot"/>
               <span>${jobsMode ? (watching ? 'Claude is ready — the build starts as soon as you click.'
-                                           : 'Claude is not waiting yet — the build starts when /test-report picks it up.')
+                                           : 'Claude is not waiting yet — the build starts when /build-report picks it up.')
                 : watching ? 'Claude is watching — clicking Write hands it straight over.'
                            : 'Claude is not watching — you will get a command to paste.'}</span></div>`}
             ${jobsMode && boot.jobs.active && !job && html`<div class="out err">A build is already
@@ -575,10 +575,9 @@ function App() {
                     ${res.watched
                       ? html`<div class="note mt8"><b>Claude is watching and has picked this
                           up — go back to the chat.</b> Nothing to copy.</div>`
-                      : html`<${React.Fragment}>
-                          <div>Now run this in Claude Code:</div>
-                          <pre>/jti-reports:build-report ${res.message}</pre>
-                        <//>`}
+                      : html`<div class="note mt8">This stand-alone form only writes the spec.
+                          To build a report with progress, preview and downloads, run
+                          <b>/build-report</b> in Claude Code - it opens the full builder.</div>`}
                   <//>` : res.message}
               </div>`}
             ${draftAt && html`<div class="note mt8">Draft kept in this browser · <button class="linkbtn" onClick=${startOver}>Start over</button></div>`}
@@ -604,8 +603,8 @@ function DoneBar({ msg, watching }) {
   const gone = watching === false;
   return html`<div class=${'donebar' + (gone ? ' gone' : '')} role="status"><div class="in">
     <b>${gone ? 'Claude has stopped.' : msg}</b>
-    <span>${gone ? 'The /test-report run in Claude Code has ended. Your reports are saved where each build said. '
-                   + 'To build more, run /test-report again. You can close this tab.'
+    <span>${gone ? 'The /build-report run in Claude Code has ended. Your reports are saved where each build said. '
+                   + 'To build more, run /build-report again. You can close this tab.'
                  : 'This page will say when it has stopped.'}</span></div></div>`;
 }
 
@@ -615,7 +614,7 @@ function AppBar({ boot, watching, jobsMode, stopping, onDone }) {
       <img src="/brand/journal-j.png" alt="" onError=${hideImg}/>
       <span class="sep"/>
       <div>
-        <div class="ttl">Report Builder${jobsMode && html`<span class="tag">Test build</span>`}</div>
+        <div class="ttl">Report Builder</div>
         <div class="sub">Journal Technologies · eSeries reports</div>
       </div>
     </div>
@@ -625,7 +624,7 @@ function AppBar({ boot, watching, jobsMode, stopping, onDone }) {
     ${watching !== null && html`<span class=${'status' + (watching ? ' on' : '')}>
       <span class="dot"/>${stopping && watching ? 'Claude stopping…' : watching ? 'Claude ready' : 'Claude not connected'}</span>`}
     ${jobsMode && watching && !stopping && html`<button class="mini done" onClick=${onDone}
-        title="Finished? Tell Claude to stop waiting and end its /test-report run.">Done — stop Claude</button>`}
+        title="Finished? Tell Claude to stop waiting and end its /build-report run.">Done — stop Claude</button>`}
   </div></header>`;
 }
 

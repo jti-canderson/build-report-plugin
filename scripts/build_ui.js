@@ -1,5 +1,5 @@
 /*
- * The build screen for /test-report (served only by serve_builder.py --jobs).
+ * The build screen for /build-report (served only by serve_builder.py --jobs).
  *
  * It replaces the form in place - no navigation - and follows ONE job: a server-sent
  * event stream of full snapshots, with polling as the fallback, so a refresh, a closed
@@ -13,7 +13,7 @@
   const { useState, useEffect, useRef } = React;
   const html = htm.bind(React.createElement);
 
-  const KEY = 'jti-test-report-job';
+  const KEY = 'jti-build-report-job';
   function remember(job) {
     try { job ? localStorage.setItem(KEY, JSON.stringify(job)) : localStorage.removeItem(KEY); }
     catch (e) { /* private window: the hash still carries it */ }
@@ -23,7 +23,7 @@
   /** {id, token, linked}: `linked` when the ADDRESS names the job (a reload of that tab, or
    * a link opened on purpose) - shown whatever its state. One only remembered from an
    * earlier visit is shown only while it is still running: a finished build must not greet
-   * the next /test-report as if the form were already filled in. */
+   * the next /build-report as if the form were already filled in. */
   function recall() {
     const m = /[#&]job=([0-9a-f]{16})&t=([^&]+)/.exec(location.hash);
     if (m) return { id: m[1], token: decodeURIComponent(m[2]), linked: true };
@@ -222,7 +222,7 @@
       </div>
       ${snap.status === 'submitted' && html`<p class="note">${snap.worker_waiting
         ? 'Claude is ready and will start in a moment.'
-        : 'No Claude session is waiting yet. The build starts as soon as /test-report is running.'}</p>`}
+        : 'No Claude session is waiting yet. The build starts as soon as /build-report is running.'}</p>`}
       ${stale && html`<p class="note warnline">No word from Claude for
         ${Math.round(snap.worker_seen_ago / 60)} min - it may be working on a long step.</p>`}
       ${conn !== 'live' && !term && html`<p class="note">Connection: ${conn}</p>`}

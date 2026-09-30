@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""jobs.py - the build-job coordinator for /test-report, and the helper Claude calls.
+"""jobs.py - the build-job coordinator for /build-report, and the helper Claude calls.
 
 THE SHAPE. The browser is the user interface, the local builder server (serve_builder.py
---jobs) is the job coordinator, and the running /test-report command is the worker. Nothing
+--jobs) is the job coordinator, and the running /build-report command is the worker. Nothing
 here launches Claude: the command that is already running claims a job and does the build,
 and reports each step through this helper.
 
     browser  --submit-->  server  <--claim / progress / ask / complete--  jobs.py (Claude)
 
-HELPER (what the /test-report command runs; it talks to the server over 127.0.0.1):
+HELPER (what the /build-report command runs; it talks to the server over 127.0.0.1):
 
     jobs.py wait [--secs 540]            block until the browser submits; claim it; print JSON
                                          exit 7 = nothing submitted yet, run it again
@@ -325,7 +325,7 @@ class Store:
                             self.stopped = True
                             return "DONE"
                     if self.page_gone() and not (j and j["status"] == "submitted"):
-                        # used up here, so the next /test-report is not ended by an old tab
+                        # used up here, so the next /build-report is not ended by an old tab
                         self.page_seen = self.page_closing = None
                         self.stopped = True
                         return "CLOSED"
@@ -644,7 +644,7 @@ def run_child(a):
     ck(call("/api/worker/child", {"pid": None, "stage": a.stage, "rc": rc}))
     if not a.gates and rc == 0:
         # A step that succeeded is DONE - reported here, not left to a separate `done` call
-        # a worker can forget (the Defendant_Test build left "Report scaffolded" unticked).
+        # a worker can forget (the Defendant_Test report left "Report scaffolded" unticked).
         # The gates report their own stages from JTI-GATE lines.
         _checked(call("/api/worker/done", {"stage": a.stage,
                                             "status": "Finished"}))

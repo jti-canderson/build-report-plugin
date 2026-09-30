@@ -45,21 +45,33 @@ See [INSTALL.md](INSTALL.md) for the full walkthrough.
 /build-report
 ```
 
-Four short questions — project, SDK/JAR, template, what it should show. Answer any of
-them up front and that question is skipped:
+Opens the report builder in your browser (http://127.0.0.1:8789/) and does the whole build
+there. The chat only says where the page is.
 
-```
-/build-report OKDAC, template D, payments by agency for a date range
-```
+1. **Pick** the project and a template (all six previews side by side). The project's field
+   list (SDK, registered per project) and Data Dictionary are found for you.
+2. **Choose the fields.** The Search Criteria and Result Columns browsers open on the report's
+   root record: drill into related records (Case › Parties › Person) with breadcrumbs, use
+   Quick Find, see each field's Data Dictionary details, and add calculated fields. Each
+   criterion becomes a launch input with the eSeries operator, required / hidden flags and a
+   default; the builder checks names and pick-list defaults before it lets you build.
+3. **Build report.** Progress, any follow-up question, the rendered pages and the verified
+   downloads (rule, `.jrxml`, `RULE-<Code>.zip`) all appear on the page. Downloads are
+   refused if a file changed after the gates passed.
+4. **Done — stop Claude** ends the session from the page. Closing the tab does the same after
+   a few seconds; a reload does not, and resumes the build in progress.
 
-Attach a folder-view export (`FORM-*.zip`) and the last question answers itself — its
-panels, paths and column headings become the report.
+Nothing is imported into eSeries: importing the zip is yours to do.
+
+`/test-report` is the old name for the same command and still works.
 
 ## What's inside
 
 | | |
 |---|---|
-| `commands/build-report.md` | the flow |
+| `commands/build-report.md` | the flow (the browser worker) |
+| `scripts/serve_builder.py`, `scripts/jobs.py` | the builder page and its job coordinator |
+| `skills/jasper-reports/references/build-procedure.md` | how a submitted job is built |
 | `scripts/project.py` | project folders and per-project SDK/JAR tracking |
 | `scripts/scaffold.py` | generate `gen_jrxml.py` + verification boilerplate from a `spec.json` |
 | `scripts/finish.sh` | the pre-handoff gate: contract check → render → truncation check → rule zip |
@@ -97,23 +109,17 @@ and a wrong one is silent — the report compiles here and behaves differently t
 - A JasperReports Server install for local rendering (default
   `/Applications/jasperreports-server-9.0.0`; override with `JRS`)
 
-## Building by form instead of by question
+## The builder page
 
-```bash
-python3 scripts/serve_builder.py
-```
+`/build-report` starts `scripts/serve_builder.py --jobs` (127.0.0.1 only, port 8789) and is
+the worker: it claims the job the page submits and reports each step through
+`scripts/jobs.py`. Job state is on disk in `<report>/.jti-build/`, so a reload or a restart
+resumes. One build at a time. A builder left running by an older copy of the plugin is
+replaced when idle and kept (with a message) while it holds a job.
 
-Opens a local page (127.0.0.1 only) listing your real projects and all six templates with
-their previews side by side. Fill it in, hit **Write spec.json**, and it prints the one
-command to run. `/build-report` reads the spec and skips the questions.
-
-The form exists because `AskUserQuestion` caps at four options, and that cap is what made
-the template letters misleading, split a five-project list across two prompts, and forced a
-two-step template menu. A form has no cap.
-
-It writes a file and nothing else — it does not invoke Claude, and it cannot write outside
-the workspace root. The gates are unchanged: a spec skips the questions, never the
-verification.
+It cannot write outside the workspace root, and the gates are unchanged: the page skips the
+questions, never the verification. `python3 scripts/serve_builder.py` without `--jobs`
+(port 8787) is the older form that only writes a `spec.json`.
 
 ### Folder shortcuts in the picker
 
@@ -133,20 +139,11 @@ Checks      = ~/JaspersoftWorkspace/MyReports/OKDAC Reports/Checks
 Nothing is read until a shortcut is clicked — the list is built with `stat`, which macOS
 does not gate, so opening the picker never triggers a file-access prompt.
 
-## /test-report: the whole build in the browser (unreleased)
-
-`/test-report` runs this checkout, not the installed plugin, and keeps the build on one page:
-the form, live progress, any follow-up question, the rendered pages and the downloads. The
-command starts `serve_builder.py --jobs` (port 8789) and is the worker. It claims the job the
-page submits and reports each step through `scripts/jobs.py`. Job state is on disk in
-`<report>/.jti-build/`, so a refresh or a restart resumes. One build at a time. Details and a
-recorded run: `docs/test-report/E2E.md`. `/build-report` is unchanged, and so is the builder
-without `--jobs`.
-
 ## Rollout switches
 
 Each optimisation has its OWN switch, so any one can be turned on without the others. **Every
-default is the pre-optimisation behaviour, unchanged.** Print the current settings and where
+default is the pre-optimisation behaviour, unchanged, and all four stay at their defaults in
+0.34.0** (see CHANGELOG.md for why). Print the current settings and where
 each came from:
 
 ```bash
@@ -173,11 +170,19 @@ empty temp dir); plain `python3 tests/run.py` adds the integration tier, which r
 exports in `~/Downloads`. Totals are printed per tier.
 
 Only the fast verifier reads `JTI_JVM_OPTS` (default `-XX:TieredStopAtLevel=1`; `""` turns it
-off). Measurements: `docs/perf/BASELINE.md` and `docs/perf/RESULTS.md`. Plan design:
+off). Measurements (in the git repository; `docs/` is left out of the release package):
+`docs/perf/BASELINE.md` and `docs/perf/RESULTS.md`. Plan design:
 `docs/perf/BUILD_PLAN.md`. Benchmark any report on a temp copy: `python3 scripts/bench.py <folder>
 --mode legacy|fast --runs 3`.
 
 ### Rolling back
+
+**Back to 0.33.0 (the chat interview):** install the 0.33.0 package, or check out `0818987`
+in the plugin folder, then `claude plugin update jti-reports@<marketplace>` and restart Claude
+Code. Stop any builder still running (`lsof -iTCP:8789 -sTCP:LISTEN`) so the old page is not
+reused.
+
+**Switches:**
 
 **Turning a switch off is the rollback** — unset it (or set its default value) and that
 component is back to the pre-optimisation behaviour, with no code change. To remove the code as

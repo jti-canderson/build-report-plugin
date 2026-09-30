@@ -32,7 +32,7 @@ for f in "$RULE" "$JRXML"; do
   [ -f "$f" ] || { echo "  no such file: $f"; exit 2; }
 done
 
-# Structured stage events for the /test-report job wrapper (jobs.py run --gates). Silent
+# Structured stage events for the /build-report job wrapper (jobs.py run --gates). Silent
 # unless it sets JTI_JOB_STAGES, so every other caller sees exactly the output it always did.
 _jev() { [ -n "${JTI_JOB_STAGES:-}" ] && echo "JTI-GATE $*"; return 0; }
 LASTMARK=""

@@ -1,828 +1,173 @@
 ---
-description: Build an eSeries Jasper report from a JTI house template
-argument-hint: [anything you already know - project, template name, what the report should do, or a folder-view zip]
-allowed-tools: Bash, Read, Write, Edit, Glob, Grep, Skill, AskUserQuestion, Task, SendUserFile
+description: Build an eSeries Jasper report in the browser - pick fields, preview the pages and download the verified files on one page
+argument-hint: [optional - nothing is needed; the builder page collects everything]
+allowed-tools: Bash, Read, Write, Edit, Glob, Grep, Task
 model: sonnet
 ---
 
 # /build-report
 
-Walk the user to a finished report. **Four questions, in this order.**
-
 `$ARGUMENTS`
 
-## 0. Locate the plugin — FIRST, before anything else
+A report build that happens **entirely in the browser**. The page collects the report, shows
+progress, asks any follow-up question, shows the rendered pages, and offers the downloads.
+You are the worker: claim the job the page submits, build it, and report every step through
+`jobs.py`. The builder server coordinates.
 
-`${CLAUDE_PLUGIN_ROOT}` is only set when this is installed as a real plugin. Installed as a
-plain user command (a file in `~/.claude/commands/`) it expands to EMPTY, every path below
-becomes `/scripts/project.py`, and every command fails. Resolve it once:
+**The user does not come back to this chat.** So:
+
+- **Never ask a question here.** Every question goes through `jobs.py ask`, which puts it on
+  the page and waits for the answer. Do not use a chat question tool, and never tell the user
+  to reply in the chat.
+- Anything the user needs to see (a warning, a finding, a decision you made) goes into the
+  job with `jobs.py log --level warn` or into a stage status. Chat text is not seen.
+
+## 1. Locate the plugin, start the job server, say where it is
 
 ```bash
-for p in "$CLAUDE_PLUGIN_ROOT" "$HOME/.claude/plugins/jti-reports" \
-         "$HOME/JaspersoftWorkspace/MyReports/jti-reports-plugin"; do
-  [ -n "$p" ] && [ -f "$p/scripts/project.py" ] && echo "PLUGIN $p" && break
+P=""
+for p in "$JTI_PLUGIN" "${CLAUDE_PLUGIN_ROOT}"; do
+  [ -n "$p" ] && [ -f "$p/scripts/jobs.py" ] && P="$p" && break
 done
+if [ -z "$P" ]; then   # not loaded as a plugin command: the newest installed copy, then a checkout
+  P=$(ls -d "$HOME"/.claude/plugins/cache/*/jti-reports/*/ 2>/dev/null | sed 's:/$::' \
+      | awk -F/ '{print $NF"\t"$0}' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1 | cut -f2)
+  [ -f "$P/scripts/jobs.py" ] || P="$HOME/JaspersoftWorkspace/MyReports/jti-reports-plugin"
+fi
+[ -f "$P/scripts/jobs.py" ] || { echo "NO PLUGIN FOUND"; exit 1; }
+echo "PLUGIN $P"
+python3 -c "import json,sys; print('jti-reports', json.load(open(sys.argv[1]))['version'])" "$P/.claude-plugin/plugin.json"
+git -C "$P" log -1 --format='  checkout on %D, commit %h' 2>/dev/null
+python3 "$P/scripts/build_mode.py"
+nohup python3 -u "$P/scripts/serve_builder.py" --jobs >/tmp/jti-builder-jobs.log 2>&1 &
+sleep 2 && head -6 /tmp/jti-builder-jobs.log
 ```
 
-Use the printed path **literally** everywhere this file writes `${CLAUDE_PLUGIN_ROOT}`.
+Use the printed `PLUGIN` path **literally** as `$P` in every command below. If it prints
+`NO PLUGIN FOUND`, stop and say so; **do not search the disk for it** (a `find` over `$HOME`
+wanders into `~/Library` and raises a macOS privacy prompt). If the server says the port is
+in use by another server, stop and say that. If it says a builder from another copy is
+already running with a job in progress, say that in one line and stop.
 
-**If nothing prints, STOP and ask the user where the plugin is.** Do NOT go looking for it.
-A `find` over `$HOME` wanders into `~/Library/Application Support`, which makes macOS throw
-up *"claude would like to access data from other apps"* — a scary, unexplained privacy
-prompt, caused by a missing variable and nothing else. Searching also takes minutes and
-usually fails anyway. The plugin is in one of the three places above or the user knows where
-it is; there is no third option worth a filesystem crawl.
+Then say exactly one line in the chat: *The builder is open at http://127.0.0.1:8789/. Fill it
+in and click **Build report**. Progress, any questions, and the finished files all appear on
+that page - click **Done — stop Claude** there when you are finished.* After that, nothing you
+do needs the chat.
 
-## 0.5 Open the builder — unless a spec was handed over
+Use `J="$P/scripts/jobs.py"` below. Run every command from inside the report folder the job
+names (`cd "<folder>"`).
 
-No `spec.json` and no detailed `$ARGUMENTS`? **Start the form and point the user at it**
-rather than beginning the interview:
+## 2. Wait for a job, then claim it
 
 ```bash
-nohup python3 "${CLAUDE_PLUGIN_ROOT}/scripts/serve_builder.py" >/tmp/jti-builder.log 2>&1 &
-sleep 2 && head -4 /tmp/jti-builder.log
+python3 "$J" wait
 ```
 
-It opens the browser itself and prints the URL. If one is already running it says so and
-reuses it instead of failing on the port.
-
-### Then WAIT for the Write button — do not ask them to copy anything back
-
-Say in one line that the builder is open at http://127.0.0.1:8787/, then block on it:
-
-```bash
-curl -s --max-time 540 "http://127.0.0.1:8787/api/wait?since=0"
-```
-
-It returns `{"ok": true, "spec": "<path>"}` the moment **Write spec.json** is clicked. Read
-that spec and build — the user never copies a command, and the form tells them Claude has
-already picked it up.
-
-On `{"timeout": true, "seen": N}` nobody has clicked yet: poll again with `since=N`. The
-`since` is not decoration - it is what stops a spec written between two polls from being
-missed. Say you are still waiting rather than silently re-polling forever, and stop after a
-couple of rounds; they may have wandered off.
-
-If the user would rather answer questions in chat, or pastes the command themselves, both
-still work - this only removes a copy-paste step, it does not replace the other routes.
-
-Two reasons to skip the form and interview instead, both of which mean the user has
-already given the answers: they passed a `spec.json`, or `$ARGUMENTS` already describes the
-report. And if someone says they would rather just answer questions, do that — the chat
-flow below still works and nothing about it changed.
-
-## A spec.json answers EVERYTHING — check for one first
-
-If `$ARGUMENTS` names a `spec.json`, or the named report folder holds one, **read it and
-ask nothing**. It already carries the project, the template, the report name, the sections
-and columns, the launch inputs, and the brief in `intent`. Asking again is asking someone
-to repeat what they just typed into a form.
-
-When it has them, `paths` maps each column picked in the builder's field browser to its SDK
-path (`Case.parties[].person.lastName`; `[]` is one value per related record), and `criteria`
-lists the launch inputs made from a field: the path each filters and whether it is a `range`
-(From/To), `in` or `equals`, plus a pick-list's `lookup` list name, and the eSeries-style settings chosen in the builder (`operator`, `multi`, `required`, `hidden`, `default`); `spec.columnOptions` gives each column `link`, `sort`, `aggregate`, `format`/`customFormat` and `truncate`. Apply them in the rule, and name in the handoff any the layout cannot show. **Launch inputs are generated, not written.** When `spec.criteria` is present, scaffold writes `verification/launch_inputs.groovy`: paste it UNCHANGED at the top of the rule and build the query from `def w = applyLaunchInputs(new Where())` (add the rule's own conditions to `w` after). It reads every input by its exact launch-form name, converts dates / lists / numbers from the text eSeries sends, applies each `default` when the input is left blank, and adds the attested Where call. Never rename an input, re-read one by hand, or add a second filter on the same field - `finish.sh` runs `verification/launch_inputs_check.groovy`, which launches the rule blank, filled and in the alternate arrival formats and fails the build if any input does not reach its filter. A pick-list `default` is a CODE (the Data Dictionary lists labels).  They were read from the project's Data Dictionary (or its SDK), so use them as the
-traversals and filters. No columns and no inputs picked: derive both from the brief.
-
-```bash
-cat "<the spec.json>"
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/scaffold.py" "<the spec.json>" --out "<its folder>"
-```
-
-Go straight from there to the SDK check (question 2, the only one a spec cannot answer)
-and then to the build. **The gates are unchanged** — a spec skips the questions, never the
-verification.
-
-### SWITCHES — check them once, at the start
-
-```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/build_mode.py"
-```
-
-It prints four independent settings and where each came from. Each changes ONE thing:
-
-| Setting | Default | Other value | What the other value changes |
-|---|---|---|---|
-| `interaction` (`JTI_INTERACTION`) | `confirm` | `unattended` | the two pauses below |
-| `lookup` (`JTI_LOOKUP`) | `full` | `targeted` | `facts.py` / `precedents.py` instead of reading whole |
-| `verifier` (`JTI_VERIFIER`) | `legacy` | `fast` | `finish.sh` runs the gates in one JVM — nothing for you to do |
-| `build_plan` (`JTI_BUILD_PLAN`) | `off` | `opt-in` | the one-command build plan (see "Build plan" below) |
-
-Follow **only** the setting that is printed. `JTI_REPORT_BUILD_MODE=fast` is a deprecated alias
-for `unattended` + `targeted` + `fast`; it does **not** turn on the build plan, and the script
-says so. Everything below that says "unattended", "targeted" or "build plan" applies only when
-that one setting says so; otherwise this file applies as written.
-
-### INTERACTION: unattended — a complete builder submission runs without chat
-
-**`confirm`** (the default): the SDK confirmation and the brief-only column confirmation below
-apply as written.
-
-**`unattended`**: the person clicked Write and walked away. The build runs straight through to
-the delivered files, and exactly two things change:
-
-1. **The SDK is decided in code, not confirmed in chat.** Instead of the question-2 picker:
-
-   ```bash
-   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/project.py" sdk-decide "<project folder>"
-   ```
-
-   Exit **0** prints one `SDK ...` line — a current, readable SDK. **Put that line in the build
-   log and the handoff and do not ask.** Exit **10** prints `ASK ...` with the reason (none on
-   file, file gone, stale, unreadable): ask exactly as question 2 says, with the same
-   where-to-get-it directions, because then the user really does have to act.
-2. **Derived columns are recorded, not confirmed.** A brief-only spec (below) still has its
-   columns derived and written back into `spec.json` — and when unattended the derivation is also
-   recorded there, under `"derived"`, and stated in the handoff, instead of stopping to ask
-   *"Good?"*:
-
-   ```json
-   "derived": {"from": "intent",
-               "columns": ["Case Number <- caseNumber", "Type <- caseType"],
-               "assumptions": ["one row per case", "date range filters filingDate"],
-               "sdk": "the sdk-decide line, or 'none - fields unverified'"}
-   ```
-
-   The handoff leads its "decide" list with these assumptions, so they get read.
-
-**Ask only when getting it wrong would materially change the report, or create a real
-correctness risk** — and say which one it is. In practice that means:
-
-- the brief fits two root entities or traversals that return **different rows**, and the SDK,
-  `model-facts.md` and the corpus can't settle it (e.g. "payments": receipts vs pay-plan
-  installments);
-- a money figure whose definition is genuinely open (paid, balance, collected — see the
-  financials skill);
-- `sdk-decide` exits 10.
-
-Anything else — a column order, a heading, a width, a default sort — is a call you make and
-record as an assumption. Asking about it costs a turn, and if the person has walked away it
-stalls the build.
-
-**Unchanged in both modes:** every gate, the three deliverables, looking at every rendered
-page, and the honest *not verified* list. `unattended` removes pauses; it never removes a check.
-
-### A spec with a brief but no columns — derive them, don't send it back
-
-A spec can carry `"template"` and an `"intent"` brief with **`"sections": []`**. That is
-someone who picked a template, wrote what the report should show in plain words, and left the
-columns for you — exactly what the four-question interview does when nobody types a grid. It
-is not an error and it is not a half-finished form to reject. `scaffold.py` refuses it on
-purpose (it will not invent columns), and the refusal names this branch.
-
-**Derive the sections from the brief, the same way you would from a spoken answer to question
-4.** Read `intent`, map it to real field paths using the SDK and `model-facts.md` and the
-corpus — this is where the SDK earns its place, because there are no user-typed paths to
-anchor on, so a blank column is likelier than usual and the handoff must say against which
-environment (if any) the fields were checked. Then write the sections back into the spec so
-the folder is self-describing and a re-run does not re-derive them:
-
-```bash
-python3 - "<the spec.json>" <<'EOF'
-import json, sys
-p = sys.argv[1]; s = json.load(open(p))
-s['sections'] = [
-    {"key": "ROWS", "title": "Cases",
-     "cols": [["Case Number", 20, "Left", "caseNumber"],
-              ["Type", 20, "Left", "caseType"]]},   # the columns YOU derived from intent
-]
-json.dump(s, open(p, 'w'), indent=2)
-EOF
-```
-
-**`interaction: confirm`:** confirm the derived columns with the user in one line before building —
-*"From your brief I'm showing case number, type and jurisdiction, one row per case. Good?"* —
-because you chose the fields and they could not see you do it. **`unattended`:** do not stop;
-record the columns and your assumptions under `"derived"` in the spec and in the handoff (see
-INTERACTION above). Then scaffold and build as normal. **The gates are unchanged**; deriving the
-columns is the only added step.
-
-### `look_like` — the spec says "match this picture"
-
-A spec with `"template": ""` and `"look_like": "reference/<file>"` is someone who did not
-want any of the six. **Read the picture before anything else** — it is sitting in the report
-folder next to the spec — then say in ONE line which template you are starting from and
-carry on. Do not re-open the template menu; they already answered it, with a picture.
-
-```
-Read <the report folder>/reference/<file>
-```
-
-Everything in the **Custom — they send a picture** branch below applies, unchanged: start
-from the nearest template's generator (never a blank `.jrxml`), copy the STRUCTURE, keep
-the JTI style unless `intent` asks for the picture's styling too, and say plainly what you
-could not honour — checking `jti_style.py` first, because colours, banners and badges are
-three lines each and are NOT limits. `scaffold.py` refuses this spec until a template is
-named, which is deliberate: something has to look at the picture first.
-
-Write the template you chose back into the spec, so the folder is self-describing and a
-re-run does not re-derive it:
-
-```bash
-python3 - "<the spec.json>" <<'EOF'
-import json, sys
-p = sys.argv[1]; s = json.load(open(p))
-s['template'] = '<the module you chose>'
-json.dump(s, open(p, 'w'), indent=2)
-EOF
-```
-
-The form that writes these:
-
-```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/serve_builder.py"
-```
-
-## Before asking anything
-
-Read `$ARGUMENTS` and any attached file, and answer from it whatever you can.
-**Never ask a question the user has already answered.** A message like
-"OKDAC, a grouped summary, payments by agency for a date range" answers three of the four —
-ask only the one that is left.
-
-**An attached picture answers question 3** - a screenshot, a PDF or a report from another
-system is a Custom answer already given. Read it, name the nearest template, confirm in one
-line, and never show the menu.
-
-**An attachment NEVER answers question 1, and WHERE THE FILE CAME FROM IS NOT A PROJECT.**
-A file arrives from `~/Downloads`, the Desktop, or a Slack folder because that is where the
-browser dropped it — it says nothing about which client the report is for. Deriving a
-project from an attachment's path (and then, when that path is outside the root, creating a
-`Downloads` folder *inside* it) invents a client out of a filesystem accident, and leaves a
-junk folder the user has to notice and delete. Happened 09/09.
-
-Question 1 is ALWAYS asked, with `AskUserQuestion`, against the real project list. The
-export tells you the entity and the environment; the user tells you the project.
-
-A `FORM-*.zip` or `FORM=*.xml` attachment answers question 4 on its own, and usually
-question 3 as well (its panels tell you the shape). Parse it, do not ask about it:
-
-```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/skills/jasper-reports/scripts/formexport.py" <the zip>
-```
-
-## How to ask
-
-**ONE question per message. Then STOP and wait for the answer.** Do not run ahead to the
-next step in the same turn, and never put two questions in one message - it reads as one
-question and the first gets answered while the second is silently dropped.
-
-**That includes two `AskUserQuestion` questions in one call.** The call accepts four, and
-they render as four prompts the user answers all at once - correct for four different
-questions, wrong for one question split in half. A list longer than the four-option cap is
-asked as a SEQUENCE, never as parallel prompts. See question 1.
-
-**Anything with a fixed set of answers uses `AskUserQuestion`, so the user clicks instead
-of typing.** That means question 1 (project) and question 3 (template) ALWAYS. Only
-question 4 is free text.
-
-Short. Direct. One line. No preamble, no restating the question back, no explaining why
-you are asking.
-
-Good: `Which project?`
-Bad: `Before we get started, I'd like to understand a bit more about which client this
-report is intended for, since that affects where the files will live.`
-
-Never attach the example **PDFs** - five documents at once buries the question. The
-labelled **PNGs** are the exception and they are REQUIRED at question 3: a name with no
-picture is not a choice anyone can make. See step 3.
-
----
-
-## 1. Which project?
-
-```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/project.py" list
-```
-
-`AskUserQuestion`. **Never skip this and never infer it** — not from an attachment's
-folder, not from the environment named in an export, not from the report's subject. Those
-identify the SOURCE; the project is where the work should LAND, and only the user knows that.
-
-**The FOUR-option cap applies here too.** It is documented at question 3 for the templates
-and it bites just as hard on a workspace with five projects plus **New project**. Handle it
-the same way — and read the rule below before improvising, because the obvious improvisation
-is the one that already went wrong.
-
-- **Four or fewer** (projects + New project): one question, all of them.
-- **More than four:** the three most likely, then `Something else`. Ask the second question
-  ONLY if they pick it, in its own message, listing the rest plus **New project**.
-
-Order the three by what the request already tells you — the client or environment named in
-`$ARGUMENTS` or an attached export, otherwise the project holding the most reports. The
-free-text **Other** box is always there, so someone whose project is not in the three can
-simply type it.
-
-### NEVER split one question across two questions in one call
-
-`AskUserQuestion` takes up to four QUESTIONS, and it presents them all at once, each
-expecting its own answer. That is for genuinely different questions. Splitting a single
-list — "Which project?" and "Which project? (more options)" — produces two prompts the user
-must both answer, so they pick one project in each and neither is wrong. You then have two
-different answers to a question with one right answer, and you have to ask a third time.
-Happened 09/17: the list came back `OKDAC Reports` and `Test Builds`.
-
-A list too long for one question is a SEQUENCE — question, wait, then a follow-up only if
-needed — never two parallel prompts.
-
-The list prints the root it resolved and why. If a project the user expects is missing, the
-ROOT is wrong — say so and stop; do not offer to create a replacement folder.
-
-Then:
-
-```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/project.py" resolve "<name>" --create
-```
-
-Everything after this lives in that folder.
-
-**The plugin works only inside the folder the session was started in.** `project.py`
-resolves every path under the working directory and REFUSES anything that escapes it, so a
-project is either that folder (listed as `(here)`) or a folder under it. If the user wants
-to build somewhere else, that is a new session started in that folder - do not reach for it
-from here, and do not work around a `REFUSED` by using absolute paths or shell commands.
-The point of the scope is that pointing the plugin at a folder is the whole permission
-grant; a tool that writes outside it is one you would have to supervise.
-
-## 2. The field list (what eSeries calls the SDK)
-
-**`interaction: unattended`**: run `project.py sdk-decide` instead - see INTERACTION above.
-Exit 0 means name the SDK and carry on; only exit 10 reaches the questions below.
-**`confirm`:** as written here.
-
-```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/project.py" sdk-status "<project folder>"
-```
-
-The command always exits 0 - the first word is the status.
-
-- **NONE / MISSING** → ask for it, **say what it is for, and say where to get it**. Someone
-  asked for a "JAR/SDK" with no reason given has no way to judge whether it is worth the
-  two minutes, and mostly says skip:
-
-  > Send me the **field list** for `<project>` — a `.jar` file — or say skip.
-  > It lists every field and record type that exists in *your* environment, so I can check a
-  > field is really there before the report ships instead of guessing at its name.
-  > In eSeries: **System Setup → Metadata → Entities**, then **Download SDK** at the top
-  > right. eSeries calls it "SDK"; it is a field list, not a database export.
-
-  **Call it a field list, not "the SDK" or "the JAR".** Both are jargon to the person being
-  asked, and neither says what it contains or why it is worth two minutes to fetch. Say
-  "SDK" only when naming the button they have to click.
-
-- **OK** → `AskUserQuestion`: *SDK on file: `<filename>` (registered `<date>`).* Options:
-  **Still current** / **I'll send a newer one**.
-- **STALE** → same, but lead with the age: *`<n>` days old.*
-
-Give the same directions again whenever they pick **I'll send a newer one** — knowing the
-path once does not mean remembering it a month later.
-
-**Then stop.** Do not show the template menu until this is answered.
-
-### If they ask why it matters, or are about to skip
-
-Say this much, in plain words — no jargon, and never more than a few lines:
-
-**Without it, a wrong field name fails silently.** Groovy does not check field names, so
-asking a record for a field it does not have returns nothing at all rather than an error.
-The report compiles, deploys, runs, and prints a blank column. Nothing anywhere says it went
-wrong. The SDK is the only thing that catches that BEFORE the report ships instead of after
-someone notices the numbers are missing.
-
-**It is per-environment.** Field names and record types differ between clients and even
-between districts. OKDAC's SDK cannot answer a question about another client's system, so
-"we already have one" only counts if it is *theirs*.
-
-**A real example, worth one line if they push:** for the login report, the SDK is what
-proved `LoginAudit` — the obviously right-sounding record — is an empty shell with no fields,
-and that the "last login date" field is never actually saved. Both look correct in the docs.
-A report built on either returns an empty page, and only the jar showed that in advance.
-
-That said, **do not block on it.** If they skip, carry on and build the report — just say
-plainly in the handoff that no field was verified against their environment, so a blank
-column is a real possibility on the first run.
-
-To save one the user provides:
-
-```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/project.py" sdk-register "<project folder>" "<file>"
-```
-
-If they say skip, note it and carry on — but say plainly in the handoff that local
-verification ran against this machine's JasperReports and not the client's, so the layout
-is proven and the field names are not.
-
-## 3. Which template?
-
-```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/templates/catalog.py"
-```
-
-**ALWAYS send the six labelled previews first, then ask.** Not on request - every time,
-in the same turn, before the question. Send all six in ONE `SendUserFile` call with
-`display: "render"`, in the order below:
-
-```
-${CLAUDE_PLUGIN_ROOT}/templates/examples/labeled/JTI_Record_Summary.png
-${CLAUDE_PLUGIN_ROOT}/templates/examples/labeled/JTI_ESeries_Summary.png
-${CLAUDE_PLUGIN_ROOT}/templates/examples/labeled/JTI_Tabular_List.png
-${CLAUDE_PLUGIN_ROOT}/templates/examples/labeled/JTI_Grouped_Summary.png
-${CLAUDE_PLUGIN_ROOT}/templates/examples/labeled/JTI_Statement.png
-${CLAUDE_PLUGIN_ROOT}/templates/examples/labeled/JTI_Wide_Table.png
-```
-
-Each carries its NAME in a navy band above the page, so the picture and the option label
-match without the user holding a mapping in their head. **There are no letters** - the menu
-is ordered by what the report sounds like, so a letter and its position disagreed and the
-user had to cross-reference a shifting list. Never reintroduce them. **This is the one place six files
-at once is right** - they are one comparison, not five documents, and asking someone to pick
-between "Record Summary" and "eSeries Screen" as bare words is asking them to guess.
-
-**Then ask with `AskUserQuestion`** so the letters are clickable. Do not print the text
-menu; the catalog output is for you, not them.
-
-**`AskUserQuestion` accepts at most FOUR options.** Six templates plus Custom is seven, so
-they do not fit in one question and an attempt to list them all silently drops the tail -
-that is how the last option went missing the first time this ran. Ask in two steps, and
-only reach the second if they pick the fourth.
-
-**Put the three that best fit the request first**, and say so plainly in the labels. The
-options are NAMES, never letters.
-
-*First question* - `Which template?`
-
-| Option | Label |
+Exit **8** means the user is finished: they clicked **Done — stop Claude** on the page, or
+closed the builder tab (the helper says which).
+Stop at once - do not run `wait` again, do not tidy up - and end with exactly one line in the
+chat: *Done - the builder session is closed. Run /build-report to build more.* (Nothing can
+close the Claude window itself; ending the run is what the button asks for.)
+Exit **7** means nothing was submitted yet: run it again. After **four** empty waits in a row
+(about 36 minutes), stop and say in the chat that the builder is idle and `/build-report` can
+be run again. Exit **0** prints the claimed job as JSON: `folder` (the report folder, the
+canonical output; everything is written there and nowhere else), `spec` (what the user
+submitted), and `destination` (the project folder they picked).
+
+## 3. Build it, reporting each stage
+
+The stages and their percentages are fixed in `jobs.py`. Report each one when it STARTS
+(`jobs.py start <stage> "<what you are doing>"`) and when it is DONE (`jobs.py done <stage>
+"<one-line result>"`). Keep status lines short and in plain English. Never report a stage as
+done that is not.
+
+**`jobs.py run` exits with its child's exit code**, and on success it marks that stage done
+itself (no separate `done` call). Non-zero means that stage FAILED: never
+report it done. Read the log, fix the cause and run it again, or `fail` the job (see "When a
+gate fails").
+
+**Every helper call may exit 6 (the user cancelled).** When it does, stop at once: do not
+run another step, do not tidy up, and do not delete anything. Go back to step 2. **Exit 5**
+means a question timed out and the job has ended; go back to step 2 as well.
+
+For HOW to build, read the references from `$P` (not from memory, and not through a skill
+loaded by name, which could be a different installed version):
+
+- `$P/skills/jasper-reports/references/build-procedure.md`: deriving columns from a brief,
+  `look_like` pictures, model routing, and the build itself (scaffold, the three rules, one
+  variant while iterating, batched model questions, the three files).
+- `$P/skills/jasper-reports/SKILL.md`, and any reference it names.
+- Money: also `$P/skills/financials/SKILL.md`.
+
+| Stage | What to do |
 |---|---|
-| 1 | the best fit, e.g. `Record Summary` |
-| 2 | second best, e.g. `eSeries Screen (looks like the application)` |
-| 3 | third, e.g. `List` |
-| 4 | `Something else` — *name the three not shown, or send a picture* |
+| `validated` | Read the spec. Check it has a template (or a `look_like` picture) and either columns or a brief. |
+| `destination` | `python3 "$P/scripts/project.py" sdk-decide "<destination>"`. Exit 0: done, with the SDK line as the status. Exit 10: ask (below). |
+| `requirements` | **Picked fields first.** `spec.paths` maps each column picked in the field browser to its SDK path (e.g. `Case.parties[].person.lastName`); `spec.criteria` lists launch inputs made from a field, with the path each filters and whether it is a `range` (From/To), `in` or `equals`, and for a pick-list its `lookup` list name (a launch input for it takes that list's values). Each criterion also carries the settings chosen in the builder, named as in the eSeries criterion editor: `operator` (`EQUALS`, `STARTS_WITH`, `ENDS_WITH`, `CONTAINS`, `IN`, `NOT_IN`, `BLANK`, `NOT_BLANK`, `GREATER_THAN`, or `RANGE` for a From/To date), `multi` (multi-select lookup; the value arrives as codes), `required` (register the input REQUIRED), `hidden` (a fixed filter: apply `default`, no launch input) and `default` (`@TODAY` / `@THIS_WEEK` for dates). `spec.columnOptions` gives each column `link`, `sort` (`ASCEND`/`DESCEND` - the rule's row order), `aggregate` (`GROUP_BY` groups rows, `SUM`/`COUNT`/... a total - pick a grouped template or say in the handoff it was not honoured), `format` (a date / money / number pattern, `YES_NO`, or `CUSTOM` with `customFormat` using `@value`) and `truncate` (characters). Apply them in the rule. **Launch inputs are generated, not written.** When `spec.criteria` is present, scaffold writes `verification/launch_inputs.groovy`: paste it UNCHANGED at the top of the rule and build the query from `def w = applyLaunchInputs(new Where())` (add the rule's own conditions to `w` after). It reads every input by its exact launch-form name, converts dates / lists / numbers from the text eSeries sends, applies each `default` when the input is left blank, and adds the attested Where call. Never rename an input, re-read one by hand, or add a second filter on the same field - `finish.sh` runs `verification/launch_inputs_check.groovy`, which launches the rule blank, filled and in the alternate arrival formats and fails the build if any input does not reach its filter. A pick-list `default` is a CODE (the Data Dictionary lists labels). Anything the template cannot show - a link in the PDF - is listed in the handoff as not honoured, never silently dropped. They came from the project's Data Dictionary (or its SDK), so use them as the traversals and filters; `[]` means one value per related record, so decide (and log) whether that is one row each or a joined list. **Nothing picked:** derive the columns from the brief (record them under `"derived"` in `spec.json`), and the launch inputs too, since a brief that says "filed in a date range" means a From/To pair on the filing date. Assume and log (`jobs.py log`) wherever a reasonable person would; ask on the page (section 4) only when two readings give materially different reports. Then the lookups (the `lookup` switch decides targeted or full) and check every field against the SDK. |
+| `plan` | Write the rule (`<Name>_V1.groovy`). It is the judgment file, and every line of it is a decision. |
+| `scaffold` | `python3 "$J" run --stage scaffold -- python3 "$P/scripts/scaffold.py" spec.json --out .`. If it says `kept … (exists)`, the folder holds an earlier unfinished build's scaffold (the page allows a rebuild only then); run it again with `--force`, which replaces only the scaffold's own `gen_jrxml.py`, `verification/fixture.py` and `verification/run.sh`. |
+| `fixtures` | Give `verification/fixture.py` real, awkward rows. |
+| gates | `python3 "$J" run --stage contract --gates -- "$P/scripts/finish.sh" <Name>_V1.groovy <Name>.jrxml --code <Name> --name "<Title>"`. **This one command reports contract, rule, render, truncation and package itself**; do not report those stages by hand. |
+| `review` | Read EVERY page image in `verification/`. Done only when you have looked at each one. |
+| `documentation` | Fill the NOTES blocks in `JRXML_CONTRACT.txt` and `RULE_REGISTRATION.txt`. |
+| finish | `python3 "$J" complete` |
 
-*Second question, only after `Something else`* - `Which one?`
+**The gates must run through `jobs.py run --gates`.** That is how the page learns each gate's
+result, and `complete` is refused unless it recorded a pass. It is also refused if the rule,
+`.jrxml` or zip changed after that pass, so re-run the gates after any edit. The build plan
+(`build_plan.py`) is not used here: it runs the gates its own way.
 
-| Option | Label |
-|---|---|
-| 1-3 | the three templates not offered above, by name |
-| 4 | `Custom - I'll send a picture` |
+### When a gate fails
 
-All six previews were already sent above, so both questions are asked against pictures the
-user is already looking at. Order the FIRST question by what the report sounds like - if
-question 4 is already answered and it reads like a grouped total, lead with `C`.
-
-**A screenshot of an eSeries screen is the eSeries Screen template, not Custom.** Say so and confirm in one
-line rather than opening the Custom branch - it already is that look, and starting from it is
-faster and safer than composing a layout from primitives.
-
-### Custom — they send a picture
-
-`Send a picture of what you want it to look like.` Accept a screenshot, a PDF, a report from
-another system, a photo of a printout, or a folder-view zip.
-
-Then **read it and say what you are going to do before doing it**, in two lines:
-
-> That's a grouped list with subtotals — closest to **C**. I'll keep the JTI masthead and
-> fonts and match your columns and grouping. Sound right?
-
-Three rules for what comes next:
-
-1. **Start from the nearest template, never from a blank file.** Every template is a Python
-   generator; a custom layout is that generator called with different columns, or in the rare
-   case nothing fits, a new generator composed from `jti_style` primitives (`document()`,
-   `text()`, `parse_cols()`). **Never hand-write a `.jrxml`** - the house style, the column
-   maths and the overflow guards all live in that module, and a hand-built file loses them
-   silently.
-2. **Copy the STRUCTURE, keep the JTI STYLE.** Columns, grouping, totals and section order
-   come from their picture. Navy, fonts, masthead and margins stay ours - a screenshot from
-   another vendor's system would otherwise drag that vendor's look into a JTI report. If they
-   explicitly want the picture's styling too, that is fine, but they have to say so.
-3. **Say what you could not honour - but CHECK before you call anything impossible.**
-   Read `jti_style.py` first. Almost everything that looks like a limit is not one:
-   `rect(x, y, w, h, fill)` takes any hex colour and `text(..., color=)` any forecolor, so
-   coloured banners, badges, status pills, tinted section headers and blue link-styled text
-   are three lines each. Images embed as base64 the way `logo()` does. **Do not tell a user
-   their colours become "plain text" - that is a false limit, and it reads as a refusal of
-   the thing they actually asked for.**
-
-   The real limits are narrow, and only two of them are absolute:
-   - **Interactivity.** Hover, clicks, filter boxes, expand/collapse carets, tab strips,
-     sortable headers. A PDF is paper. Action icons CAN be drawn if you have the glyph -
-     they just will not do anything, so say "drawn but inert", not "dropped", and let the
-     user choose.
-   - **Charts.** No template produces one.
-
-   Width is a trade-off, not a limit: more columns than fit portrait is what Wide Table (landscape)
-   is for, and past that it is a font-size and column-priority conversation.
-
-4. **"Make it look like the screenshot" is a legitimate and complete answer.** When the user
-   says that - especially after being offered the JTI styling once - build it that way and
-   stop re-offering house style. Matching a folder view closely usually means a NEW generator
-   composed from `jti_style` primitives rather than an existing template called with
-   different columns, because the section-header, column-header and header-block structure of
-   an eSeries screen is not any of A-E parameterised. That is expected, it is supported, and
-   it is not a reason to talk the user back toward a template.
-
-**Never regenerate a sample to answer this question.** They are rendered and on disk; a
-re-render is slow and nothing about it is per-project. If a template changes, re-render it
-and re-run `templates/label_examples.py`, which restamps every name from the originals.
-
-| Template | Labelled preview |
-|---|---|
-| Record Summary | `labeled/JTI_Record_Summary.png` |
-| eSeries Screen | `labeled/JTI_ESeries_Summary.png` |
-| List | `labeled/JTI_Tabular_List.png` |
-| Grouped Summary | `labeled/JTI_Grouped_Summary.png` |
-| Statement | `labeled/JTI_Statement.png` |
-| Wide Table (landscape) | `labeled/JTI_Wide_Table.png` |
-
-If a folder-view export was supplied, name the template its shape implies and ask only for
-confirmation.
-
-## 4. What should the report show?
-
-Free text - this is the one question `AskUserQuestion` does not fit. Ask once, plainly:
-`What should it show?`
-
-Accept any of:
-- a sentence
-- a ticket
-- a column list
-- a screenshot
-- **a zipped folder view** — which answers it completely; its panels, paths and column
-  headings become the report
-
----
-
-## Model routing — cheap by default, Opus only where it earns it
-
-This command runs on **Sonnet** (frontmatter `model: sonnet`) — the driving is asking four
-questions and running Python, which needs nothing more. The expensive intelligence is pushed
-into subagents, each pinned to the smallest model that does its job. Verified against the
-Claude Code docs 2026-09-02: command frontmatter sets the session model for this command;
-subagents pin their own model independently; there is no way to switch the main model
-mid-run, so routing is done by *choosing what to spawn*.
-
-Spend the money only where it is needed:
-
-| Work | Spawn as | Model |
-|---|---|---|
-| grep the corpus, dump `javap`, read a Data Dictionary cell | `Task` subagent | **haiku** |
-| write the rule + jrxml for a shape already in the corpus | inline on Sonnet, or a `Task` | **sonnet** |
-| **new-domain model discovery** (which entity, is it searchable, real traversal) | `Task` subagent | **opus**, effort high |
-| **adversarial verify** of a traversal a wrong answer would hide | `Task` subagent | **opus**, effort high |
-
-**The adaptive part is a decision, not a setting.** Before spawning ANY discovery agent,
-read `${CLAUDE_PLUGIN_ROOT}/skills/jasper-reports/references/model-facts.md`. If the entity
-and traversal are already written there, the domain is known — **skip discovery entirely**,
-write the rule on Sonnet, and no Opus agent ever spawns. Opus is reached for only when the
-model question is genuinely unanswered, and the answer is written back so it is free next
-time. A report on a known shape (payments, past due, a folder-view export that hands you the
-paths) should cost a Sonnet session and nothing more.
-
-Do not launch a multi-agent fan-out for a question one `javap` or one corpus grep settles
-inline. The fan-out is for a novel domain where a plausible-but-wrong path would survive a
-single look — not for confirming what is already known.
-
-## Then build
-
-**Read `${CLAUDE_PLUGIN_ROOT}/skills/jasper-reports/references/model-facts.md` BEFORE any
-model search.** It holds the answers that already cost real money to find — which entities
-look right and are not, the real traversals, and the traps. Checking it is free; a fan-out
-that re-derives what is already written there is the most expensive mistake in this
-pipeline. Add to it whenever a model question takes more than a couple of minutes.
-
-**`lookup: targeted`: ask it, don't read all of it.** The whole file is ~12k tokens that then sit in
-the conversation for the rest of the build. Query it for what THIS report touches — the root
-entity, the entities along each path, the field names, the template, and `--domain financial`
-for any money:
+The page already shows which gate failed. Read the log, fix the cause, and run the same gates
+command again, at most **two** automatic fixes. Report each attempt with
+`jobs.py log --level warn "Fix 1: <what you changed>"`. If it still fails, or the failure
+needs a decision only the user can make:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/facts.py" --entity Case --entity PayPlan \
-    --field balance --template eseries_summary --domain financial
+python3 "$J" fail --stage <the failing stage> --message "<plain-English cause and what would fix it>" --attempts <n> [--retryable]
 ```
 
-It prints the matching sections **verbatim and in full**, then a one-line index of every other
-section; `--section N` opens any of them. It reads the real file every time — nothing to go
-stale. **"NO SECTION MATCHED" is a finding, not a pass**: that model question is open. Open the
-full file whenever the targeted result is not enough to decide.
+Use `--retryable` only when submitting the same spec again could plausibly succeed (a
+transient environment problem), not when the spec needs to change. **Never call `complete`
+after a failure**; it is refused anyway. Then go back to step 2.
 
-Then **one** precedent, not a tour of report folders:
+## 4. Asking the user: through the page only
+
+Ask only when a wrong guess would materially change the report or create a real correctness
+risk, the same threshold as `build-procedure.md`'s INTERACTION section. A column order, a heading
+or a width is your call: record it with `jobs.py log` and move on.
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/precedents.py" --root Case --template eseries_summary \
-    --financial --params CaseId
+python3 "$J" ask --id <short-id> --title "<short title>" --prompt "<the question, with the context needed to answer it>" \
+    --type choice|text|longtext|file [--option value=Label ...] [--allow-text] [--optional] [--timeout 3600]
 ```
 
-It scores every report in the workspace on root entity, template, financial logic, parameters,
-sections and environment, prefers ones verified on the current harness, and prints each
-candidate's own *not verified* warnings. Open the rule it names; open a second only if the first
-does not fit. "NO PRECEDENT" means a new shape: build from the template and model-facts rather
-than forcing one.
+A shell call is cut off after 10 minutes, but a question waits up to its `--timeout`. If the
+call ends with no answer printed and no exit 5 or 6, **run exactly the same `ask` again**: it
+resumes waiting on the question already open and does not ask twice.
 
-**`lookup: full`:** read the whole file first, as above.
+It blocks until the page answers, then prints the answer as JSON (`value`, `text`, and for a
+file, `file`: the uploaded file's path inside the job folder). One question at a time. Types:
 
-Follow the `jasper-reports` skill from step 1 of its sequence. It is bundled here, so
-invoke it rather than working from memory:
+- `choice`: one of the options; `--allow-text` also lets the user type their own answer.
+- `text` or `longtext`: a short or longer free answer.
+- `file`: **only when a file is genuinely required**, such as the SDK when `sdk-decide` exits
+  10. Offer a way out as an option:
 
-```
-Skill(jasper-reports)
-```
+  ```bash
+  python3 "$J" ask --id sdk-required --type file --title "Field list needed" \
+      --prompt "No current SDK for <project>. In eSeries: System Setup → Metadata → Entities → Download SDK. Upload the jar here, or skip - without it a wrong field name prints a blank column with no error." \
+      --option "skip=Skip - build without field checks"
+  ```
 
-Everything lands in `<project folder>/<Report Name>/`.
+  With a file: `python3 "$P/scripts/project.py" sdk-register "<destination>" "<file>"`. With
+  skip: `jobs.py log --level warn "No SDK: no field was verified against this environment"`.
 
-### Build plan (`build_plan: opt-in` only): write a plan, then ONE command does the mechanics
+## 5. Finish, and go back to waiting
 
-Only when `build_mode.py` prints `build_plan opt-in`. Otherwise skip this section entirely —
-`build_plan.py` refuses to run (exit 4) unless `JTI_BUILD_PLAN=opt-in`. When it is on: after the
-lookups, write the rule, write `build-plan.json` into the report folder
-(`build_plan.py --example` shows every key; see `docs/perf/BUILD_PLAN.md`). **Every field a
-section shows needs `provenance`** — `sdk` (with a traversal), or `computed` / `constant` with a
-reason — plus an `outputs` entry and a value in every fixture row (or an entry in
-`fixture.intentional_blanks`). Anything unaccounted for is exit 2, not a blank column. Then:
-
-```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/build_plan.py" run "<report folder>/build-plan.json"
-```
-
-One call validates, decides the lane, checks the SDK, batch-resolves every traversal, scaffolds,
-fills the fixtures, runs every gate in one JVM, fills the untouched NOTES seeds from the plan and
-inventories the files. Its last line is `BUILD-RESULT {json}`. Exit **20** = expert lane: use the
-steps below instead. Exit **3** = the rule or real fixture rows are missing. Exit **1** = a gate
-failed; fix it and run the same command again. Then look at every page, as always.
-
-**`build_plan: off`:** the steps below, as written.
-
-### Scaffold the boilerplate — do not type it
-
-Write a short `spec.json`, then generate the three files that carry no decisions:
-
-```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/scaffold.py" --example    # the spec format
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/scaffold.py" spec.json --out .
-```
-
-It writes `gen_jrxml.py`, `verification/fixture.py` and `verification/run.sh` — ~170 lines
-expressing maybe 15 lines of actual choices. Writing them by hand is three or four turns and
-several thousand of the slowest kind of token, to reach a file that was always going to be
-the same shape.
-
-**It will not overwrite an existing file without `--force`**, because a re-scaffold would
-destroy exactly the two things worth keeping: the fixture rows and any hand-edit to the
-generator.
-
-### Three rules the executing gate enforces — write to them from the start
-
-1. **Assign `_data`.** The output is read as `_data`; `data = rows` assigns an ordinary
-   local, the engine produces nothing, and eSeries refuses the run.
-2. **No `import com.sustain.*`.** The platform supplies those implicitly - 82 of the 95
-   rules in this corpus carry none - and a fully-qualified import makes the rule impossible
-   to compile off-platform, which disables the gate that runs it.
-3. **Every value a String, every date coerced.** A `GString` is not a String and fails the
-   gate. And whether eSeries hands a `java.util.Date` parameter over as a Date or a String
-   is UNVERIFIED, so parse defensively (`toDate()`) rather than assuming - a rule that
-   assumes Date dies with a GroovyCastException if it is a String.
-
-Then author the parts it deliberately leaves alone:
-
-1. **the `.groovy` rule** — every line of it is a decision
-2. **real fixture rows**, replacing the `TODO`s. Make them AWKWARD: the label too long for
-   its column, the row with a field missing, the hyphenated identifier. Tidy rows prove
-   nothing — every layout defect this harness has caught came from an ugly row.
-
-This is generation, not pruning. Never build a "template with everything" and delete from
-it: the generators compute column geometry from relative widths, so a removed column leaves
-a hole rather than a narrower table, and a stranded `<field>` empties a cell in silence.
-
-### While iterating, render ONE variant
-
-```bash
-./verification/run.sh render full     # ~9s
-./verification/run.sh render          # every variant, ~11s — before reporting back
-```
-
-Every variant is filled from ONE compile in ONE JVM, so the second one is nearly free now;
-narrowing to `full` during a fix loop still saves a couple of seconds. **Render every
-variant before you report back** — an unexamined page is worth nothing.
-
-### Ask the model questions in batches, not one at a time
-
-```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/sdk_fields.py" Case caseType filingDate statuses ...
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/refs.py" model-facts criteria-api
-python3 "$SKILL/scripts/entity_field.py" county payPlan balance
-```
-
-All three cost the same for twenty names as for one — javap dumps the whole class, `refs`
-reads files off disk, `entity_field` text-extracts the PDFs once. Asking one name per call
-turns twenty questions into twenty turns, each re-sending the whole conversation first.
-
-`sdk_fields.py` walks the whole `extends` chain and reports the field owner and the getter
-owner separately, because they differ constantly — `Case` declares `caseType` while
-`getCaseType()` lives on `CaseComponent`. **Read its closing note before concluding
-anything from a `stripped` body**; it does not mean the getter is dead.
-
-Before reporting back, run the gates — **one command, from inside the report folder**:
-
-```bash
-"${CLAUDE_PLUGIN_ROOT}/scripts/finish.sh" <rule>.groovy <report>.jrxml \
-    --code <Code> --name "<Human Name>" --template <template module>
-```
-
-It runs contract_check, `verification/run.sh render` and `rule_zip.py` in that order and
-stops at the first failure. Do not run them separately: it is three turns instead of one,
-and the order matters — contract_check is instant, the render costs ~20s, so a contract
-fault has to stop the run before the JVM starts.
-
-Then **look at every rendered page** and show them.
-
-### Every report ships three files. The zip is not optional.
-
-`<Report Name>/` must end up holding the `.groovy`, the `.jrxml` **and** `RULE-<Code>.zip`.
-The zip is how a person loads the rule in ONE action instead of retyping the script into
-CodeMirror and adding every parameter row by hand - the longest and most error-prone part of
-a deploy, and the part where a missed `data` / `java.util.List` / `REQUIRED` row silently
-produces a blank page. It is also the only artifact that travels to another environment.
-
-Do not hand-list the parameters. `rule_zip.py` derives them from the two files, so the zip
-cannot drift from the report it ships with: inputs are the jrxml parameters the rule
-actually reads as `_Name`, and the `data` output row is always emitted. It exits 1 on a
-contract fault rather than writing a zip that disagrees with the layout - fix the rule or
-the jrxml, never the zip.
-
-**`RULE_REGISTRATION.txt` and `JRXML_CONTRACT.txt` are written for you** by the same pass —
-they restate tables the tooling has already derived, so typing them by hand is both slow and
-a way for them to drift from the zip. Each ends in a **NOTES block that is yours to fill and
-that survives regeneration**; the generated half is mechanical only. Put the judgment there:
-what an empty input means, which fields belong to which section, and above all **what is not
-proven**. Fill them before the handoff — an unfilled `TODO` block shipping to a deployer is
-worse than no file.
-
-### Hand the three files over as DOWNLOADS, not previews
-
-Send them in ONE `SendUserFile` call with **`display: "attach"`**:
-
-```
-<Report Name>/<rule>.groovy
-<Report Name>/<report>.jrxml
-<Report Name>/RULE-<Code>.zip
-```
-
-`attach` gives a download card. **Omitting `display` lets the client decide by file type,
-and it previews the zip in the in-app browser instead** - which is useless, because the
-whole point of these three is that they leave this machine: the zip gets imported into
-eSeries, the other two get attached to a ticket or opened in Studio. A file you can only
-look at inside the chat has not been delivered. Reported 09/17.
-
-Use `display: "render"` only for things meant to be LOOKED at here - the template previews
-at question 3, and the rendered report pages. Never for a deliverable.
-
-**Never import the zip yourself** - importing is a write.
-
-## Report back
-
-**Say where the files are, on the first line.** They were written to
-`<project>/<Report Name>/` as they were built - that folder IS the delivery, and a handoff
-that does not name it sends the user hunting for a download button for files already
-sitting on their disk. Happened 09/17.
-
-```
-OKDAC Reports/Case Financials/   -  .groovy, .jrxml, RULE-<Code>.zip
-```
-
-Pages first, then a short list of what needs the user's decision. Keep it brief — the
-detail belongs in `HANDOFF.md`, not in the message.
-
-Always say what was **not** verified. A local render proves layout; it proves nothing
-about whether a path resolves in the target environment.
-
-### Then say what it cost — every build, not on request
-
-```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/usage.py"
-```
-
-Three lines at the end of the handoff message: effective tokens, context per turn, and the
-dollar figure for the model that actually ran. Nobody adopts a tool whose cost they cannot
-see, and a report that quietly cost $28 is worse news arriving late than early.
-
-**Report EFFECTIVE tokens, never the raw total.** The four kinds are not priced alike -
-cache reads are a tenth of fresh input, output is five times it - so the raw number is
-dominated by the cheapest thing in it and makes every long session look like a disaster.
-
-**And read `context/turn` before drawing any conclusion.** Cache reads are charged on every
-turn and scale with how much is already loaded, so a high figure is worth explaining rather
-than leaving to stand.
-
-**But do NOT explain it by recommending a fresh session unless the script says so.** High
-context/turn has two causes and they call for opposite advice:
-
-- **the build inherited a long conversation** — real, fixable, and a fresh session is the fix.
-- **the build filled its own context** — the skill, `model-facts.md`, a precedent rule,
-  rendered page images. Intrinsic to the work. A fresh session changes NOTHING.
-
-`usage.py` now distinguishes these by measuring what was loaded at the build's first turn
-against the session's own baseline, and prints whichever is true. **Report its wording; do
-not add a gloss on top of it.** This paragraph used to say "recommend a fresh session"
-outright — on 2026-09-09 that advice went into a handoff for a build that WAS the whole
-session, starting from its first message, where it was simply false. If you want to say more
-than the script does, name what actually filled the context: which references were read, how
-many precedents, how many page images.
+After `complete` succeeds, the page shows the pages, the downloads, and where the report is
+saved. **Never import anything; importing is a write, and the user does it.** Never delete,
+move or overwrite a file the user already had. Then go back to step 2 and wait for the next
+job, because the page's "Build another report" button relies on you still waiting. The
+page's **Done** button is how that loop ends: the next `wait` exits 8 (step 2).

@@ -500,8 +500,8 @@ def write_spec(payload):
     return True, rel
 
 
-# --jobs mode (/test-report only). None in the default mode, which /build-report uses and
-# which behaves exactly as it did before jobs existed.
+# --jobs mode, which /build-report runs. None in the default mode: the stand-alone form that
+# only writes a spec.json, exactly as it did before jobs existed.
 JOBS = None
 PORT = [8787]
 
@@ -558,7 +558,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return
             if JOBS.handle(self, "GET"):
                 return
-            if path == "/api/wait":            # the /build-report hand-over does not exist here
+            if path == "/api/wait":            # the stand-alone form's hand-over does not exist here
                 return self._send(404, b"not found", "text/plain")
         if path in ("/", "/index.html"):
             with open(os.path.join(HERE, "builder.html"), "rb") as f:
@@ -656,7 +656,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self._send(200, json.dumps({"watching": WAITERS[0] > 0}))
         if path == "/api/bootstrap":
             boot = {"root": str(P.ROOT), "rootWhy": P.ROOT_WHY, "version": version_note(),
-                    "projects": projects(), "templates": templates()}
+                    "projects": projects(), "templates": templates(),
+                    "plugin": os.path.realpath(PLUGIN), "pid": os.getpid()}
             if JOBS:
                 # Readable only by a page served from this origin (no CORS headers are ever
                 # sent), so a page elsewhere cannot learn the session token.
@@ -760,12 +761,39 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                                       "watched": WAITERS[0] > 0}))
 
 
+def replace_server(pid, port):
+    """Stop the idle builder `pid` listening on `port`. True once the port is free.
+    Only a process whose command line is serve_builder.py is ever signalled."""
+    import signal
+    import subprocess
+    import time
+    if not pid:  # a pre-0.34 server does not report its pid; find the listener
+        out = subprocess.run(["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
+                             capture_output=True, text=True).stdout.split()
+        pid = int(out[0]) if len(out) == 1 else None
+    if not pid:
+        return False
+    cmd = subprocess.run(["ps", "-o", "command=", "-p", str(pid)],
+                         capture_output=True, text=True).stdout
+    if "serve_builder.py" not in cmd:
+        return False
+    os.kill(int(pid), signal.SIGTERM)
+    for _ in range(50):
+        time.sleep(0.1)
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                pass
+        except OSError:
+            return True
+    return False
+
+
 def main():
     ap = argparse.ArgumentParser(add_help=False)
     ap.add_argument("--port", type=int, default=None)
     ap.add_argument("--no-open", action="store_true")
     ap.add_argument("--jobs", action="store_true",
-                    help="job coordinator for /test-report (default port 8789)")
+                    help="job coordinator for /build-report (default port 8789)")
     ap.add_argument("-h", "--help", action="store_true")
     a = ap.parse_args()
     if a.help:
@@ -781,15 +809,32 @@ def main():
     import urllib.request
     try:
         with urllib.request.urlopen(f"http://127.0.0.1:{a.port}/api/bootstrap", timeout=1) as r:
-            running_jobs = "jobs" in json.loads(r.read() or b"{}")
+            boot = json.loads(r.read() or b"{}")
+        running_jobs = "jobs" in boot
         if running_jobs != a.jobs:
             print(f"  port {a.port} is already in use by another server (not this builder "
                   f"in {'job' if a.jobs else 'default'} mode) - pass --port to use a different one")
             sys.exit(3)
-        print(f"  report builder ALREADY RUNNING at http://127.0.0.1:{a.port}/")
-        if not a.no_open:
-            webbrowser.open(f"http://127.0.0.1:{a.port}/")
-        sys.exit(0)
+        # A server left running by an OLDER copy of the plugin keeps serving that copy's
+        # page and scripts after an update - reusing it silently runs the old builder.
+        # Replace it when it is idle; never while it holds a job.
+        mine = os.path.realpath(PLUGIN)
+        if boot.get("plugin") != mine:
+            busy = (boot.get("jobs") or {}).get("active")
+            if busy or not replace_server(boot.get("pid"), a.port):
+                print(f"  report builder ALREADY RUNNING at http://127.0.0.1:{a.port}/ from "
+                      f"{boot.get('plugin') or 'an older plugin'}"
+                      + (f" with a job in progress ({busy['name']})" if busy else "")
+                      + f" - not this copy ({mine}). Stop it to use this version.")
+                if not a.no_open:
+                    webbrowser.open(f"http://127.0.0.1:{a.port}/")
+                sys.exit(0)
+            print(f"  replaced an idle builder from {boot.get('plugin') or 'an older plugin'}")
+        else:
+            print(f"  report builder ALREADY RUNNING at http://127.0.0.1:{a.port}/")
+            if not a.no_open:
+                webbrowser.open(f"http://127.0.0.1:{a.port}/")
+            sys.exit(0)
     except SystemExit:
         raise
     except Exception:
@@ -813,7 +858,7 @@ def main():
         url = f"http://127.0.0.1:{a.port}/"
         if JOBS:
             JOBS.s.publish(a.port)
-            print(f"  JOB MODE (/test-report) - state in {JOBS.s.dir}")
+            print(f"  JOB MODE (/build-report) - state in {JOBS.s.dir}")
         print(f"  report builder  {url}")
         print(f"  workspace       {P.ROOT}   ({P.ROOT_WHY})")
         print(f"  {len(projects())} project(s), {len(templates())} template(s)")

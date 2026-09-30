@@ -1,4 +1,4 @@
-"""The /test-report job coordinator: browser <-> server <-> jobs.py (the worker's helper).
+"""The /build-report job coordinator: browser <-> server <-> jobs.py (the worker's helper).
 
 Called from tests/run.py (core tier). Every test runs a real serve_builder.py --jobs on a
 free port against a temp workspace, drives the browser side over HTTP and the worker side
@@ -7,6 +7,7 @@ through the real jobs.py CLI. Nothing here needs a browser or a Claude session.
 import hashlib
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -108,10 +109,52 @@ def run(check, skip, ctx):
     run_done(check, skip, ctx)
     run_closed(check, skip, ctx)
     run_marks_done(check, skip, ctx)
+    run_replace(check, skip, ctx)
+
+
+def run_replace(check, skip, ctx):
+    """An update leaves the OLD copy's builder running: starting /build-report from the new
+    copy replaces it when idle, and never while it holds a job."""
+    plugin, root = ctx["plugin"], ctx["ws"]
+    ws = fresh_ws(root, "replace")
+    old = os.path.join(ws, "old-plugin")
+    for d in ("scripts", "templates", "skills", ".claude-plugin"):
+        shutil.copytree(os.path.join(plugin, d), os.path.join(old, d),
+                        ignore=shutil.ignore_patterns("__pycache__", "examples"))
+    a = Server(old, ws).start()
+    b = Server(plugin, ws); b.port, b.base = a.port, a.base
+    try:
+        b.start()      # returns on the first bootstrap, which may still be the old server's
+        mine = os.path.realpath(plugin)
+        for _ in range(100):
+            try:
+                b.boot = json.loads(b.get("/api/bootstrap")[2])
+                if b.boot.get("plugin") == mine:
+                    break
+            except OSError:
+                pass
+            time.sleep(0.1)
+        check("replace: an idle builder from another plugin copy is stopped and this copy serves",
+              b.boot.get("plugin") == mine and a.p.wait(10) is not None, b.boot.get("plugin"))
+        b.stop()
+        a = Server(old, ws); a.port, a.base = b.port, b.base
+        a.start()
+        c, _ = a.submit(spec_for("Busy_Job"))
+        again = subprocess.run([sys.executable, os.path.join(plugin, "scripts", "serve_builder.py"),
+                                "--jobs", "--port", str(a.port), "--no-open"],
+                               env=dict(os.environ, JTI_PROJECT_ROOT=ws),
+                               capture_output=True, text=True, timeout=30)
+        boot = json.loads(a.get("/api/bootstrap")[2])
+        check("replace: a builder holding a job is kept, and the new copy says so and exits",
+              c == 200 and again.returncode == 0 and "job in progress" in again.stdout
+              and a.p.poll() is None and boot.get("plugin") == os.path.realpath(old),
+              (c, again.returncode, again.stdout[-300:]))
+    finally:
+        a.stop(); b.stop()
 
 
 def run_done(check, skip, ctx):
-    """The page's Done button ends the /test-report worker - and ONLY a worker that is there."""
+    """The page's Done button ends the /build-report worker - and ONLY a worker that is there."""
     plugin, root = ctx["plugin"], ctx["ws"]
     ws = fresh_ws(root, "done")
     srv = Server(plugin, ws).start()
@@ -248,8 +291,18 @@ def run_phase1(check, skip, ctx):
     finally:
         srv.stop()
     md = open(os.path.join(plugin, "commands", "build-report.md"), encoding="utf8").read()
-    check("/build-report never uses the job machinery (that is /test-report's)",
-          "jobs.py" not in md and "--jobs" not in md and "/api/jobs" not in md, "build-report.md")
+    alias = open(os.path.join(plugin, "commands", "test-report.md"), encoding="utf8").read()
+    check("/build-report is the browser builder (job server), and /test-report is only an "
+          "alias that follows it - one implementation",
+          "--jobs" in md and '"$J" wait' in md and "${CLAUDE_PLUGIN_ROOT}" in md
+          and "build-report.md" in alias and '"$J"' not in alias and "jobs.py" not in alias
+          and len(alias.splitlines()) < 30, len(alias.splitlines()))
+    stale = [f for f in ("scripts/app.js", "scripts/build_ui.js", "scripts/builder.html",
+                         "scripts/jobs.py", "scripts/jobs_http.py", "scripts/serve_builder.py",
+                         "commands/build-report.md", ".claude-plugin/plugin.json", "README.md")
+             if re.search(r"/test-report(?!` is the old name)|unreleased|Test build|TEST BUILD",
+                          open(os.path.join(plugin, f), encoding="utf8").read())]
+    check("no test / unreleased labels left in the shipped builder, command or README", not stale, stale)
 
 
 # ── phase 2: event transport and gate-driven stages ──────────────────────────────────
@@ -700,9 +753,9 @@ def run_phase5(check, skip, ctx):
               and oct(os.stat(state).st_mode & 0o777) == "0o600"
               and oct(os.stat(os.path.dirname(state)).st_mode & 0o777) == "0o700",
               oct(os.stat(state).st_mode))
-        cmd = open(os.path.join(plugin, "commands", "test-report.md")).read()
+        cmd = open(os.path.join(plugin, "commands", "build-report.md")).read()
         front = cmd.split("---")[1]
-        check("commands/test-report.md asks through the browser only - no chat question tool",
+        check("commands/build-report.md asks through the browser only - no chat question tool",
               "AskUserQuestion" not in front and '"$J" ask' in cmd and '"$J" wait' in cmd
               and 'J="$P/scripts/jobs.py"' in cmd and "Never ask a question here" in cmd
               and "--gates" in cmd and "Never import" in cmd, front)

@@ -1,4 +1,4 @@
-"""jobs_http.py - the job routes serve_builder.py adds in --jobs mode (/test-report only; port 8789).
+"""jobs_http.py - the job routes serve_builder.py adds in --jobs mode (/build-report only; port 8789).
 
 Browser routes need the SESSION token (from /api/bootstrap) to submit, and the job's own
 TOKEN for everything about that job. Worker routes need the WORKER token, which only exists

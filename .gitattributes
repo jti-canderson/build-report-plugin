@@ -1,0 +1,6 @@
+# Kept in git, left out of the release package (git archive): development records.
+# docs/perf names client report folders and holds raw timings; docs/test-report is the
+# pre-release E2E record and its screenshots.
+docs/ export-ignore
+.gitattributes export-ignore
+.gitignore export-ignore

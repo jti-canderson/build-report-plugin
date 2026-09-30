@@ -62,9 +62,33 @@ Then, inside Claude Code:
 /plugin install jti-reports@jti-marketplace
 ```
 
-This persists across sessions. To update later, drop a newer `jti-reports-plugin/` into
-`~/ClaudePlugins/jti-marketplace/plugins/` (replacing the old one) and run
-`/plugin marketplace update jti-marketplace` — no need to reinstall.
+This persists across sessions.
+
+### Updating
+
+Claude Code runs a **copy** of the plugin, pinned to its version
+(`~/.claude/plugins/cache/<marketplace>/jti-reports/<version>/`), so replacing the folder is
+not enough on its own:
+
+1. Replace `~/ClaudePlugins/jti-marketplace/plugins/jti-reports-plugin/` with the new one
+   (unzip the new package there).
+2. Refresh and update:
+
+   ```bash
+   claude plugin marketplace update jti-marketplace
+   claude plugin update jti-reports@jti-marketplace
+   ```
+
+3. **Restart Claude Code.** A running session keeps the version it started with.
+
+A builder page left open from the old version is replaced by the next `/build-report` when
+it is idle. If it is still holding a build, `/build-report` says so; finish it or click
+**Done — stop Claude** first.
+
+### Rolling back
+
+Put the previous package's `jti-reports-plugin/` back in place, run the same two commands,
+and restart Claude Code. 0.33.0 is the last version with the chat interview.
 
 ## 3. Use it
 
@@ -72,19 +96,25 @@ This persists across sessions. To update later, drop a newer `jti-reports-plugin
 /build-report
 ```
 
-Walks you through project, SDK/JAR, template, and what the report should show — four
-short questions, skipping any you've already answered in the same message. Attaching a
-folder-view export (`FORM-*.zip`) or a `.jrxml` answers most of them on its own. See
-`README.md` for what each file in the plugin does.
+Opens the report builder in your browser (http://127.0.0.1:8789/). Pick the project and a
+template, choose the search criteria and result columns from your environment's fields,
+and click **Build report**. Progress, any follow-up question, the rendered pages and the
+downloads (rule, `.jrxml`, `RULE-<Code>.zip`) appear on the same page; you do not need to
+come back to the chat. Click **Done — stop Claude** when you are finished, or close the tab.
+
+Nothing is imported into eSeries for you. `/test-report` is an older name for the same
+command. See `README.md` for what each file in the plugin does.
 
 ## Requirements
 
 - Python 3
+- A web browser (the builder page runs on 127.0.0.1 only)
 - A JasperReports Server install for local rendering (default
   `/Applications/jasperreports-server-9.0.0` — override with the `JRS` environment
   variable if yours lives elsewhere)
 - An SDK/JAR export from the target eSeries environment, for field verification
-  (`/build-report` asks for one; you can skip it, at the cost of unverified field names)
+  (the builder asks for one on the page when the project has none; you can skip it, at the
+  cost of unverified field names)
 
 ## Troubleshooting
 
@@ -93,6 +123,10 @@ folder-view export (`FORM-*.zip`) or a `.jrxml` answers most of them on its own.
 - **A script complains about a missing JVM** — set `JRS` to your JasperReports Server
   install, or skip local rendering; building the files does not require it, only the
   `render`/`finish.sh` verification step does.
+- **The page says no Claude session is waiting** - `/build-report` is not running in any
+  session. Run it; the page picks the build up.
+- **An old version of the page opens after an update** - restart Claude Code (the new
+  version is only loaded on start), then run `/build-report`.
 - **Paths inside the plugin reference `$CLAUDE_PLUGIN_ROOT`** — that variable is set
   automatically once the plugin is loaded (either flow above); you never need to set it
   yourself.
