@@ -202,6 +202,57 @@
   .empty-note { font-size:13px; color:var(--muted); background:var(--fill); border:1px dashed var(--rule-2);
                 border-radius:var(--r-sm); padding:12px 14px; margin-bottom:10px }
 
+  /* ---- field studio: the eSeries Add Data Field layout, tidied ---- */
+  .fs { display:grid; grid-template-columns:minmax(0,2fr) minmax(240px,1fr); border:1px solid var(--rule);
+        border-radius:var(--r); overflow:hidden; background:#fff; margin:0 0 14px; box-shadow:var(--sh-2) }
+  .fs-left { display:flex; flex-direction:column; min-width:0; border-right:1px solid var(--rule) }
+  .fs-tools { display:flex; gap:8px; padding:10px; background:var(--fill); border-bottom:1px solid var(--rule) }
+  .fs-root { flex:0 0 auto; width:auto; padding:6px 30px 6px 10px; font-size:13px; font-weight:600 }
+  .fs-path { flex:1; min-width:0; padding:6px 30px 6px 10px; font-size:13px }
+  .fs-find { position:relative; flex:0 0 170px } .fs-find .ico { position:absolute; left:10px; top:7px; color:var(--faint) }
+  .fs-find input { padding:6px 10px 6px 28px; font-size:13px }
+  .fs-scroll { height:420px; overflow:auto }
+  .fs-table { width:100%; border-collapse:separate; border-spacing:0; font-size:13px; table-layout:fixed }
+  .fs-table th:nth-child(2) { width:36% }
+  .fs-table td { overflow-wrap:anywhere }
+  .fs-table thead th { position:sticky; top:0; z-index:2; background:#fff; border-bottom:1px solid var(--rule-2);
+       padding:8px 10px; font-size:10.5px; letter-spacing:.07em; text-transform:uppercase; color:var(--muted); text-align:left }
+  .fs-table td { padding:6px 10px; border-bottom:1px solid var(--fill); vertical-align:top }
+  .fs-table .ck { width:30px; text-align:center; padding-right:0 } .fs-table .ty { width:76px; white-space:nowrap; color:var(--muted) }
+  .fs-table .li { width:118px; max-width:118px; overflow:hidden } .fs-table .li .fp-pick { display:inline-block; max-width:112px; overflow:hidden; text-overflow:ellipsis; vertical-align:middle; margin-left:0 } .fs-table .de { color:var(--muted); font-size:12px; max-width:0; overflow:hidden;
+       text-overflow:ellipsis; white-space:nowrap }
+  .fs-table td b { font-weight:600; color:var(--ink) } .fs-table .code { font:11px ui-monospace,Menlo,monospace; color:var(--faint) }
+  .fs-table tr.grp td { position:sticky; top:33px; z-index:1; background:var(--navy-tint); color:var(--navy);
+       font-size:11px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; padding:6px 10px; border-bottom:1px solid #D5DEEE }
+  .fs-table tr.grp span { margin-left:8px; font-weight:600; color:var(--muted) }
+  .fs-table tbody tr:not(.grp):not(.dim) { cursor:pointer } .fs-table tbody tr:not(.grp):not(.dim):hover td { background:#F8FAFD }
+  .fs-table tr.on td { background:#EEF2F9 !important } .fs-table tr.focus td:first-child { box-shadow:inset 3px 0 0 var(--navy) }
+  .fs-table tr.done td { color:var(--faint) } .fs-table tr.done b { color:var(--muted) }
+  .fs-table tr.nav .go { color:var(--navy); font-size:17px; font-weight:700 } .fs-table tr.dim td { color:var(--faint) }
+  .fs-table .tick { color:var(--ok); font-weight:700 }
+  .fs-table input[type=checkbox] { pointer-events:none; accent-color:var(--navy) }
+  .fs-right { display:flex; flex-direction:column; background:#FCFCFD; min-width:0 }
+  .fs-cur { padding:12px 14px; border-bottom:1px solid var(--rule) }
+  .fs-cur .k, .fs-opts .k, .vals .k { font-size:10.5px; letter-spacing:.07em; text-transform:uppercase; color:var(--muted); font-weight:700 }
+  .fs-cur .crumbs { display:flex; flex-wrap:wrap; align-items:center; gap:2px; margin-top:4px }
+  .fs-cur .sep { color:var(--faint) }
+  .fs-detail { padding:14px; border-bottom:1px solid var(--rule); flex:1; overflow:auto; min-height:150px }
+  .fs-detail.empty { color:var(--muted); font-size:13px; display:flex; align-items:center }
+  .fs-detail .nm { font-size:16px; font-weight:700; color:var(--ink) }
+  .fs-detail .code { font:11.5px ui-monospace,Menlo,monospace; color:var(--muted); word-break:break-all; margin:2px 0 8px }
+  .fs-detail p { margin:8px 0 0; font-size:13px; color:var(--ink-2) }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; align-items:center }
+  .chip2 { white-space:nowrap; font-size:11px; font-weight:600; padding:2px 8px; border-radius:999px; background:var(--fill); border:1px solid var(--rule); color:var(--ink-2) }
+  .chip2.pick { background:var(--navy-tint); border-color:#D5DEEE; color:var(--navy) }
+  .vals { margin-top:12px } .vlist { display:flex; flex-wrap:wrap; gap:5px; margin-top:6px }
+  .vlist span { font-size:11.5px; padding:2px 8px; border-radius:6px; background:#fff; border:1px solid var(--rule) }
+  .vlist em { font-size:11.5px; color:var(--muted); padding:2px 4px }
+  .fs-opts { padding:14px }
+  .seg { display:flex; margin-top:6px; border:1px solid var(--rule-2); border-radius:var(--r-sm); overflow:hidden }
+  .seg button { flex:1; border:0; border-radius:0; background:#fff; padding:8px 6px; font-size:12.5px; font-weight:600; color:var(--ink-2) }
+  .seg button + button { border-left:1px solid var(--rule-2) } .seg button.on { background:var(--navy); color:#fff }
+  @media (max-width:980px) { .fs { grid-template-columns:1fr } .fs-left { border-right:0; border-bottom:1px solid var(--rule) } }
+
   /* ---- summary rail ---- */
   .rail { position:sticky; top:94px }
   .summary { background:var(--card); border:1px solid var(--rule); border-radius:var(--r);
