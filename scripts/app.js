@@ -181,6 +181,8 @@ function FieldPicker({ project, mode, added, onAdd }) {
   const [data, setData] = useState(null);
   const [q, setQ] = useState('');
   const [busy, setBusy] = useState(false);
+  const [upErr, setUpErr] = useState('');
+  const [reload, setReload] = useState(0);         // bumped after a dictionary is attached
   const here = stack.length ? stack[stack.length - 1].entity : root;
   useEffect(() => { setStack([]); }, [project, root]);
   useEffect(() => {
@@ -190,9 +192,25 @@ function FieldPicker({ project, mode, added, onAdd }) {
       .then(r => r.json()).then(d => { if (alive) { setData(d); setBusy(false); setQ(''); } })
       .catch(() => alive && (setData({ ok: false, message: 'Could not reach the builder.' }), setBusy(false)));
     return () => { alive = false; };
-  }, [project, here]);
+  }, [project, here, reload]);
   const pathOf = f => [root, ...stack.map(x => x.seg + (x.list ? '[]' : '')), f.name].join('.');
-  if (data && !data.ok) return html`<div class="fp"><div class="fp-empty">${data.message}</div></div>`;
+  const attach = e => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    setUpErr(''); setBusy(true);
+    file.arrayBuffer().then(buf => fetch('/api/dd?project=' + encodeURIComponent(project) +
+        '&name=' + encodeURIComponent(file.name), { method: 'POST', body: buf, headers: SESSION.h }))
+      .then(r => r.json()).then(d => { setBusy(false); d.ok ? setReload(n => n + 1) : setUpErr(d.message); })
+      .catch(() => { setBusy(false); setUpErr('Could not reach the builder.'); });
+    e.target.value = '';
+  };
+  if (data && !data.ok) return html`<div class="fp"><div class="fp-empty">${data.message}</div>
+    ${data.reason === 'no-sdk' && html`<div class="fp-attach">
+      <label>Attach the Data Dictionary for this project</label>
+      <input type="file" accept=".xlsx" disabled=${busy} onChange=${attach}/>
+      <div class="hint">In eSeries: <b>System Setup → Data Dictionary</b>, then export. It is saved
+        in the project folder and used for every report built there.</div>
+      ${upErr && html`<div class="out err">${upErr}</div>`}</div>`}</div>`;
   const all = (data && data.fields) || [];
   const ql = q.trim().toLowerCase();
   const shown = all.filter(f => !ql || f.name.toLowerCase().includes(ql) || human(f.name).toLowerCase().includes(ql));
@@ -208,10 +226,12 @@ function FieldPicker({ project, mode, added, onAdd }) {
         <span class="fp-type">${f.kind === 'collection' ? 'list of ' + f.targetShort : f.targetShort}</span>
         <span class="fp-go">›</span></button>`;
     const on = added.has(pth);
-    return html`<div class="fp-row">
+    return html`<div class="fp-row" title=${f.description || ''}>
       <span class="fp-name">${human(f.name)}<span class="fp-code">${f.name}</span>
+        ${f.lookup && html`<span class="fp-pick" title=${(f.values || []).slice(0, 40).join(', ')}>${f.lookup}${f.values && f.values.length ? ' \u00B7 ' + f.values.length + ' values' : ''}</span>`}
         ${f.used > 0 && html`<span class="fp-used" title=${'A property with this name is read by ' + f.used + ' rule(s) in this workspace - on any kind of record, so it is a hint, not proof.'}>in your rules</span>`}
         ${f.display && html`<span class="fp-used warnish" title="a display field eSeries builds for the screen; it may carry HTML">display</span>`}</span>
+      ${f.description && html`<span class="fp-desc">${f.description}</span>`}
       <span class="fp-type">${f.label}</span>
       <button class=${'mini' + (on ? ' on' : '')} disabled=${on} onClick=${() => onAdd(f, pth)}>
         ${on ? '✓ Added' : mode === 'column' ? '+ Column' : '+ Filter'}</button></div>`;
@@ -231,11 +251,16 @@ function FieldPicker({ project, mode, added, onAdd }) {
       <div class="fp-list">
         ${used && used.length > 0 && html`<div class="fp-group">Names your rules already read</div>
           ${used.map(f => html`<${Row} key=${'u' + f.name} f=${f}/>`)}
-          <div class="fp-group">All fields on ${data.entity}</div>`}
-        ${shown.map(f => html`<${Row} key=${f.name} f=${f}/>`)}
+`}
+        ${[['value', 'Fields'], ['rel', 'Related records \u2014 click to open'], ['opaque', 'Lists the model does not describe']]
+          .map(([k, title]) => {
+            const g = shown.filter(f => k === 'rel' ? (f.kind === 'entity' || f.kind === 'collection') : f.kind === k);
+            return g.length > 0 && html`<${React.Fragment} key=${k}><div class="fp-group">${title} (${g.length})</div>
+              ${g.map(f => html`<${Row} key=${f.name} f=${f}/>`)}<//>`;
+          })}
         ${shown.length === 0 && html`<div class="fp-empty">No field on ${here} matches "${q}".</div>`}
       </div>
-      <div class="fp-foot">From ${data ? data.sdk : 'the SDK'} · ${all.length} fields on ${data && data.entity}.
+      <div class="fp-foot">From ${data ? data.sdk : 'the SDK'} (${data && data.source === 'dd' ? 'Data Dictionary' : 'SDK'}) · ${all.length} fields on ${data && data.entity}.
         Lists (“each”) give one value per related record.</div>`}
   </div>`;
 }
@@ -383,7 +408,7 @@ function App() {
         paths: Object.fromEntries(sections.flatMap(s => s.cols.filter(c => c.path && c.field.trim())
           .map(c => [c.field.trim(), c.path]))),
         criteria: Object.values(params.filter(p => p.path && p.name.trim()).reduce((acc, p) => {
-          (acc[p.group] = acc[p.group] || { path: p.path, kind: p.kind, params: [] }).params.push(p.name.trim());
+          (acc[p.group] = acc[p.group] || { path: p.path, kind: p.kind, lookup: p.lookup || null, params: [] }).params.push(p.name.trim());
           return acc; }, {})),
       }),
     }).then(r => r.json()).then(d => {
@@ -421,7 +446,7 @@ function App() {
       ? [['From', 'java.util.Date'], ['To', 'java.util.Date']].map(([sfx, t]) =>
           ({ id: uid(), name: base + sfx, type: t, path: pth, kind: 'range', group }))
       : [{ id: uid(), name: base, type: num ? 'java.lang.Integer' : 'java.lang.String', path: pth,
-           kind: num ? 'equals' : 'in', group }];
+           kind: num ? 'equals' : 'in', group, lookup: f.lookup || null }];
     setParams(xs => [...xs.filter(p => p.name.trim()), ...rows]);
   };
 
@@ -473,7 +498,7 @@ function App() {
                 ${boot.projects.map(p => html`
                   <option key=${p.name} value=${p.name}>
                     ${p.label} — ${p.reports} report${p.reports === 1 ? '' : 's'},
-                    ${p.sdk ? ' field list (SDK) on file' : ' no field list (SDK)'}${p.environment ? ', ' + p.environment : ''}
+                    ${p.dd ? ' Data Dictionary on file' : p.sdk ? ' field list (SDK) on file' : ' no field list'}${p.environment ? ', ' + p.environment : ''}
                   </option>`)}
                 ${!known && html`<option value=${project}>${project || 'Workspace folder'}  (browsed)</option>`}
               </select>
@@ -624,7 +649,7 @@ function App() {
                           onChange=${e => setParams(xs => xs.map(x => x.id === p.id ? { ...x, type: e.target.value } : x))}>
                           ${TYPES.map(([v, l]) => html`<option key=${v} value=${v}>${l}</option>`)}
                         </select></td>
-                    <td>${p.path && html`<span class="fp-code" title=${p.path}>filters ${p.path.split('.').slice(1).join(' › ')}</span>`}</td>
+                    <td>${p.path && html`<span class="fp-code" title=${p.path}>filters ${p.path.split('.').slice(1).join(' › ')}${p.lookup ? ' \u00B7 pick-list ' + p.lookup : ''}</span>`}</td>
                     <td><button class="x" onClick=${() => setParams(xs => xs.filter(x => x.id !== p.id))}>×</button></td>
                   </tr>`)}
               </tbody>

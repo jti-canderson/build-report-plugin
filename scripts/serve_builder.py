@@ -437,8 +437,10 @@ def write_spec(payload):
     if isinstance(crit, list) and crit and all(
             isinstance(c, dict) and isinstance(c.get("path"), str)
             and isinstance(c.get("params"), list) for c in crit):
-        spec["criteria"] = [{"path": c["path"], "kind": str(c.get("kind") or "equals")[:20],
-                             "params": [str(x)[:60] for x in c["params"]][:2]} for c in crit][:20]
+        spec["criteria"] = [dict({"path": c["path"], "kind": str(c.get("kind") or "equals")[:20],
+                                  "params": [str(x)[:60] for x in c["params"]][:2]},
+                                 **({"lookup": str(c["lookup"])[:80]} if c.get("lookup") else {}))
+                            for c in crit][:20]
     if look:
         # Copied, not referenced: a temp file disappears on reboot and the spec has to stay
         # readable weeks later, next to the report it describes.
@@ -663,6 +665,36 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             body = self.rfile.read(n)
             out = form_spec(body, (q.get("name") or ["upload.zip"])[0])
             return self._send(200 if out.get("ok") else 400, json.dumps(out))
+        if route.path == "/api/dd":
+            # Attach a project's Data Dictionary export from the field browser. It lands in
+            # <project>/dd/ through project.py dd-register - the same check and copy as the CLI.
+            n = int(self.headers.get("Content-Length") or 0)
+            if n <= 0 or n > 150 * 1024 * 1024:
+                return self._send(400, json.dumps({"ok": False, "message": "no file, or over 150 MB"}))
+            q = urllib.parse.parse_qs(route.query)
+            folder, err = destination({"name": "Browse", "project": (q.get("project") or [""])[0]})
+            if err:
+                return self._send(400, json.dumps({"ok": False, "message": err}))
+            fname = re.sub(r"[^A-Za-z0-9._-]+", "_", os.path.basename((q.get("name") or ["dictionary.xlsx"])[0]))
+            if not fname.lower().endswith(".xlsx"):
+                fname += ".xlsx"
+            tmpd = tempfile.mkdtemp(prefix="jti-dd-")
+            tmp = os.path.join(tmpd, fname)
+            with open(tmp, "wb") as f:
+                left = n
+                while left:
+                    chunk = self.rfile.read(min(left, 1 << 20))
+                    if not chunk:
+                        break
+                    f.write(chunk); left -= len(chunk)
+            import io, contextlib
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc = P.cmd_dd_register(str(folder), tmp)
+            shutil.rmtree(tmpd, ignore_errors=True)
+            said = buf.getvalue().strip()
+            ok = rc == 0 and said.startswith("SAVED")
+            return self._send(200 if ok else 400, json.dumps({"ok": ok, "message": said}))
         if route.path == "/api/look":
             n = int(self.headers.get("Content-Length") or 0)
             if n > 20 * 1024 * 1024:

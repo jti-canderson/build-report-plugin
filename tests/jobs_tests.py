@@ -104,6 +104,7 @@ def run(check, skip, ctx):
     run_phase4(check, skip, ctx)
     run_phase5(check, skip, ctx)
     run_fields(check, skip, ctx)
+    run_dd(check, skip, ctx)
 
 
 def run_phase1(check, skip, ctx):
@@ -728,5 +729,90 @@ def run_fields(check, skip, ctx):
         check("jobs: the helper finds a job server started from another workspace (and ignores "
               "a leftover state file from a dead one)",
               r.returncode == 7 and "NO JOB YET" in r.stdout, r.stdout + r.stderr)
+    finally:
+        srv.stop()
+
+
+# ── the Data Dictionary as the field browser's source ─────────────────────────────────
+def make_dd(path, rows):
+    """A minimal DataDictionary-*.xlsx (inline strings, one sheet), shaped like the eSeries
+    export: an entity row (name in A), then field rows (B name, C type, D description,
+    H 'Examples: a,b')."""
+    import zipfile
+    from xml.sax.saxutils import escape
+    def cell(ref, v):
+        return f'<c r="{ref}" t="inlineStr"><is><t>{escape(v)}</t></is></c>'
+    xml = []
+    for i, r in enumerate(rows, 1):
+        xml.append(f'<row r="{i}">' + "".join(cell(f"{'ABCDEFGH'[j]}{i}", v)
+                                              for j, v in enumerate(r) if v) + "</row>")
+    sheet = ('<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxml'
+             'formats.org/spreadsheetml/2006/main"><sheetData>' + "".join(xml) + '</sheetData></worksheet>')
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("xl/workbook.xml", '<workbook><sheets><sheet name="Sheet1"/></sheets></workbook>')
+        z.writestr("xl/worksheets/sheet1.xml", sheet)
+
+
+DD_ROWS = [["Case", "tCase"],
+           ["", "caseNumber", "String (255)", "Case Number - assigned at filing", "Not Null"],
+           ["", "caseStatus", "Lookup List (CASE_STATUS)", "Case Status", "", "", "", "Examples: Open,Closed,Pending"],
+           ["", "filingDate", "Date", "Filing date", "", "", "Indexed"],
+           ["", "parties", "Collection (Party)", ""],
+           ["", "FancyWidget", "Widget", ""]] + \
+          [["", f"extra{i}", "String (255)", ""] for i in range(20)] + \
+          [["Party", "tParty"], ["", "partyType", "Lookup List (PARTY_TYPE)", "", "", "", "", "Examples: Defendant,Victim"],
+           ["", "person", "Person", ""],
+           ["Person", "tPerson"], ["", "lastName", "String (255)", "Last name"]]
+
+
+def run_dd(check, skip, ctx):
+    plugin, root = ctx["plugin"], ctx["ws"]
+    ws = fresh_ws(root, "dd")
+    dd = os.path.join(ws, "DataDictionary-probe.xlsx")
+    make_dd(dd, DD_ROWS)
+    proj = os.path.join(plugin, "scripts", "project.py")
+    env = dict(os.environ, JTI_PROJECT_ROOT=ws)
+    bad = subprocess.run([sys.executable, proj, "dd-register", os.path.join(ws, "Proj"),
+                          os.path.join(plugin, ".claude-plugin", "plugin.json")], env=env,
+                         capture_output=True, text=True)
+    good = subprocess.run([sys.executable, proj, "dd-register", os.path.join(ws, "Proj"), dd],
+                          env=env, capture_output=True, text=True)
+    check("dd-register keeps a Data Dictionary in the project and refuses anything else",
+          "REFUSED" in bad.stdout and good.stdout.startswith("SAVED")
+          and os.path.isfile(os.path.join(ws, "Proj", "dd", "DataDictionary-probe.xlsx")),
+          bad.stdout + good.stdout)
+    os.makedirs(os.path.join(ws, "Other"))
+    open(os.path.join(ws, "Other", ".jti-project.json"), "w").write("{}")
+    srv = Server(plugin, ws, jobs=False).start()
+    try:
+        c, d = srv.js("GET", "/api/fields?project=Proj&entity=Case")
+        f = {x["name"]: x for x in d.get("fields", [])}
+        check("fields: with a Data Dictionary on file it is the source - pick-lists carry their "
+              "list and values, descriptions come through, widgets are left out",
+              d.get("source") == "dd" and f["caseStatus"]["lookup"] == "CASE_STATUS"
+              and f["caseStatus"]["values"] == ["Open", "Closed", "Pending"]
+              and f["caseStatus"]["label"] == "pick-list" and f["filingDate"]["label"] == "date"
+              and "assigned at filing" in f["caseNumber"]["description"]
+              and f["parties"]["kind"] == "collection" and f["parties"]["target"] == "Party"
+              and "FancyWidget" not in f, d)
+        c, p = srv.js("GET", "/api/fields?project=Proj&entity=Party")
+        check("fields: the dictionary walks relations the SDK jar cannot (Party -> Person)",
+              any(x["name"] == "person" and x["kind"] == "entity" and x["target"] == "Person"
+                  for x in p.get("fields", [])), p)
+        code, _, body = srv.req("POST", "/api/dd?project=Other&name=DataDictionary-up.xlsx",
+                                raw=open(dd, "rb").read(), headers={"Content-Type": "application/octet-stream"})
+        after = srv.js("GET", "/api/fields?project=Other&entity=Case")[1]
+        c2, _, b2 = srv.req("POST", "/api/dd?project=Other&name=notes.xlsx", raw=b"not a zip",
+                            headers={"Content-Type": "application/octet-stream"})
+        check("fields: a dictionary attached from the page is registered and used at once; "
+              "a non-dictionary upload is refused",
+              code == 200 and after.get("source") == "dd" and c2 == 400, (body[:200], b2[:200]))
+        spec = spec_for("Lookup_Pick")
+        spec["criteria"] = [{"path": "Case.caseStatus", "kind": "in", "lookup": "CASE_STATUS",
+                             "params": ["CaseStatus"]}]
+        srv.js("POST", "/api/spec", spec)
+        s = json.load(open(os.path.join(ws, "Proj", "Lookup_Pick", "spec.json")))
+        check("fields: a filter picked on a pick-list keeps the list name in spec.json",
+              s.get("criteria", [{}])[0].get("lookup") == "CASE_STATUS", s.get("criteria"))
     finally:
         srv.stop()

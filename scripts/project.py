@@ -32,6 +32,9 @@ Status commands always exit 0 and print a leading token (NONE / OK / STALE / MIS
 "No SDK on file" is a normal state, not a failure, and a non-zero exit for it surfaces
 as a red error in the caller's UI for something that is merely a question to ask.
     project.py sdk-register <project-folder> <file>
+    project.py dd-register  <project-folder> <DataDictionary-*.xlsx>   the project's Data
+                                             Dictionary export: what the field browser reads
+    project.py dd-status    <project-folder>
 """
 import datetime
 import hashlib
@@ -152,7 +155,7 @@ def list_projects():
     m = _meta(ROOT)
     if m or _reports_in(ROOT):
         out.append({"name": ".", "label": f"{ROOT.name}  (here)",
-                    "reports": len(_reports_in(ROOT)), "sdk": bool(m.get("sdk")),
+                    "reports": len(_reports_in(ROOT)), "sdk": bool(m.get("sdk")), "dd": bool(m.get("dd")),
                     "environment": m.get("environment")})
     try:
         children = sorted(ROOT.iterdir())
@@ -166,7 +169,8 @@ def list_projects():
         cm, reports = _meta(d), _reports_in(d)
         if cm or reports:
             out.append({"name": d.name, "label": d.name, "reports": len(reports),
-                        "sdk": bool(cm.get("sdk")), "environment": cm.get("environment")})
+                        "sdk": bool(cm.get("sdk")), "dd": bool(cm.get("dd")),
+                        "environment": cm.get("environment")})
     return out
 
 
@@ -327,6 +331,69 @@ def cmd_sdk_register(folder, src):
     return 0
 
 
+def dd_check(path):
+    """None if `path` is a Data Dictionary export, else why not. An .xlsx is a zip; the
+    export's first sheet has entity rows (name in column A) and field rows under them."""
+    import zipfile
+    try:
+        with zipfile.ZipFile(path) as z:
+            if not any(n.startswith("xl/worksheets/") for n in z.namelist()):
+                return "not a spreadsheet (.xlsx)"
+    except (zipfile.BadZipFile, OSError):
+        return "not a spreadsheet (.xlsx)"
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "skills" /
+                           "report-deployment" / "scripts"))
+    import dd_resolve as D
+    rows = 0
+    for r in D.xlsx_rows(str(path)):
+        if len(r) > 2 and not r[0].strip() and r[1].strip() and r[2].strip():
+            rows += 1
+            if rows >= 20:
+                return None
+    return "no entity/field rows - export it from eSeries: System Setup -> Data Dictionary"
+
+
+def cmd_dd_register(folder, src):
+    """Copy a Data Dictionary export into <project>/dd/ and record it, like sdk-register."""
+    folder, src = _under_root(folder), pathlib.Path(src).expanduser()
+    if folder is None:
+        print(f"REFUSED outside {ROOT}")
+        return 0
+    if not src.exists():
+        print(f"no such file: {src}")
+        return 2
+    why = dd_check(src)
+    if why:
+        print(f"REFUSED {src.name}: {why}")
+        return 2
+    dest_dir = folder / "dd"
+    dest_dir.mkdir(exist_ok=True)
+    dest = dest_dir / src.name
+    shutil.copy2(src, dest)
+    h = hashlib.sha256(dest.read_bytes()).hexdigest()[:16]
+    m = _meta(folder)
+    prev = m.get("dd")
+    m["dd"] = {"filename": src.name, "stored": f"dd/{src.name}", "sha256": h,
+               "registered": datetime.date.today().isoformat(), "size": dest.stat().st_size}
+    if prev:
+        m.setdefault("dd_history", []).append(prev)
+    _write(folder, m)
+    print(f"SAVED   {dest.relative_to(folder)}  sha {h}")
+    return 0
+
+
+def cmd_dd_status(folder):
+    folder = _under_root(folder)
+    dd = _meta(folder).get("dd") if folder else None
+    if not dd:
+        print("NONE    no Data Dictionary on file")
+    elif not (folder / dd["stored"]).exists():
+        print(f"MISSING {dd['stored']} is recorded but gone")
+    else:
+        print(f"OK      {dd['filename']} (registered {dd['registered']})")
+    return 0
+
+
 if __name__ == "__main__":
     a = sys.argv[1:]
     if not a:
@@ -345,6 +412,10 @@ if __name__ == "__main__":
         sys.exit(cmd_sdk_decide(a[1]))
     elif c == "sdk-register":
         sys.exit(cmd_sdk_register(a[1], a[2]))
+    elif c == "dd-register":
+        sys.exit(cmd_dd_register(a[1], a[2]))
+    elif c == "dd-status":
+        sys.exit(cmd_dd_status(a[1]))
     else:
         print(__doc__.strip())
         sys.exit(2)

@@ -1,5 +1,10 @@
 """fields_api.py - the builder's field browser: what fields an entity really has.
 
+SOURCE, best first: the project's **Data Dictionary** export (project.py dd-register) - the
+same model the eSeries form editor's field picker shows, with descriptions and pick-list
+values, and relations the SDK jar cannot walk (Party.person has no getter). Then the
+project's SDK jar, as before.
+
     GET /api/fields?project=<project>&entity=<class>
 
 Reads ONLY the project's own registered SDK jar (project.py sdk-register), through the same
@@ -46,6 +51,80 @@ def used_names(root):
     return _USED[root]
 
 
+_DDS = {}
+LOOKUP = re.compile(r"^Lookup List \(([^)]+)\)$")
+COLL = re.compile(r"^Collection \((\w+)\)$")
+
+
+def _dd_path(folder):
+    folder = P._under_root(folder) or pathlib.Path(folder).resolve()
+    dd = P._meta(folder).get("dd") if folder.is_dir() else None
+    if not dd:
+        return None, None
+    p = folder / dd["stored"]
+    return (str(p), dd.get("filename") or p.name) if p.is_file() else (None, None)
+
+
+def _dd(path):
+    """{entity: [row]} with every column the export has, read once per server."""
+    with _LOCK:
+        if path not in _DDS:
+            sys_path = str(pathlib.Path(__file__).resolve().parent.parent / "skills" /
+                           "report-deployment" / "scripts")
+            import sys
+            if sys_path not in sys.path:
+                sys.path.insert(0, sys_path)
+            import dd_resolve as D
+            model, cur = {}, None
+            for r in D.xlsx_rows(path):
+                c = [str(v or "") for v in r] + [""] * 8
+                if c[0].strip():
+                    cur = c[0].strip(); model.setdefault(cur, [])
+                elif cur and c[1].strip():
+                    ex = next((x for x in c[3:] if x.startswith("Examples:")), "")
+                    flags = [x.strip() for x in c[4:7] if x.strip() and not x.startswith("Examples:")]
+                    model[cur].append({"name": c[1].strip(), "type": c[2].strip(),
+                                       "description": c[3].strip(), "flags": flags,
+                                       "examples": [v.strip() for v in ex[len("Examples:"):].split(",") if v.strip()]})
+            _DDS[path] = model
+        return _DDS[path]
+
+
+def _browse_dd(path, name, entity):
+    model = _dd(path)
+    ent = (entity or "Case").rsplit(".", 1)[-1]
+    if ent not in model:
+        return {"ok": False, "reason": "no-entity", "message": f"{ent!r} is not in the Data Dictionary"}
+    used = used_names(P.ROOT)
+    out = []
+    for r in model[ent]:
+        t, n = r["type"], r["name"]
+        if HIDE.search(n) or t == "Widget":
+            continue
+        m_c, m_l = COLL.match(t), LOOKUP.match(t)
+        if m_c:
+            kind, target = ("collection", m_c.group(1)) if m_c.group(1) in model else ("opaque", None)
+        elif re.fullmatch(r"[A-Z]\w*", t) and t in model:
+            kind, target = "entity", t
+        else:
+            kind, target = "value", None
+        base = re.sub(r"\s*\(.*$", "", t)
+        label = ("pick-list" if m_l else
+                 {"String": "text", "Date": "date", "DateTime": "date", "Timestamp": "date",
+                  "Long": "number", "long": "number", "Integer": "number", "int": "number",
+                  "Double": "decimal", "double": "decimal", "BigDecimal": "decimal",
+                  "Boolean": "yes/no", "boolean": "yes/no"}.get(base, base.lower() or "value"))
+        out.append({"name": n, "type": t, "kind": kind, "target": target, "targetShort": target,
+                    "label": label if kind == "value" else target,
+                    "lookup": m_l.group(1) if m_l else None,
+                    "values": r["examples"][:200] if m_l else [],
+                    "description": r["description"][:300], "flags": r["flags"],
+                    "display": n.startswith("cf_"), "used": used.get(n, 0)})
+    out.sort(key=lambda f: ({"value": 0, "entity": 1, "collection": 2, "opaque": 3}[f["kind"]], f["name"].lower()))
+    return {"ok": True, "entity": ent, "fqcn": ent, "source": "dd", "sdk": name,
+            "roots": [r for r in ROOTS if r in model], "fields": out}
+
+
 def _jar(folder):
     folder = P._under_root(folder) or pathlib.Path(folder).resolve()
     sdk = P._meta(folder).get("sdk") if folder.is_dir() else None
@@ -86,12 +165,16 @@ def _label(t):
 
 
 def browse(folder, entity):
+    ddp, dd_name = _dd_path(folder)
+    if ddp:
+        return _browse_dd(ddp, dd_name, entity)
     jar, sdk_name = _jar(folder)
     if not jar:
         return {"ok": False, "reason": "no-sdk",
-                "message": "No field list (SDK) is on file for this project, so the fields "
-                           "cannot be browsed. Describe the report in the brief instead - "
-                           "Claude asks for the SDK when it builds."}
+                "message": "No Data Dictionary or SDK is on file for this project, so its "
+                           "fields cannot be browsed. Attach the project's Data Dictionary "
+                           "below - or describe the report in the brief, and Claude checks "
+                           "the fields when it builds."}
     model = _model(jar)
     fq, err = model.fqcn(entity or "Case")
     if not fq or fq not in model.names:
@@ -121,5 +204,5 @@ def browse(folder, entity):
         f["used"] = used.get(f["name"], 0)
     out.sort(key=lambda f: ({"value": 0, "entity": 1, "collection": 2, "opaque": 3}[f["kind"]], f["name"].lower()))
     roots = [r for r in ROOTS if model.fqcn(r)[0]]
-    return {"ok": True, "entity": fq.rsplit(".", 1)[-1], "fqcn": fq, "sdk": sdk_name,
+    return {"ok": True, "entity": fq.rsplit(".", 1)[-1], "fqcn": fq, "sdk": sdk_name, "source": "sdk",
             "roots": roots, "fields": out}
