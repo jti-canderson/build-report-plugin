@@ -39,7 +39,7 @@ port is in use by another server, stop and say that.
 
 Then say exactly one line in the chat: *The builder is open at http://127.0.0.1:8789/. Fill it
 in and click **Build report**. Progress, any questions, and the finished files all appear on
-that page.* After that, nothing you do needs the chat.
+that page - click **Done — stop Claude** there when you are finished.* After that, nothing you do needs the chat.
 
 Use `J="$P/scripts/jobs.py"` below. Run every command from inside the report folder the job
 names (`cd "<folder>"`).
@@ -50,6 +50,11 @@ names (`cd "<folder>"`).
 python3 "$J" wait
 ```
 
+Exit **8** means the user is finished: they clicked **Done — stop Claude** on the page, or
+closed the builder tab (the helper says which).
+Stop at once - do not run `wait` again, do not tidy up - and end with exactly one line in the
+chat: *Done - the builder session is closed. Run /test-report to build more.* (Nothing can
+close the Claude window itself; ending the run is what the button asks for.)
 Exit **7** means nothing was submitted yet: run it again. After **four** empty waits in a row
 (about 36 minutes), stop and say in the chat that the builder is idle and `/test-report` can
 be run again. Exit **0** prints the claimed job as JSON: `folder` (the report folder, the
@@ -153,4 +158,5 @@ file, `file`: the uploaded file's path inside the job folder). One question at a
 After `complete` succeeds, the page shows the pages, the downloads, and where the report is
 saved. **Never import anything; importing is a write, and the user does it.** Never delete,
 move or overwrite a file the user already had. Then go back to step 2 and wait for the next
-job, because the page's "Build another report" button relies on you still waiting.
+job, because the page's "Build another report" button relies on you still waiting. The
+page's **Done** button is how that loop ends: the next `wait` exits 8 (step 2).

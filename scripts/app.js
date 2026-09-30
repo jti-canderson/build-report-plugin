@@ -150,6 +150,10 @@ function App() {
   const [look, setLook] = useState(null);
   const [lookErr, setLookErr] = useState('');
   const [watching, setWatching] = useState(null);
+  // The "Done" button (--jobs mode): tells the /test-report worker to stop waiting, so the
+  // Claude session ends its run instead of polling for a build that is never coming.
+  const [stopping, setStopping] = useState(false);
+  const [doneMsg, setDoneMsg] = useState(null);
   const [job, setJob] = useState(null);           // --jobs mode: the build being followed
 
   // A folder-view export answers the sections, the columns and the root entity outright -
@@ -250,10 +254,16 @@ function App() {
   useEffect(() => {
     let alive = true;
     const tick = () => fetch('/api/watching').then(r => r.json())
-      .then(d => alive && setWatching(d.watching)).catch(() => {});
+      .then(d => { if (alive) { setWatching(d.watching); setStopping(!!d.stopping); } }).catch(() => {});
     tick();
     const t = setInterval(tick, 3000);
-    return () => { alive = false; clearInterval(t); };
+    // --jobs mode: closing (or reloading) the tab tells the server. A reload checks back in
+    // at once and cancels it; a real close lets Claude stop without anyone returning to it.
+    const bye = () => { const s = SESSION.h['X-JTI-Session'];
+      if (s && navigator.sendBeacon) navigator.sendBeacon('/api/session/closed',
+        new Blob([JSON.stringify({ session: s })], { type: 'application/json' })); };
+    window.addEventListener('pagehide', bye);
+    return () => { alive = false; clearInterval(t); window.removeEventListener('pagehide', bye); };
   }, []);
 
   if (!boot) return html`<div class="spin">Loading…</div>`;
@@ -310,6 +320,14 @@ function App() {
       } else setRes(d);
     });
   };
+  const finish = () => {
+    if (!confirm('Done for now?\n\nClaude stops waiting for builds and ends its /test-report run. '
+                 + 'Your reports stay where they are. Run /test-report again to build more.')) return;
+    fetch('/api/session/done', { method: 'POST', body: '{}',
+                                 headers: { ...SESSION.h, 'Content-Type': 'application/json' } })
+      .then(r => r.json()).then(d => { setDoneMsg(d.message || 'Claude is stopping.'); setStopping(!!d.stopping); })
+      .catch(() => setDoneMsg('Could not reach the builder - it may already be closed.'));
+  };
   const another = () => { window.JTIBuild.remember(null); setJob(null); setRes(null); setName(''); };
 
   // ---- the two add panes: Search Criteria and Result Columns
@@ -353,7 +371,8 @@ function App() {
 
   if (jobsMode && job) return html`
     <${React.Fragment}>
-      <${AppBar} boot=${boot} watching=${watching} jobsMode=${jobsMode}/>
+      <${AppBar} boot=${boot} watching=${watching} jobsMode=${jobsMode} stopping=${stopping} onDone=${finish}/>
+      <${DoneBar} msg=${doneMsg} watching=${watching}/>
       <main class="shell one">
         <${window.JTIBuild.BuildScreen} job=${job} stages=${boot.jobs.stages} onAnother=${another}/>
       </main>
@@ -362,7 +381,8 @@ function App() {
 
   return html`
     <${React.Fragment}>
-      <${AppBar} boot=${boot} watching=${watching} jobsMode=${jobsMode}/>
+      <${AppBar} boot=${boot} watching=${watching} jobsMode=${jobsMode} stopping=${stopping} onDone=${finish}/>
+      <${DoneBar} msg=${doneMsg} watching=${watching}/>
       ${boot.version && boot.version.stale && html`
         <div class="banner">⚠︎ ${boot.version.message}</div>`}
       <main class="shell">
@@ -572,7 +592,17 @@ function App() {
 const hideImg = e => { e.target.style.display = 'none'; };
 // The Journal Technologies mark, the product name, the workspace, and Claude's state -
 // the same header on the form and on the build screen.
-function AppBar({ boot, watching, jobsMode }) {
+function DoneBar({ msg, watching }) {
+  if (!msg) return null;
+  const gone = watching === false;
+  return html`<div class=${'donebar' + (gone ? ' gone' : '')} role="status"><div class="in">
+    <b>${gone ? 'Claude has stopped.' : msg}</b>
+    <span>${gone ? 'The /test-report run in Claude Code has ended. Your reports are saved where each build said. '
+                   + 'To build more, run /test-report again. You can close this tab.'
+                 : 'This page will say when it has stopped.'}</span></div></div>`;
+}
+
+function AppBar({ boot, watching, jobsMode, stopping, onDone }) {
   return html`<header class="appbar"><div class="in">
     <div class="brand">
       <img src="/brand/journal-j.png" alt="" onError=${hideImg}/>
@@ -586,7 +616,9 @@ function AppBar({ boot, watching, jobsMode }) {
     <span class="chip" title=${boot.root + ' — ' + boot.rootWhy}>
       <span class="ico">\u{1F4C1}</span>${boot.root}</span>
     ${watching !== null && html`<span class=${'status' + (watching ? ' on' : '')}>
-      <span class="dot"/>${watching ? 'Claude ready' : 'Claude not connected'}</span>`}
+      <span class="dot"/>${stopping && watching ? 'Claude stopping…' : watching ? 'Claude ready' : 'Claude not connected'}</span>`}
+    ${jobsMode && watching && !stopping && html`<button class="mini done" onClick=${onDone}
+        title="Finished? Tell Claude to stop waiting and end its /test-report run.">Done — stop Claude</button>`}
   </div></header>`;
 }
 

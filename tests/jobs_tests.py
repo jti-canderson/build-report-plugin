@@ -18,8 +18,8 @@ import urllib.request
 
 
 class Server:
-    def __init__(self, plugin, ws, jobs=True):
-        self.plugin, self.ws, self.jobs = plugin, ws, jobs
+    def __init__(self, plugin, ws, jobs=True, env=None):
+        self.plugin, self.ws, self.jobs, self.env = plugin, ws, jobs, env or {}
         s = socket.socket(); s.bind(("127.0.0.1", 0)); self.port = s.getsockname()[1]; s.close()
         self.base = f"http://127.0.0.1:{self.port}"
         self.p = None
@@ -27,7 +27,7 @@ class Server:
     def start(self):
         cmd = [sys.executable, os.path.join(self.plugin, "scripts", "serve_builder.py"),
                "--port", str(self.port), "--no-open"] + (["--jobs"] if self.jobs else [])
-        self.p = subprocess.Popen(cmd, env=dict(os.environ, JTI_PROJECT_ROOT=self.ws),
+        self.p = subprocess.Popen(cmd, env=dict(os.environ, JTI_PROJECT_ROOT=self.ws, **self.env),
                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         for _ in range(100):
             try:
@@ -105,6 +105,49 @@ def run(check, skip, ctx):
     run_phase5(check, skip, ctx)
     run_fields(check, skip, ctx)
     run_dd(check, skip, ctx)
+    run_done(check, skip, ctx)
+    run_closed(check, skip, ctx)
+
+
+def run_done(check, skip, ctx):
+    """The page's Done button ends the /test-report worker - and ONLY a worker that is there."""
+    plugin, root = ctx["plugin"], ctx["ws"]
+    ws = fresh_ws(root, "done")
+    srv = Server(plugin, ws).start()
+    try:
+        done = lambda h=None: srv.js("POST", "/api/session/done", {}, h or {"X-JTI-Session": srv.session})
+        c, d = done()
+        w = helper(plugin, ws, "wait", "--secs", "3")
+        check("done: with no Claude connected it stops nothing, and a later wait is NOT ended by it",
+              c == 200 and d.get("stopping") is False and w.returncode == 7, (c, d, w.returncode))
+        c, _ = done({"X-JTI-Session": "nope"})
+        check("done: refused without the page's session token", c == 403, c)
+
+        bg = helper(plugin, ws, "wait", "--secs", "40", background=True)
+        time.sleep(1.5)
+        c, d = done()
+        _, watch = srv.js("GET", "/api/watching")
+        try:
+            out, _ = bg.communicate(timeout=15)
+        except subprocess.TimeoutExpired:
+            bg.kill(); out = "(still waiting)"
+        check("done: a waiting worker exits 8 at once and is told to stop",
+              d.get("stopping") is True and bg.returncode == 8 and "USER IS DONE" in out,
+              (d, bg.returncode, out[-200:], watch))
+        w = helper(plugin, ws, "wait", "--secs", "3")
+        check("done: it is used up once collected - the next session's wait is not ended by it",
+              w.returncode == 7, w.returncode)
+
+        code, sub = srv.submit(spec_for("Done_Probe"))
+        c, d = done()
+        first = helper(plugin, ws, "wait", "--secs", "5")
+        helper(plugin, ws, "fail", "--stage", "validated", "--message", "test stops here")
+        second = helper(plugin, ws, "wait", "--secs", "10")
+        check("done: a build already submitted is still picked up first; the wait after it ends the worker",
+              d.get("stopping") is True and first.returncode == 0 and '"Done_Probe"' in first.stdout
+              and second.returncode == 8, (d, first.returncode, second.returncode))
+    finally:
+        srv.stop()
 
 
 def run_phase1(check, skip, ctx):
@@ -835,5 +878,36 @@ def run_dd(check, skip, ctx):
         s = json.load(open(os.path.join(ws, "Proj", "Lookup_Pick", "spec.json")))
         check("fields: a filter picked on a pick-list keeps the list name in spec.json",
               s.get("criteria", [{}])[0].get("lookup") == "CASE_STATUS", s.get("criteria"))
+    finally:
+        srv.stop()
+
+
+def run_closed(check, skip, ctx):
+    """Closing the builder tab stops the worker too - a reload does not."""
+    plugin, root = ctx["plugin"], ctx["ws"]
+    ws = fresh_ws(root, "closed")
+    srv = Server(plugin, ws, env={"JTI_CLOSE_GRACE": "2", "JTI_PAGE_TTL": "8"}).start()
+    try:
+        beacon = lambda tok=None: srv.js("POST", "/api/session/closed", {"session": tok or srv.session})
+        c, _ = beacon("nope")
+        check("closed: the close beacon is refused without the session token", c == 403, c)
+
+        srv.js("GET", "/api/watching"); beacon(); time.sleep(0.5); srv.js("GET", "/api/watching")
+        w = helper(plugin, ws, "wait", "--secs", "5")
+        check("closed: a RELOAD (beacon, then the page checks straight back in) does not stop Claude",
+              w.returncode == 7, (w.returncode, w.stdout[-200:]))
+
+        srv.js("GET", "/api/watching"); beacon()
+        t0 = time.time(); w = helper(plugin, ws, "wait", "--secs", "20")
+        check("closed: closing the tab stops a waiting worker (exit 8, says the page was closed)",
+              w.returncode == 8 and "page was closed" in w.stdout and time.time() - t0 < 10,
+              (w.returncode, round(time.time() - t0, 1), w.stdout[-200:]))
+        w = helper(plugin, ws, "wait", "--secs", "3")
+        check("closed: used up once collected - the next session is not ended by the old tab", w.returncode == 7, w.returncode)
+
+        srv.js("GET", "/api/watching")        # opened, then silent: no beacon (a crash, a lost network)
+        t0 = time.time(); w = helper(plugin, ws, "wait", "--secs", "25")
+        check("closed: a page that stops checking in for the timeout stops the worker",
+              w.returncode == 8 and 7 < time.time() - t0 < 20, (w.returncode, round(time.time() - t0, 1)))
     finally:
         srv.stop()

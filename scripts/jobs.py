@@ -84,6 +84,14 @@ MAX_STATUS = 300            # characters of a status line or log message kept
 MAX_EVENTS = 2000
 
 EXIT_CANCELLED, EXIT_TIMEOUT, EXIT_NOJOB = 6, 5, 7
+EXIT_DONE = 8          # the user clicked "Done" on the page: stop waiting, end the session
+DONE_TTL = 6 * 3600    # a Done nobody collected is forgotten, so it cannot end a LATER session
+# The page checks in every 3 s. A hidden tab's timers are throttled to about once a minute,
+# so only a long silence means it is gone; a close/reload sends a beacon, and a reload
+# checks back in within a second or two - so a beacon with no return within the grace
+# period is a closed tab.
+PAGE_TTL = int(os.environ.get("JTI_PAGE_TTL") or 180)          # env: tests only
+CLOSE_GRACE = int(os.environ.get("JTI_CLOSE_GRACE") or 20)
 
 # finish.sh / verify_fast.py gate name -> stage in the table. `regenerate` rebuilds the
 # layout for the contract check, so it runs inside the contract stage.
@@ -140,6 +148,11 @@ class Store:
         self.session_token = secrets.token_urlsafe(32)   # new every start; the page fetches it
         self.index = self._read(self.dir / "index.json") or {}
         self.claim_waiters = 0
+        self.last_claim = 0.0        # when a worker last long-polled (the gaps between polls)
+        self.done_at = None          # the user said "Done": the next claim ends the worker
+        self.page_seen = None        # the builder page's last check-in (None: never opened)
+        self.page_closing = None     # the page sent its close beacon at this time
+        self.stopped = False         # the worker collected Done / Closed and has exited
 
     @staticmethod
     def _read(p):
@@ -251,14 +264,69 @@ class Store:
             self.save(j)
         return j, tok
 
+    def worker_connected(self):
+        """A worker parked on claim - or between two of its 50 s polls - or mid-build."""
+        a = self.active()
+        if self.stopped:                 # it exited on Done: only a NEW wait reconnects it
+            return self.claim_waiters > 0
+        return (self.claim_waiters > 0 or time.time() - self.last_claim < 75
+                or bool(a and a["status"] != "submitted"))
+
+    def request_done(self):
+        """The page's Done button. Returns (stopping, message). Only recorded when a worker is
+        there to collect it: a flag left for nobody would end the NEXT session on its first wait."""
+        with self.lock:
+            if not self.worker_connected():
+                return False, "Claude is not connected - there is nothing to stop."
+            self.done_at = time.time()
+            self.changed.notify_all()
+            a = self.active()
+            if a and a["status"] != "submitted":
+                return True, "Claude will stop as soon as this build ends."
+            return True, "Claude is stopping."
+
+    def touch_page(self):
+        with self.lock:
+            self.page_seen, self.page_closing = time.time(), None
+
+    def page_closed(self):
+        with self.lock:
+            if self.page_seen:
+                self.page_closing = time.time()
+                self.changed.notify_all()
+
+    def page_gone(self):
+        """The page was open and is not any more. Never true for a page nobody opened -
+        the four-empty-waits rule covers a worker whose page was never looked at."""
+        if not self.page_seen:
+            return False
+        now = time.time()
+        if self.page_closing and now - self.page_closing > CLOSE_GRACE and self.page_seen <= self.page_closing:
+            return True
+        return now - self.page_seen > PAGE_TTL
+
     def claim(self, secs):
-        """Long-poll for a submitted job; claim the oldest one."""
+        """Long-poll for a submitted job; claim the oldest one. Returns DONE instead when the
+        user has said they are finished (a job already submitted is still claimed first)."""
         deadline = time.monotonic() + secs
         with self.lock:
             self.claim_waiters += 1
+            self.stopped = False
             try:
                 while True:
+                    self.last_claim = time.time()
                     j = self.active()
+                    if self.done_at and not (j and j["status"] == "submitted"):
+                        fresh = time.time() - self.done_at < DONE_TTL
+                        self.done_at = None
+                        if fresh:
+                            self.stopped = True
+                            return "DONE"
+                    if self.page_gone() and not (j and j["status"] == "submitted"):
+                        # used up here, so the next /test-report is not ended by an old tab
+                        self.page_seen = self.page_closing = None
+                        self.stopped = True
+                        return "CLOSED"
                     if j and j["status"] == "submitted":
                         j["status"], j["claimed"] = "running", time.time()
                         j["worker_seen"] = time.time()
@@ -272,6 +340,7 @@ class Store:
                     self.changed.wait(timeout=min(left, 1.0))
             finally:
                 self.claim_waiters -= 1
+                self.last_claim = time.time()
 
     def last_claimed(self):
         """The job the worker most recently claimed, whatever state it is in now."""
@@ -611,6 +680,12 @@ def main(argv):
                 print("NO JOB YET - nothing was submitted. Run `jobs.py wait` again.")
                 return EXIT_NOJOB
             r = call("/api/worker/claim", {"secs": min(left, 50)}, timeout=70)
+            if r.get("finished"):
+                why = ("the builder page was closed" if r.get("reason") == "closed"
+                       else "they clicked Done on the builder page")
+                print(f"USER IS DONE - {why}. Stop waiting: say the one closing line in the "
+                      "chat and end. Do not run `wait` again.")
+                return EXIT_DONE
             if r.get("job"):
                 print(json.dumps(r["job"], indent=2))
                 return 0

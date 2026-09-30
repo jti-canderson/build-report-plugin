@@ -50,6 +50,10 @@
             border:1px solid var(--rule); white-space:nowrap }
   .status .dot { width:8px; height:8px; border-radius:50%; background:var(--faint) }
   .status.on { background:var(--ok-bg); color:var(--ok); border-color:var(--ok-rule) }
+  .appbar .mini.done { margin-left:8px; white-space:nowrap; flex:none }
+  .donebar { background:var(--navy-tint); border-bottom:1px solid var(--rule) }
+  .donebar .in { max-width:1280px; margin:0 auto; padding:10px 32px; display:flex; gap:10px; flex-wrap:wrap; font-size:13.5px }
+  .donebar.gone { background:var(--ok-bg); color:var(--ok) }
   .status.on .dot { background:#17B26A; box-shadow:0 0 0 3px rgba(23,178,106,.18); animation:pulse 2s infinite }
   @keyframes pulse { 50% { box-shadow:0 0 0 6px rgba(23,178,106,0) } }
   .banner { background:var(--warn-bg); border-bottom:1px solid var(--warn-rule); color:var(--warn);

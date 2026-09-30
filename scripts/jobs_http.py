@@ -104,6 +104,25 @@ class Routes:
                 if not J.same(h.headers.get("X-JTI-Worker"), self.s.worker_token):
                     raise Refuse(403, "worker token missing or wrong")
                 return self.worker(h, u.path[len("/api/worker/"):], body_json(h))
+            if u.path == "/api/session/done":
+                # The page's "Done" button: the worker stops after its current step.
+                if method != "POST":
+                    raise Refuse(405, "POST only")
+                self.need_session(h)
+                stopping, msg = self.s.request_done()
+                h._send(200, json.dumps({"ok": True, "stopping": stopping, "message": msg}))
+                return True
+            if u.path == "/api/session/closed":
+                # navigator.sendBeacon on pagehide: it cannot set headers, so the session
+                # token rides in the body. Only MARKS the page as closing - a reload checks
+                # back in at once and cancels it (Store.page_gone).
+                if method != "POST":
+                    raise Refuse(405, "POST only")
+                if not J.same(str(body_json(h).get("session") or ""), self.s.session_token):
+                    raise Refuse(403, "session token missing or wrong")
+                self.s.page_closed()
+                h._send(200, json.dumps({"ok": True}))
+                return True
             if u.path == "/api/jobs":
                 if method != "POST":
                     raise Refuse(405, "POST only")
@@ -256,6 +275,10 @@ class Routes:
             return self.wait_answer(h, str(b.get("id") or ""), min(max(int(b.get("secs") or 50), 1), 55))
         if action == "claim":
             j = s.claim(min(max(int(b.get("secs") or 50), 1), 55))
+            if j in ("DONE", "CLOSED"):
+                h._send(200, json.dumps({"ok": True, "job": None, "finished": True,
+                                         "reason": "closed" if j == "CLOSED" else "done"}))
+                return True
             h._send(200, json.dumps({"ok": True, "job": self.claimed(j) if j else None}))
             return True
         with s.lock:
