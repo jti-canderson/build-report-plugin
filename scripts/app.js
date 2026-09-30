@@ -289,12 +289,14 @@ function App() {
           cols: s.cols.filter(c => c.header.trim() && c.field.trim())
                       .map(c => [c.header.trim(), Number(c.width) || 20, c.align, c.field.trim()]),
         })).filter(s => s.cols.length),
-        params: criteria.filter(c => c.name.trim()).flatMap(c => F().paramsOf(c)),
+        params: criteria.flatMap(c => F().paramsOf(c)),
         paths: Object.fromEntries(sections.flatMap(s => s.cols.filter(c => c.path && c.field.trim())
           .map(c => [c.field.trim(), c.path]))),
-        criteria: criteria.filter(c => c.name.trim()).map(c => ({
-          path: c.path, label: c.label, operator: c.operator, lookup: c.lookup, multi: c.multi,
-          lookupFormat: c.lookupFormat, required: c.required, hidden: c.hidden, default: c.dflt,
+        // Every criterion is sent: a blank or clashing name blocks the build (critIssues)
+        // rather than being dropped here without a word.
+        criteria: criteria.map(c => ({
+          path: c.path, label: c.name || F().human(c.field || 'input'), operator: c.operator, lookup: c.lookup,
+          multi: c.multi, required: c.required, hidden: c.hidden, default: c.dflt,
           type: c.dtype, params: F().paramsOf(c).map(p => p[0]) })),
         columnOptions: Object.fromEntries(sections.flatMap(s => s.cols.filter(c => c.field.trim()).map(c =>
           [c.field.trim(), { link: !!c.link, sort: c.sort || '', aggregate: c.aggregate || 'None',
@@ -316,7 +318,18 @@ function App() {
   // A path already in the list is never added twice, however the add was triggered.
   const addCriteria = (items, opts) => setCriteria(xs => {
     const have = new Set(xs.map(c => c.path).filter(Boolean));
-    return [...xs, ...items.filter(({ pth }) => !have.has(pth)).map(({ f, pth }) => F().newCriterion(f, pth, opts))];
+    // Two fields with one name (Case status, Person status) would be two launch inputs with
+    // one name - bound to the same value. Prefix the parent instead: PersonStatus.
+    const names = new Set(xs.map(c => c.name));
+    const up = w => w.replace('[]', '').replace(/^./, ch => ch.toUpperCase());
+    return [...xs, ...items.filter(({ pth }) => !have.has(pth)).map(({ f, pth }) => {
+      const c = F().newCriterion(f, pth, opts);
+      const segs = (pth || '').split('.').slice(1, -1);
+      for (let i = segs.length - 1; names.has(c.name) && i >= 0; i--) c.name = up(segs[i]) + c.name;
+      for (let k = 2; names.has(c.name); k++) c.name = c.name.replace(/\d*$/, '') + k;
+      c.label = c.name; names.add(c.name);
+      return c;
+    })];
   });
   const addColumns = (items, opts) => setSections(xs => {
     const taken = new Set(xs.flatMap(s => s.cols.map(c => c.field)));
@@ -333,8 +346,9 @@ function App() {
   const projObj = boot.projects.find(p => p.name === project);
   const tplDone = !!tpl && (tpl !== PICTURE || !!look);
   const contentDone = realCols > 0 || hasBrief || (tpl === PICTURE && !!look);
-  const namedInputs = criteria.filter(c => c.name.trim()).map(c => c.label || c.name);
-  const canBuild = !(busy || !tpl || (tpl === PICTURE && !look) || needsSay);
+  const namedInputs = criteria.flatMap(c => F().paramsOf(c).map(p => p[0]));
+  const critIssues = F().problems(criteria).filter(b => !b.warn);
+  const canBuild = !(busy || !tpl || (tpl === PICTURE && !look) || needsSay || critIssues.length);
   const Num = ({ n, done }) => html`<div class="num">${done ? '✓' : n}</div>`;
 
   if (jobsMode && job) return html`
@@ -518,6 +532,7 @@ function App() {
             ${!tpl && html`<div class="todo">Pick a template first.</div>`}
             ${tpl === PICTURE && !look && html`<div class="todo">Attach the picture you want it to look like.</div>`}
             ${needsSay && html`<div class="todo">Add columns, or describe the report in the brief — one of the two.</div>`}
+            ${critIssues.length > 0 && html`<div class="todo">Fix ${critIssues.length === 1 ? 'a search criterion' : critIssues.length + ' search criteria'} first — ${critIssues[0].msg}</div>`}
             ${watching !== null && html`<div class=${'watch' + (watching ? ' on' : '')}><span class="dot"/>
               <span>${jobsMode ? (watching ? 'Claude is ready — the build starts as soon as you click.'
                                            : 'Claude is not waiting yet — the build starts when /test-report picks it up.')

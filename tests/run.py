@@ -153,6 +153,96 @@ def edit(path, old, new, count=1):
     open(path, "w").write(t.replace(old, new, count))
 
 
+def criteria_tests(ws):
+    """Search Criteria from the builder must reach the report exactly as the person running
+    it types them: one exact name per input (it is the launch-form label AND the binding
+    key), the registration eSeries needs (REQUIRED, lookup list), and a rule that reads and
+    applies every input. A misspelt name is not an error in eSeries - just an empty filter -
+    so each of those is proven here by breaking it."""
+    import launch_inputs as LI
+    spec = json.load(open(os.path.join(FIX, "criteria_spec.json")))
+
+    dup = json.loads(json.dumps(spec))
+    dup["criteria"][2]["params"] = ["CaseStatus"]
+    errs = LI.validate(dup)
+    check("launch inputs: two criteria with one name are refused, in words",
+          any("both named 'CaseStatus'" in e for e in errs), errs)
+    bad = json.loads(json.dumps(spec))
+    bad["criteria"][2]["params"] = ["Last Name"]
+    bad["criteria"][3]["default"] = ""
+    errs = LI.validate(bad)
+    check("launch inputs: a spaced name and a hidden criterion with no default are refused",
+          any("'Last Name'" in e for e in errs) and any("hidden but has no default" in e for e in errs), errs)
+    check("launch inputs: the fixture itself validates clean", LI.validate(spec) == [], LI.validate(spec))
+
+    proj = os.path.join(ws, "Probe Project")
+    ds = os.path.join(proj, "dup_spec.json")
+    json.dump(dict(dup, name="Dup_Probe"), open(ds, "w"))
+    rc, out = run(["python3", os.path.join(PLUGIN, "scripts", "scaffold.py"), ds,
+                   "--out", os.path.join(proj, "Dup_Probe")])
+    check("scaffold refuses a spec whose launch inputs clash", rc != 0 and "CaseStatus" in out, out)
+
+    probe = ("import json, sys; sys.path.insert(0, %r); import serve_builder as B; "
+             "c = json.load(open(%r)); c['criteria'][2]['params'] = ['CaseStatus']; "
+             "ok, msg = B.write_spec({'name': 'Dup_Page', 'project': 'Probe Project', "
+             "'template': 'tabular_list', 'sections': c['sections'], 'params': c['params'], "
+             "'criteria': c['criteria']}); print(ok, msg)"
+             % (os.path.join(PLUGIN, "scripts"), os.path.join(FIX, "criteria_spec.json")))
+    rc, out = run(["python3", "-c", probe], env={"JTI_PROJECT_ROOT": ws})
+    check("the builder refuses clashing launch inputs before writing anything",
+          out.startswith("False Search Criteria:") and "CaseStatus" in out
+          and not os.path.exists(os.path.join(proj, "Dup_Page")), out)
+
+    # a real report built from the criteria, the way a build is told to: the generated
+    # block pasted unchanged at the top, filtering only through applyLaunchInputs
+    sp = os.path.join(proj, "Crit_Probe")
+    os.makedirs(sp, exist_ok=True)
+    json.dump(spec, open(os.path.join(sp, "spec.json"), "w"), indent=1)
+    rc, out = run(["python3", os.path.join(PLUGIN, "scripts", "scaffold.py"),
+                   os.path.join(sp, "spec.json"), "--out", sp])
+    blk = os.path.join(sp, "verification", "launch_inputs.groovy")
+    if rc != 0 or not os.path.exists(blk):
+        check("scaffold writes the launch-input block and its check", False, out)
+        return
+    check("scaffold writes the launch-input block and its check",
+          os.path.exists(os.path.join(sp, "verification", "launch_inputs_check.groovy")))
+    r = os.path.join(sp, "Crit_Probe_V1.groovy")
+    open(r, "w").write(open(blk).read() + open(os.path.join(FIX, "criteria_rule_tail.groovy")).read())
+    fx = os.path.join(sp, "verification", "fixture.py")
+    t = re.sub(r'ROWS = \[\n.*?\n\]', 'ROWS = [\n    ("CF-2026-00184", "Felony"),\n]', open(fx).read(), flags=re.S)
+    open(fx, "w").write(re.sub(r'"(rptSubtitle|rptSlug)": "TODO [^"]*"', lambda m: f'"{m.group(1)}": "probe"', t))
+
+    def cgates(folder):
+        return run([os.path.join(PLUGIN, "scripts", "finish.sh"), "Crit_Probe_V1.groovy",
+                    "Crit_Probe.jrxml", "--code", "Crit_Probe", "--name", "Crit Probe"], cwd=folder)
+    if not JRS:
+        skip("launch inputs: a rule built from the criteria passes every gate", "no JasperReports")
+        return
+    rc, out = cgates(sp)
+    check("launch inputs: a rule built from the criteria passes every gate, each input checked",
+          rc == 0 and out.count("PASS  launch inputs:") >= 10 and "FAIL" not in out, out[-1500:])
+    reg = open(os.path.join(sp, "RULE_REGISTRATION.txt")).read() if rc == 0 else ""
+    check("RULE_REGISTRATION says what the person running the report enters, per input",
+          "WHAT THE PERSON RUNNING THE REPORT ENTERS" in reg and "FilingDateFrom / FilingDateTo" in reg
+          and "(no input) Open only" in reg, reg[-800:])
+    import zipfile
+    zp = os.path.join(sp, "RULE-Crit_Probe.zip")
+    xml = zipfile.ZipFile(zp).read("RULE=Crit_Probe.xml").decode() if os.path.exists(zp) else ""
+    check("the RULE zip registers a required pick-list input as REQUIRED with its lookup list",
+          "&lt;type&gt;REQUIRED&lt;/type&gt;" in xml and "&lt;lookupListName&gt;CASE_STATUS&lt;" in xml, xml[:300])
+
+    b = mutate(sp, ws, "misnamed_input", lambda f: edit(os.path.join(f, "Crit_Probe_V1.groovy"),
+                                                        "launchInput('_LastName')", "launchInput('_Lastname')"))
+    rc, out = cgates(b)
+    check("a rule that reads a launch input under the wrong name is rejected",
+          rc != 0 and "FAIL  launch inputs: 'LastName'" in out, out[-800:])
+    b = mutate(sp, ws, "ignored_inputs", lambda f: edit(os.path.join(f, "Crit_Probe_V1.groovy"),
+                                                        "\ndef w = applyLaunchInputs(new Where())", "\ndef w = new Where()"))
+    rc, out = cgates(b)
+    check("a rule that never applies the launch inputs is rejected",
+          rc != 0 and "FAIL  launch inputs: 'CaseStatus'" in out, out[-800:])
+
+
 def main():
     print("\n  jti-reports regression suite")
     print(f"  plugin {PLUGIN}")
@@ -217,6 +307,8 @@ def main():
                    rule(b), os.path.join(b, "Probe_Report.jrxml"), "--code", "X"], cwd=b)
     check("rule_zip refuses to write a zip on a contract fault",
           rc != 0 and not os.path.exists(os.path.join(b, "RULE-X.zip")), out)
+
+    criteria_tests(ws)
 
     # jti_style generate-time guards
     probe = ("import sys; sys.path.insert(0, %r); import jti_style as S; "

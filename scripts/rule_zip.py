@@ -28,7 +28,7 @@ layout. Fix the contract, do not fix the zip.
 
 IMPORTING IS A WRITE. This writes a file; it never touches an environment.
 """
-import sys, os, re, argparse
+import sys, os, re, argparse, json
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, '..', 'skills', 'report-deployment', 'scripts'))
@@ -90,7 +90,19 @@ def main():
         print("\n  Contract fault - not writing a zip. Fix the rule or the jrxml.")
         sys.exit(1)
 
-    inputs = [rule_import.parse_param(f'{n}:{c}') for n, c in declared]
+    # REQUIRED and the lookup list come from the Search Criteria in spec.json, when the report
+    # has one: they belong to the rule's input registration, not to the .jrxml. Without a spec
+    # every input stays OPTIONAL with no list, as before.
+    launch, lines = {}, []
+    spec_path = os.path.join(os.path.dirname(os.path.abspath(a.jrxml)), 'spec.json')
+    if os.path.exists(spec_path):
+        import launch_inputs as LI
+        spec = json.load(open(spec_path, encoding='utf8'))
+        launch, lines = LI.rule_inputs(spec), LI.registration(spec)
+    def param_spec(n, c):
+        li = launch.get(n) or {}
+        return f"{n}:{c}" + (f":{li['lookup']}" if li.get('lookup') else '') + (':REQUIRED' if li.get('required') else '')
+    inputs = [rule_import.parse_param(param_spec(n, c)) for n, c in declared]
     outputs = [rule_import.parse_param('data:java.util.List:REQUIRED')]
 
     code = a.code or os.path.basename(a.groovy).split('.')[0]
@@ -115,7 +127,8 @@ def main():
     # contract_docs.py; finish.sh re-runs this on every iteration.
     present = SELF_SUPPLIED & set(re.findall(r'<parameter\\s+name="([^"]+)"',
                                             open(a.jrxml, encoding='utf8').read()))
-    reg, con = contract_docs.write(out_dir, meta, inputs, outputs, present, a.jrxml, a.template)
+    reg, con = contract_docs.write(out_dir, meta, inputs, outputs, present, a.jrxml, a.template,
+                                   launch_lines=lines)
     for f in (reg, con):
         print(f"  wrote  {os.path.basename(f)}")
     print("\n  Fill the NOTES block in each - the generated part is the mechanical half only.")

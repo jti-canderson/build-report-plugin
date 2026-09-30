@@ -65,7 +65,7 @@ def fields(jrxml):
     return re.findall(r'<field\s+name="([^"]+)"(?:\s+class="([^"]+)")?', xml)
 
 
-def write(out_dir, meta, inputs, outputs, self_supplied, jrxml, template=None):
+def write(out_dir, meta, inputs, outputs, self_supplied, jrxml, template=None, launch_lines=None):
     reg = os.path.join(out_dir, 'RULE_REGISTRATION.txt')
     con = os.path.join(out_dir, 'JRXML_CONTRACT.txt')
     name = meta['name']
@@ -83,7 +83,12 @@ def write(out_dir, meta, inputs, outputs, self_supplied, jrxml, template=None):
          "Engine           SCRIPT", "",
          "INPUT PARAMETERS   (bare name, no leading underscore - the rule reads _Name)"]
     for p in inputs:
-        L.append(f"  {p['name']:<12} {p['type']:<10} {p['className']}")
+        L.append(f"  {p['name']:<12} {p['type']:<10} {p['className']}"
+                 + (f"   lookup list {p['lookupListName']}" if p.get('lookupListName') else ''))
+    if launch_lines:
+        L += ["", "WHAT THE PERSON RUNNING THE REPORT ENTERS   (from the Search Criteria in spec.json)",
+              "The launch form shows each input under exactly this name. Blank = that criterion is off."]
+        L += launch_lines
     L += ["", "OUTPUT PARAMETER   <- WITHOUT THIS THE REPORT RENDERS A BLANK PAGE AND REPORTS SUCCESS"]
     for p in outputs:
         L.append(f"  {p['name']:<12} {p['type']:<10} {p['className']}")

@@ -391,6 +391,16 @@ def main():
         if not spec.get(k):
             print(f"  spec is missing '{k}'"); sys.exit(2)
 
+    # Launch inputs: a name is both the launch-form label and the binding key, so a bad or
+    # duplicated one is refused here, before it is baked into the .jrxml and the rule.
+    import launch_inputs as LI
+    bad = LI.validate(spec)
+    if bad:
+        print("  the Search Criteria cannot be built as they stand:")
+        for e in bad:
+            print(f"    - {e}")
+        sys.exit(2)
+
     # Refuse at scaffold time rather than emitting a gen_jrxml.py that dies on first run.
     kw = build_kwargs(spec['template'])
     if kw is None:
@@ -443,6 +453,17 @@ def main():
     files = [(os.path.join('verification', 'fixture.py'), gen_fixture(spec, declared), False),
              (os.path.join('verification', 'Fixture.groovy'), gen_groovy_fixture(spec), False),
              (os.path.join('verification', 'run.sh'), gen_run(spec), True)]
+    # Search Criteria picked in the builder: the block the rule pastes in, and the check the
+    # gates run on it. REGENERATED every time (like the .jrxml) - they are derived, never edited.
+    li_block, li_check = LI.gen_block(spec), LI.gen_check(spec)
+    for rel, body in ((os.path.join('verification', 'launch_inputs.groovy'), li_block),
+                      (os.path.join('verification', 'launch_inputs_check.groovy'), li_check)):
+        pth = os.path.join(out, rel)
+        if body:
+            open(pth, 'w', encoding='utf8').write(body)
+            print(f"  wrote   {rel}  ({len(body.splitlines())} lines)")
+        elif os.path.exists(pth):
+            os.remove(pth)
     for rel, body, ex in files:
         p = os.path.join(out, rel)
         if os.path.exists(p) and not force:

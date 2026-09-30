@@ -95,8 +95,11 @@ def result = [gate: null, rc: 0]
 if (argv.fixture && new File(argv.fixture).exists()) {
     def dateHad = Date.metaClass.respondsTo(new Date(), 'format', String)
     t.ruleStart = System.nanoTime()
-    def rc = runScript(new File(argv.skill, "scripts/rulecheck.groovy"),
-                       ["--rule", argv.rule, "--jrxml", argv.jrxml, "--fixture", argv.fixture])
+    def rcArgs = ["--rule", argv.rule, "--jrxml", argv.jrxml, "--fixture", argv.fixture]
+    // the same Search Criteria check finish.sh passes (scaffold.py writes it from spec.json)
+    if (new File("verification/launch_inputs_check.groovy").exists())
+        rcArgs += ["--assert", "verification/launch_inputs_check.groovy"]
+    def rc = runScript(new File(argv.skill, "scripts/rulecheck.groovy"), rcArgs)
     t.ruleEnd = System.nanoTime()
     if (!dateHad) GroovySystem.metaClassRegistry.removeMetaClass(Date)
     if (rc != 0) result = [gate: "rule", rc: rc]

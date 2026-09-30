@@ -421,6 +421,19 @@ def write_spec(payload):
         if not s.get("cols"):
             return False, f"Section {s.get('key') or '?'} has no columns."
 
+    # The launch inputs are checked here with the same rules scaffold applies, so a clash is
+    # refused in the page - in words - instead of after Claude has started the build. A name
+    # is both the launch-form label and the key eSeries binds the rule's input by.
+    try:
+        import launch_inputs as LI
+        errs = LI.validate({"criteria": [c for c in (payload.get("criteria") or []) if isinstance(c, dict)],
+                            "params": [p for p in (payload.get("params") or [])
+                                       if isinstance(p, (list, tuple)) and len(p) == 2]})
+    except Exception as e:                      # malformed input is refused, never half-written
+        errs = [f"the search criteria could not be read ({type(e).__name__})"]
+    if errs:
+        return False, "Search Criteria: " + "; ".join(errs[:3]) + ("" if len(errs) <= 3 else f" (+{len(errs) - 3} more)")
+
     out = folder / name
     out.mkdir(parents=True, exist_ok=True)
     spec = {k: payload.get(k) for k in
@@ -443,7 +456,7 @@ def write_spec(payload):
             op = str(c.get("operator") or c.get("kind") or "EQUALS")
             k = {"path": str(c.get("path") or "")[:300], "operator": op if op in OPS else "EQUALS",
                  "params": [str(x)[:60] for x in c["params"]][:2]}
-            for key, cap in (("label", 120), ("lookup", 80), ("lookupFormat", 20), ("default", 200), ("type", 20)):
+            for key, cap in (("label", 120), ("lookup", 80), ("default", 200), ("type", 20)):
                 if c.get(key):
                     k[key] = str(c[key])[:cap]
             for key in ("multi", "required", "hidden"):

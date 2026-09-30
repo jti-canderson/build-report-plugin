@@ -89,6 +89,10 @@ echo "== 1.5/4  rule executes ==================================="
 # about whether a traversal resolves - the fixture answers every property. Only eSeries
 # settles that.
 FX=verification/Fixture.groovy
+# The Search Criteria check scaffold.py writes from spec.json: each launch input must reach its
+# filter with the value a person would enter (see scripts/launch_inputs.py).
+LAUNCH_CHECK=""
+[ -f verification/launch_inputs_check.groovy ] && LAUNCH_CHECK=verification/launch_inputs_check.groovy
 if [ -f "$FX" ]; then
   SK="$ROOT/skills/jasper-reports"
   JRS="${JRS:-/Applications/jasperreports-server-9.0.0}"
@@ -96,7 +100,7 @@ if [ -f "$FX" ]; then
   rlog=$(mktemp); rrc=0
   "$JRS/java/bin/java" -Djava.awt.headless=true -cp "$RC" groovy.ui.GroovyMain \
     "$SK/scripts/rulecheck.groovy" --rule "$RULE" --jrxml "$JRXML" --fixture "$FX" \
-    >"$rlog" 2>&1 || rrc=$?
+    ${LAUNCH_CHECK:+--assert "$LAUNCH_CHECK"} >"$rlog" 2>&1 || rrc=$?
   grep -vE '^\s+at |^\s+\.\.\. |log4j|SLF4J|Illegal reflective|^$' "$rlog" || true
   rm -f "$rlog"
   [ $rrc -eq 0 ] || fail 1.5 "the rule did not execute cleanly"

@@ -83,7 +83,8 @@ class Where {
 }
 class DomainObject {
     static List SEARCH_RESULTS = []
-    static List find(Object... a) { SEARCH_RESULTS }
+    static List QUERIES = []           // every find() call's arguments, for the launch-input check
+    static List find(Object... a) { QUERIES << (a as List); SEARCH_RESULTS }
     static Object get(Object... a) { SEARCH_RESULTS ? SEARCH_RESULTS[0] : null }
 }
 class LookupItem {
@@ -116,7 +117,9 @@ rootClass.FIXTURE_ID = ID as Long
 // harness must too - passing a Long here would hide a missing coercion in the rule.
 def run = { Map params ->
     def b = new Binding()
-    params.each { k, v -> if (v != null) b.setVariable(k, v.toString()) }
+    gcl.loadClass('DomainObject').QUERIES.clear()
+    // A multi-select arrives as a Collection; anything else as a String.
+    params.each { k, v -> if (v != null) b.setVariable(k, (v instanceof Collection) ? v : v.toString()) }
     new GroovyShell(gcl, b).evaluate(new File(argv.rule))
     b.hasVariable('_data') ? b.getVariable('_data') : null
 }
@@ -181,7 +184,9 @@ ck("an unresolvable id still returns at least one row", missing != null && !miss
 if (argv.assert) {
     println ""
     def ab = new Binding([rows: rows, ck: ck, fields: FIELDS, fixture: fixture,
-                          run: run, rootClass: rootClass])
+                          run: run, rootClass: rootClass,
+                          queries: { -> gcl.loadClass('DomainObject').QUERIES },
+                          ID_PARAMS: PARAMS.collectEntries { ["_${it}", ID] }])
     new GroovyShell(gcl, ab).evaluate(new File(argv.assert))
 }
 

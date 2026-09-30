@@ -1,0 +1,93 @@
+{
+  "name": "Crit_Probe",
+  "title": "Crit Probe",
+  "template": "tabular_list",
+  "sections": [
+    {
+      "key": "ROWS",
+      "title": "Rows",
+      "cols": [
+        [
+          "Case Number",
+          40,
+          "Left",
+          "caseNumber"
+        ],
+        [
+          "Case Type",
+          60,
+          "Left",
+          "caseType"
+        ]
+      ]
+    }
+  ],
+  "params": [
+    [
+      "CaseStatus",
+      "java.lang.String"
+    ],
+    [
+      "FilingDateFrom",
+      "java.util.Date"
+    ],
+    [
+      "FilingDateTo",
+      "java.util.Date"
+    ],
+    [
+      "LastName",
+      "java.lang.String"
+    ]
+  ],
+  "criteria": [
+    {
+      "path": "Case.caseStatus",
+      "label": "CaseStatus",
+      "operator": "IN",
+      "lookup": "CASE_STATUS",
+      "multi": true,
+      "required": true,
+      "type": "pick-list",
+      "params": [
+        "CaseStatus"
+      ]
+    },
+    {
+      "path": "Case.filingDate",
+      "label": "FilingDate",
+      "operator": "RANGE",
+      "type": "date",
+      "default": "@THIS_WEEK",
+      "params": [
+        "FilingDateFrom",
+        "FilingDateTo"
+      ]
+    },
+    {
+      "path": "Case.parties[].person.lastName",
+      "label": "LastName",
+      "operator": "CONTAINS",
+      "type": "text",
+      "params": [
+        "LastName"
+      ]
+    },
+    {
+      "path": "Case.status",
+      "label": "Open only",
+      "operator": "IN",
+      "hidden": true,
+      "default": "OPEN",
+      "type": "pick-list",
+      "params": []
+    }
+  ],
+  "variants": [
+    "full",
+    "none"
+  ],
+  "root": "Case",
+  "id": "19",
+  "why": "every kind of Search Criterion the builder makes, carried into the rule by launch_inputs.py"
+}

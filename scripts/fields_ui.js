@@ -57,13 +57,52 @@
     return [[c.name, c.type || JAVA[c.dtype] || JAVA.text]];
   }
 
+  // The same rules launch_inputs.validate applies before a build: the name is the launch-form
+  // label AND the key eSeries binds the rule's input by, so it must be one clean word, and two
+  // inputs with one name would silently receive the same value.
+  const NAME_OK = /^[A-Za-z][A-Za-z0-9_]{0,59}$/;
+  const RESERVED = new Set(['journalLogo', 'data']);
+  function problems(items) {
+    const out = [], seen = {};
+    items.forEach(c => {
+      paramsOf(c).forEach(([n]) => {
+        if (!NAME_OK.test(n)) out.push({ id: c.id, msg: `"${n || '(blank)'}" — use letters, digits and underscores, starting with a letter.` });
+        else if (RESERVED.has(n)) out.push({ id: c.id, msg: `"${n}" is a name the report already uses — pick another.` });
+        else if (seen[n]) out.push({ id: c.id, msg: `Two inputs are both named "${n}" — they would receive the same value. Rename one.` });
+        seen[n] = true;
+      });
+      if (c.dtype === 'pick-list' && c.dflt && c.dflt.split(',').some(v => c.values.includes(v.trim()) && v.trim() !== v.trim().toUpperCase()))
+        out.push({ id: c.id, warn: true, msg: `"${c.dflt}" is how the Data Dictionary labels it — the report compares CODES, so check it is the code (often ${c.dflt.toUpperCase()}).` });
+      if (c.hidden && !c.dflt && !NO_INPUT(c.operator))
+        out.push({ id: c.id, msg: `"${c.name || c.label}" is hidden but has no default — a hidden criterion needs the value it always applies.` });
+    });
+    return out;
+  }
+
+  /** what the person running the report sees and types - the same words RULE_REGISTRATION uses */
+  function howTo(c) {
+    if (c.hidden) return `Not on the launch form — always applied${c.dflt ? ' with ' + c.dflt : ''}.`;
+    if (NO_INPUT(c.operator)) return 'Not on the launch form — always applied.';
+    const blank = c.dflt ? `Left blank, it uses ${c.dflt === '@TODAY' ? 'today' : c.dflt === '@THIS_WEEK' ? 'this week' : c.dflt}.`
+      : c.required ? 'It must be filled in.' : 'Left blank, this filter is off.';
+    let what;
+    if (c.dtype === 'date') what = c.operator === 'RANGE' ? 'a start and/or end date (MM/dd/yyyy)' : 'a date (MM/dd/yyyy)';
+    else if (c.dtype === 'pick-list') what = (c.multi ? 'one or more values' : 'one value') +
+      (c.lookup ? ` from the ${c.lookup} pick-list` : ' from a pick-list') + ' (the report receives the code)';
+    else if (c.operator === 'IN' || c.operator === 'NOT_IN') what = 'one or more values, separated by commas';
+    else if (c.dtype === 'number' || c.dtype === 'decimal') what = 'a number';
+    else what = c.operator === 'CONTAINS' ? 'any part of the text' : 'text';
+    const names = paramsOf(c).map(p => p[0]).join(' and ');
+    return `Shows as ${names}; they enter ${what}. ${blank}`;
+  }
+
   function newCriterion(f, pth, opts) {
     const dt = f ? dtypeOf(f) : 'text';
-    return { id: nid(), path: pth || '', field: f ? f.name : '', label: f ? human(f.name) : '',
+    return { id: nid(), path: pth || '', field: f ? f.name : '', label: f ? pascal(f.name) : '',
              name: f ? pascal(f.name) : '', dtype: dt, lookup: f ? f.lookup || null : null,
              values: f && f.values ? f.values : [],
              operator: dt === 'date' ? 'RANGE' : dt === 'pick-list' ? 'IN' : 'EQUALS',
-             multi: dt === 'pick-list', lookupFormat: 'CODE', required: !!(opts && opts.required),
+             multi: dt === 'pick-list', required: !!(opts && opts.required),
              hidden: !!(opts && opts.hidden), dflt: (opts && opts.dflt) || '',
              type: JAVA[dt], manual: !f, open: false };
   }
@@ -288,14 +327,17 @@
       [a[i], a[j]] = [a[j], a[i]]; return a; });
     if (!items.length) return html`<div class="empty-note">No criteria yet. Add fields above — or leave it
       empty and Claude works out any launch inputs from your brief, asking only if it genuinely cannot tell.</div>`;
+    const issues = problems(items);
     return html`<ol class="items">${items.map((c, i) => {
       const ops = OPS[c.dtype] || OPS.text;
       const ps = paramsOf(c);
-      return html`<li key=${c.id} class=${'item' + (c.open ? ' open' : '')}>
+      const all = issues.filter(b => b.id === c.id), bad = all.filter(b => !b.warn);
+      return html`<li key=${c.id} class=${'item' + (c.open || all.length ? ' open' : '') + (bad.length ? ' bad' : '')}>
         <div class="ih">
           <span class="grip" aria-hidden="true">≡</span>
           <button class="ilabel" onClick=${() => upd(c.id, { open: !c.open })} aria-expanded=${c.open}>
-            <b>${c.label || c.name || 'Untitled input'}</b>
+            <b>${c.name || 'Untitled input'}</b>
+            ${c.field && html`<span class="isum">${human(c.field)}</span>`}
             ${c.lookup && html`<span class="fp-pick">${c.lookup}</span>`}
             <span class="isum">${(ops.find(o => o[0] === c.operator) || ['', ''])[1]}${c.required ? ' · required' : ''}${c.hidden ? ' · hidden' : ''}${c.dflt ? ' · default ' + c.dflt : ''}</span>
           </button>
@@ -304,23 +346,24 @@
           <button class="x" title="Move down" onClick=${() => move(i, 1)} disabled=${i === items.length - 1}>↓</button>
           <button class="x" title="Remove" onClick=${() => setItems(xs => xs.filter(x => x.id !== c.id))}>×</button>
         </div>
-        ${c.open && html`<div class="ied">
+        ${(c.open || all.length > 0) && html`<div class="ied">
           <div class="grid2">
-            <div><label>Custom Label</label><input type="text" value=${c.label} onInput=${e => upd(c.id, { label: e.target.value })}/></div>
-            <div><label>Input name (the rule reads it)</label><input type="text" value=${c.name}
-                   onInput=${e => upd(c.id, { name: e.target.value.replace(/[^A-Za-z0-9_]/g, '') })}/></div>
+            <div><label>${c.hidden || NO_INPUT(c.operator) ? 'Name (not shown on the launch form)' : 'Name on the launch form'}</label>
+              <input type="text" value=${c.name} aria-invalid=${bad.length > 0}
+                   onInput=${e => { const v = e.target.value.replace(/[^A-Za-z0-9_]/g, ''); upd(c.id, { name: v, label: v }); }}/>
+              <div class="hint">${c.hidden || NO_INPUT(c.operator) ? 'For the notes only - nothing is asked.'
+                : 'One word, no spaces. eSeries shows this exact name and hands the value to the rule by it.'}</div></div>
             <div><label>Search Op</label><select value=${c.operator} onChange=${e => upd(c.id, { operator: e.target.value })}>
               ${ops.map(([v, l]) => html`<option key=${v} value=${v}>${l}</option>`)}</select></div>
             ${c.manual && html`<div><label>Type</label><select value=${c.dtype}
                 onChange=${e => upd(c.id, { dtype: e.target.value, type: JAVA[e.target.value], operator: (OPS[e.target.value] || OPS.text)[0][0] })}>
                 ${['text', 'date', 'number', 'yes/no'].map(t => html`<option key=${t} value=${t}>${t}</option>`)}</select></div>`}
-            ${c.dtype === 'pick-list' && html`<div><label>Lookup Item Format</label>
-              <select value=${c.lookupFormat} onChange=${e => upd(c.id, { lookupFormat: e.target.value })}>
-                <option value="CODE">Code</option><option value="LABEL">Label</option><option value="CODE_AND_LABEL">Code And Label</option></select></div>`}
             <div><label>Default</label>
-              ${c.dtype === 'pick-list' && c.values.length
-                ? html`<select value=${c.dflt} onChange=${e => upd(c.id, { dflt: e.target.value })}><option value="">(none)</option>
-                    ${c.values.map((v, k) => html`<option key=${k} value=${v}>${v}</option>`)}</select>`
+              ${c.dtype === 'pick-list'
+                ? html`<input type="text" value=${c.dflt} placeholder=${'a ' + (c.lookup || 'lookup') + ' code'}
+                      onInput=${e => upd(c.id, { dflt: e.target.value.trim() })}/>
+                    <div class="hint">The CODE, as stored${c.multi ? ' (several: comma-separated)' : ''}. The Data Dictionary
+                      lists labels${c.values.length ? ' (' + c.values.slice(0, 3).join(', ') + ')' : ''}, and a label never matches.</div>`
                 : c.dtype === 'date'
                   ? html`<div class="row"><select value=${['@TODAY', '@THIS_WEEK'].includes(c.dflt) ? c.dflt : (c.dflt ? 'x' : '')}
                         onChange=${e => upd(c.id, { dflt: e.target.value === 'x' ? '' : e.target.value })}>
@@ -333,8 +376,9 @@
             ${c.dtype === 'pick-list' && html`<label class="cb"><input type="checkbox" checked=${c.multi}
                 onChange=${e => upd(c.id, { multi: e.target.checked })}/> Multi-select lookup</label>`}
           </div>
-          ${c.path ? html`<div class="note">Path <code>${c.path}</code></div>` : html`<div class="note">Typed by hand — Claude finds the field it filters from your brief.</div>`}
-          ${c.hidden && !c.dflt && !NO_INPUT(c.operator) && html`<div class="todo">A hidden criterion needs a default value — it is applied without asking.</div>`}
+          <div class="note how">${howTo(c)}</div>
+          ${c.path ? html`<div class="note">Filters <code>${c.path}</code></div>` : html`<div class="note">Typed by hand — Claude finds the field it filters from your brief.</div>`}
+          ${all.map((b, k) => html`<div key=${k} class=${b.warn ? 'note warnote' : 'todo'}>${b.msg}</div>`)}
         </div>`}
       </li>`;
     })}</ol>`;
@@ -405,5 +449,5 @@
     </div>`)}</div>`;
   }
 
-  window.JTIFields = { FieldBrowser, CriteriaList, ResultsList, newCriterion, newColumn, paramsOf, human };
+  window.JTIFields = { FieldBrowser, CriteriaList, ResultsList, newCriterion, newColumn, paramsOf, problems, howTo, human };
 })();
