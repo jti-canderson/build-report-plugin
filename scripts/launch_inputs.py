@@ -122,7 +122,7 @@ def _how(i):
         return "one or more values, separated by commas"
     if i["dtype"] in ("number", "decimal"):
         return "a number"
-    return "text"
+    return {"EQUALS": "the whole value", "equals": "the whole value", "CONTAINS": "any part of the text"}.get(i["operator"], "text")
 
 
 def registration(spec):
@@ -132,6 +132,9 @@ def registration(spec):
             continue
         what = (f"filters {i['path']} ({i['operator'].replace('_', ' ').lower()})" if i["path"]
                 else "typed by hand - see the rule for what it filters")
+        if i["path"] and not i["where"]:
+            what = (f"matched by the rule AFTER the search against {i['path']} "
+                    f"({i['operator'].replace('_', ' ').lower()}; a computed value, not a query filter)")
         flag = "REQUIRED" if i["required"] else "optional"
         dflt = f"; blank means {i['default']}" if i["default"] and not i["hidden"] else ""
         if len(i["names"]) == 2:
@@ -295,6 +298,10 @@ def gen_check(spec):
                                      "expect": {"op": "addGreaterThanOrEquals", "path": i["rel"], "on": "2026-01-15"}},
                                     {"set": {n[1]: "02/15/2026"}, "what": "only " + n[1],
                                      "expect": {"op": "addLessThanOrEquals", "path": i["rel"], "on": "2026-02-15"}}]})
+        elif dt == "date" and op in ("EQUALS", "equals") and n and not i["hidden"]:
+            # "on a date" is the whole day: addDateRange(start of day, end of day)
+            cases.append({"what": i["label"], "set": {n[0]: "01/15/2026"}, "alt": {n[0]: "2026-01-15"},
+                          "expect": {"op": "addDateRange", "path": i["rel"], "from": "2026-01-15", "to": "2026-01-15"}})
         elif op in ("IN", "NOT_IN", "in") and n and not i["hidden"]:
             cases.append({"what": i["label"], "set": {n[0]: ["V1", "V2"]}, "alt": {n[0]: "V1, V2"},
                           "single": {n[0]: "V1"},
@@ -341,6 +348,11 @@ def found = { e -> conds().find { matches(it, e) } }
 
 def r0 = run(withIds(blank))
 ck("launch inputs: with every search criterion blank the report still runs", r0 != null && !r0.isEmpty())
+// The main run fills every input with a test id, so a search report is only ever seen
+// returning its no-match row there. The blank run returns the REAL rows: check those too.
+if (r0) ck("launch inputs: with every criterion blank, each row carries exactly the report's fields",
+           r0.collect { it.keySet() as Set }.unique() == [fields as Set],
+           "key sets: ${r0.collect { (it.keySet() as Set) - fields }.unique()} extra, ${r0.collect { fields - it.keySet() }.unique()} missing")
 CASES.findAll { !it.skip && !it.expect.always }.each { cs ->
     run(withIds(blank))
     def onPath = conds().find { it.args && it.args[0]?.toString() == cs.expect.path }
