@@ -434,13 +434,38 @@ def write_spec(payload):
             isinstance(k, str) and isinstance(v, str) and len(v) < 300 for k, v in paths.items()):
         spec["paths"] = paths
     crit = payload.get("criteria")
-    if isinstance(crit, list) and crit and all(
-            isinstance(c, dict) and isinstance(c.get("path"), str)
-            and isinstance(c.get("params"), list) for c in crit):
-        spec["criteria"] = [dict({"path": c["path"], "kind": str(c.get("kind") or "equals")[:20],
-                                  "params": [str(x)[:60] for x in c["params"]][:2]},
-                                 **({"lookup": str(c["lookup"])[:80]} if c.get("lookup") else {}))
-                            for c in crit][:20]
+    OPS = {"EQUALS", "STARTS_WITH", "ENDS_WITH", "CONTAINS", "IN", "NOT_IN", "BLANK", "NOT_BLANK",
+           "GREATER_THAN", "RANGE", "range", "in", "equals"}
+    if isinstance(crit, list) and crit and all(isinstance(c, dict) and isinstance(c.get("params"), list)
+                                               for c in crit):
+        keep = []
+        for c in crit[:40]:
+            op = str(c.get("operator") or c.get("kind") or "EQUALS")
+            k = {"path": str(c.get("path") or "")[:300], "operator": op if op in OPS else "EQUALS",
+                 "params": [str(x)[:60] for x in c["params"]][:2]}
+            for key, cap in (("label", 120), ("lookup", 80), ("lookupFormat", 20), ("default", 200), ("type", 20)):
+                if c.get(key):
+                    k[key] = str(c[key])[:cap]
+            for key in ("multi", "required", "hidden"):
+                if key in c:
+                    k[key] = bool(c[key])
+            keep.append(k)
+        spec["criteria"] = keep
+    opts = payload.get("columnOptions")
+    if isinstance(opts, dict) and opts:
+        AGG = {"None", "GROUP_BY", "COUNT", "COUNT_DISTINCT", "SUM", "MAX", "MIN", "AVG", "CONCAT"}
+        clean = {}
+        for fld, o in list(opts.items())[:80]:
+            if not isinstance(o, dict):
+                continue
+            c = {"link": bool(o.get("link")), "sort": o.get("sort") if o.get("sort") in ("ASCEND", "DESCEND") else "",
+                 "aggregate": o.get("aggregate") if o.get("aggregate") in AGG else "None",
+                 "format": str(o.get("format") or "")[:40], "customFormat": str(o.get("customFormat") or "")[:200],
+                 "truncate": str(o.get("truncate") or "")[:6]}
+            if any(v for k2, v in c.items() if not (k2 == "aggregate" and v == "None")):
+                clean[str(fld)[:80]] = c
+        if clean:
+            spec["columnOptions"] = clean
     if look:
         # Copied, not referenced: a temp file disappears on reboot and the spec has to stay
         # readable weeks later, next to the report it describes.
@@ -530,6 +555,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                                     b'<script src="/build_ui.js"></script>\n'
                                     b'<script src="/app.js"></script>')
             return self._send(200, page, "text/html; charset=utf-8")
+        if path == "/fields_ui.js":
+            with open(os.path.join(HERE, "fields_ui.js"), "rb") as f:
+                return self._send(200, f.read(), "application/javascript")
         if path == "/build_ui.js" and JOBS:
             with open(os.path.join(HERE, "build_ui.js"), "rb") as f:
                 return self._send(200, f.read(), "application/javascript")

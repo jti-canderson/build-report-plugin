@@ -713,8 +713,28 @@ def run_fields(check, skip, ctx):
         s2 = json.load(open(os.path.join(ws, "Proj", "Picked_Bad", "spec.json")))
         check("fields: picked paths and filters are kept in spec.json; malformed ones dropped",
               c == 200 and s1.get("paths") == spec["paths"]
-              and s1.get("criteria") == spec["criteria"]
-              and "paths" not in s2 and "criteria" not in s2, (s1.get("paths"), s2))
+              and s1.get("criteria") == [{"path": "Case.filingDate", "operator": "range",
+                                          "params": ["FilingDateFrom", "FilingDateTo"]}]
+              and "paths" not in s2 and "criteria" not in s2, (s1.get("criteria"), s2))
+        # the eSeries-style settings: a criterion's operator / flags / default, a column's options
+        full = spec_for("Configured")
+        full["criteria"] = [{"path": "Case.caseStatus", "label": "Status", "operator": "IN", "lookup": "CASE_STATUS",
+                             "multi": True, "lookupFormat": "CODE", "required": True, "hidden": False,
+                             "default": "Open", "type": "pick-list", "params": ["CaseStatus"]},
+                            {"path": "Case.x", "operator": "rm -rf", "params": ["X"]}]
+        full["columnOptions"] = {"caseNumber": {"link": True, "sort": "DESCEND", "aggregate": "GROUP_BY",
+                                                "format": "", "customFormat": "", "truncate": "12"},
+                                 "caseType": {"link": False, "sort": "sideways", "aggregate": "EXPLODE"}}
+        srv.js("POST", "/api/spec", full)
+        s3 = json.load(open(os.path.join(ws, "Proj", "Configured", "spec.json")))
+        c0, c1 = s3["criteria"]
+        check("fields: criterion settings (operator, pick-list, required, default) and column options "
+              "(link, sort, aggregate, truncate) are kept; values outside the eSeries sets are refused",
+              c0["operator"] == "IN" and c0["multi"] is True and c0["required"] is True
+              and c0["default"] == "Open" and c0["lookup"] == "CASE_STATUS" and c1["operator"] == "EQUALS"
+              and s3["columnOptions"]["caseNumber"] == {"link": True, "sort": "DESCEND", "aggregate": "GROUP_BY",
+                                                       "format": "", "customFormat": "", "truncate": "12"}
+              and "caseType" not in s3["columnOptions"], (s3.get("criteria"), s3.get("columnOptions")))
     finally:
         srv.stop()
 

@@ -96,10 +96,14 @@ def _browse_dd(path, name, entity):
     if ent not in model:
         return {"ok": False, "reason": "no-entity", "message": f"{ent!r} is not in the Data Dictionary"}
     used = used_names(P.ROOT)
-    out = []
+    out, seen = [], {}
     for r in model[ent]:
         t, n = r["type"], r["name"]
         if HIDE.search(n) or t == "Widget":
+            continue
+        if n in seen:                    # the export can list a field twice: keep the first,
+            if not seen[n]["description"] and r["description"]:          # borrow a description
+                seen[n]["description"] = r["description"][:300]
             continue
         m_c, m_l = COLL.match(t), LOOKUP.match(t)
         if m_c:
@@ -120,6 +124,7 @@ def _browse_dd(path, name, entity):
                     "values": r["examples"][:200] if m_l else [],
                     "description": r["description"][:300], "flags": r["flags"],
                     "display": n.startswith("cf_"), "used": used.get(n, 0)})
+        seen[n] = out[-1]
     out.sort(key=lambda f: ({"value": 0, "entity": 1, "collection": 2, "opaque": 3}[f["kind"]], f["name"].lower()))
     return {"ok": True, "entity": ent, "fqcn": ent, "source": "dd", "sdk": name,
             "roots": [r for r in ROOTS if r in model], "fields": out}

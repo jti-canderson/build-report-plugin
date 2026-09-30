@@ -21,12 +21,16 @@ const TYPES = [
 // image beside it, which /build-report reads and starts from the nearest match.
 const PICTURE = '__picture__';
 const uid = (() => { let n = 0; return () => ++n; })();
-const newCol = () => ({ id: uid(), header: '', width: 20, align: 'Left', field: '' });
+const newCol = () => ({ id: uid(), header: '', width: 20, align: 'Left', field: '', link: false, sort: '',
+                        aggregate: 'None', format: '', customFormat: '', truncate: '', open: true });
 const newSection = () => ({ id: uid(), key: '', title: '', cols: [newCol(), newCol()] });
 const newParam = () => ({ id: uid(), name: '', type: TYPES[0][0] });
 // --jobs mode (/test-report) only: its session token on every upload. Empty in the default
 // mode, so those requests are exactly what they always were.
 const SESSION = { h: {} };
+window.SESSION_HEADERS = () => SESSION.h;
+const F = () => window.JTIFields;
+const DRAFT = 'jti-builder-draft';
 
 /* ---------------------------------------------------------------- folder browser */
 function FolderBrowser({ onPick, onClose }) {
@@ -126,209 +130,6 @@ function FolderBrowser({ onPick, onClose }) {
     </div>`;
 }
 
-/* --------------------------------------------------------------------- section */
-function Section({ s, set, remove, only }) {
-  const col = (id, patch) =>
-    set({ ...s, cols: s.cols.map(c => (c.id === id ? { ...c, ...patch } : c)) });
-  return html`
-    <div class="sec">
-      <div class="hd">
-        <div><label>Section key — SHOUTY, the rule uses it</label>
-          <input type="text" placeholder="ROWS" value=${s.key}
-                 onInput=${e => set({ ...s, key: e.target.value })}/></div>
-        <div><label>Heading shown on the page</label>
-          <input type="text" placeholder="Cases" value=${s.title}
-                 onInput=${e => set({ ...s, title: e.target.value })}/></div>
-        ${!only && html`<button class="x" title="remove section" onClick=${remove}>×</button>`}
-      </div>
-      <table>
-        <thead><tr>
-          <th class="c1">Column header</th><th class="c2">Width</th>
-          <th class="c3">Align</th><th>Field the rule fills</th><th class="c4"></th>
-        </tr></thead>
-        <tbody>
-          ${s.cols.map(c => html`
-            <tr key=${c.id}>
-              <td><input type="text" placeholder="Case Number" value=${c.header}
-                         onInput=${e => col(c.id, { header: e.target.value })}/></td>
-              <td><input type="text" value=${c.width}
-                         onInput=${e => col(c.id, { width: e.target.value })}/></td>
-              <td><select value=${c.align} onChange=${e => col(c.id, { align: e.target.value })}>
-                    ${['Left', 'Right', 'Center'].map(a => html`<option key=${a}>${a}</option>`)}
-                  </select></td>
-              <td><input type="text" placeholder="caseNumber" value=${c.field}
-                         onInput=${e => col(c.id, { field: e.target.value })}/>
-                  ${c.path && html`<div class="fp-code" title="from the field browser">${c.path}</div>`}</td>
-              <td>${s.cols.length > 1 && html`<button class="x"
-                    onClick=${() => set({ ...s, cols: s.cols.filter(x => x.id !== c.id) })}>×</button>`}</td>
-            </tr>`)}
-        </tbody>
-      </table>
-      <button class="mini" onClick=${() => set({ ...s, cols: [...s.cols, newCol()] })}>+ column</button>
-    </div>`;
-}
-
-/* ---------------------------------------------------------------- field browser */
-// Click through the fields the project's SDK really has: start at the root entity, drill into
-// related records and lists, and add a field as a column (mode "column") or as a launch input
-// that filters on it (mode "criteria"). Paths are exactly what the build resolves later.
-const human = n => n.replace(/^cf_/, '').replace(/([a-z0-9])([A-Z])/g, '$1 $2')
-  .replace(/_/g, ' ').replace(/^./, c => c.toUpperCase());
-
-// Laid out like the eSeries form editor's Add Data Field tab - a path dropdown for the
-// hierarchy, Quick Find, one grouped list you can pick several fields from, Current Path,
-// and the add options beside it - with defined columns and the field's details on show.
-function FieldPicker({ project, mode: startMode, addedCols, addedCrit, sections, onColumn, onFilter }) {
-  const [root, setRoot] = useState('Case');
-  const [stack, setStack] = useState([]);          // [{seg, list, entity}] below the root
-  const [data, setData] = useState(null);
-  const [q, setQ] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [upErr, setUpErr] = useState('');
-  const [reload, setReload] = useState(0);         // bumped after a dictionary is attached
-  const [sel, setSel] = useState([]);              // field names picked at this level
-  const [focus, setFocus] = useState(null);        // the field shown in the detail pane
-  const [mode, setMode] = useState(startMode);
-  const [into, setInto] = useState('');
-  const here = stack.length ? stack[stack.length - 1].entity : root;
-  useEffect(() => { setStack([]); }, [project, root]);
-  useEffect(() => {
-    let alive = true;
-    setBusy(true);
-    fetch('/api/fields?project=' + encodeURIComponent(project) + '&entity=' + encodeURIComponent(here))
-      .then(r => r.json()).then(d => { if (alive) { setData(d); setBusy(false); setQ(''); setSel([]); setFocus(null); } })
-      .catch(() => alive && (setData({ ok: false, message: 'Could not reach the builder.' }), setBusy(false)));
-    return () => { alive = false; };
-  }, [project, here, reload]);
-  const pathOf = f => [root, ...stack.map(x => x.seg + (x.list ? '[]' : '')), f.name].join('.');
-  const attach = e => {
-    const file = e.target.files && e.target.files[0];
-    if (!file) return;
-    setUpErr(''); setBusy(true);
-    file.arrayBuffer().then(buf => fetch('/api/dd?project=' + encodeURIComponent(project) +
-        '&name=' + encodeURIComponent(file.name), { method: 'POST', body: buf, headers: SESSION.h }))
-      .then(r => r.json()).then(d => { setBusy(false); d.ok ? setReload(n => n + 1) : setUpErr(d.message); })
-      .catch(() => { setBusy(false); setUpErr('Could not reach the builder.'); });
-    e.target.value = '';
-  };
-  if (data && !data.ok) return html`<div class="fp"><div class="fp-empty">${data.message}</div>
-    ${data.reason === 'no-sdk' && html`<div class="fp-attach">
-      <label>Attach the Data Dictionary for this project</label>
-      <input type="file" accept=".xlsx" disabled=${busy} onChange=${attach}/>
-      <div class="hint">In eSeries: <b>System Setup → Data Dictionary</b>, then export. It is saved
-        in the project folder and used for every report built there.</div>
-      ${upErr && html`<div class="out err">${upErr}</div>`}</div>`}</div>`;
-
-  const added = mode === 'column' ? addedCols : addedCrit;
-  const all = (data && data.fields) || [];
-  const ql = q.trim().toLowerCase();
-  const shown = all.filter(f => !ql || f.name.toLowerCase().includes(ql) || human(f.name).toLowerCase().includes(ql)
-                                || (f.description || '').toLowerCase().includes(ql));
-  const levels = [{ label: root, depth: 0 },
-                  ...stack.map((x, i) => ({ label: human(x.seg) + (x.list ? ' (each)' : ''), depth: i + 1 }))];
-  const open = f => setStack(s => [...s, { seg: f.name, list: f.kind === 'collection', entity: f.target }]);
-  const pick = f => {
-    setFocus(f);
-    if (added.has(pathOf(f))) return;
-    setSel(s => (s.includes(f.name) ? s.filter(n => n !== f.name) : [...s, f.name]));
-  };
-  const chosen = all.filter(f => sel.includes(f.name));
-  const doAdd = () => {
-    chosen.forEach(f => { const p = pathOf(f); if (!added.has(p)) (mode === 'column' ? onColumn(f, p, into) : onFilter(f, p)); });
-    setSel([]);
-  };
-  const GROUPS = [['value', 'Plain Fields'], ['rel', 'Entity Fields'], ['opaque', 'Other lists']];
-  const inGroup = (f, k) => (k === 'rel' ? (f.kind === 'entity' || f.kind === 'collection') : f.kind === k);
-
-  return html`<div class="fs">
-    <div class="fs-left">
-      <div class="fs-tools">
-        ${data && data.roots && html`<select class="fs-root" title="Start from" value=${root}
-            onChange=${e => setRoot(e.target.value)}>
-            ${data.roots.map(r => html`<option key=${r} value=${r}>${r}</option>`)}</select>`}
-        <select class="fs-path" title="Entity path" value=${stack.length}
-                onChange=${e => setStack(s => s.slice(0, Number(e.target.value)))}>
-          ${levels.map(l => html`<option key=${l.depth} value=${l.depth}>${' '.repeat(l.depth)}${l.depth ? '› ' : ''}${l.label}</option>`)}
-        </select>
-        <div class="fs-find"><span class="ico">⌕</span>
-          <input type="text" placeholder="Quick Find" value=${q} onInput=${e => setQ(e.target.value)}/></div>
-      </div>
-      <div class="fs-scroll">
-        ${busy ? html`<div class="fp-empty"><span class="spin1"/> Reading ${here}…</div>` : html`
-        <table class="fs-table">
-          <thead><tr><th class="ck"></th><th>Field</th><th class="ty">Type</th><th class="li">List</th><th>Description</th></tr></thead>
-          <tbody>
-            ${GROUPS.map(([k, title]) => {
-              const g = shown.filter(f => inGroup(f, k));
-              return g.length > 0 && html`<${React.Fragment} key=${k}>
-                <tr class="grp"><td colspan="5">${title}<span>${g.length}</span></td></tr>
-                ${g.map(f => {
-                  const pth = pathOf(f);
-                  if (k === 'rel') return html`<tr key=${f.name} class="nav" onClick=${() => open(f)} title="Open ${human(f.name)}">
-                    <td class="ck go">›</td>
-                    <td><b>${human(f.name)}</b><div class="code">${f.name}${f.kind === 'collection' ? '[]' : ''}</div></td>
-                    <td class="ty">${f.kind === 'collection' ? 'list of ' + f.targetShort : f.targetShort}</td><td class="li"></td>
-                    <td class="de">${f.description}</td></tr>`;
-                  if (k === 'opaque') return html`<tr key=${f.name} class="dim"><td class="ck"></td>
-                    <td><b>${human(f.name)}</b><div class="code">${f.name}</div></td>
-                    <td class="ty">list</td><td class="li"></td><td class="de">The model does not say what this list holds.</td></tr>`;
-                  const done = added.has(pth), on = sel.includes(f.name);
-                  return html`<tr key=${f.name} class=${(on ? 'on ' : '') + (done ? 'done ' : '') + (focus && focus.name === f.name ? 'focus' : '')}
-                      onClick=${() => pick(f)}>
-                    <td class="ck">${done ? html`<span class="tick">✓</span>` : html`<input type="checkbox" checked=${on} readOnly/>`}</td>
-                    <td><b>${human(f.name)}</b><div class="code">${f.name}</div></td>
-                    <td class="ty">${f.label}</td>
-                    <td class="li">${f.lookup && html`<span class="fp-pick">${f.lookup}</span>`}</td>
-                    <td class="de">${f.description}${f.used > 0 && !f.description ? html`<span class="fp-used">in your rules</span>` : ''}</td></tr>`;
-                })}<//>`;
-            })}
-            ${shown.length === 0 && html`<tr><td colspan="5" class="fp-empty">No field on ${here} matches "${q}".</td></tr>`}
-          </tbody>
-        </table>`}
-      </div>
-      <div class="fp-foot">${data ? data.sdk : ''} · ${data && data.source === 'dd' ? 'Data Dictionary' : 'SDK'} ·
-        ${all.length} fields on ${data && data.entity}</div>
-    </div>
-
-    <div class="fs-right">
-      <div class="fs-cur"><span class="k">Current Path</span>
-        <div class="crumbs">${levels.map((l, i) => html`<${React.Fragment} key=${i}>
-          ${i > 0 && html`<span class="sep">›</span>`}
-          <button class="fp-crumb" onClick=${() => setStack(s => s.slice(0, i))}>${l.label}</button><//>`)}</div></div>
-
-      ${focus ? html`<div class="fs-detail">
-          <div class="nm">${human(focus.name)}</div>
-          <div class="code">${pathOf(focus)}</div>
-          <div class="chips"><span class="chip2">${focus.label}</span>
-            ${focus.lookup && html`<span class="chip2 pick">${focus.lookup}</span>`}
-            ${(focus.flags || []).map(x => html`<span key=${x} class="chip2">${x}</span>`)}</div>
-          ${focus.description && html`<p>${focus.description}</p>`}
-          ${focus.values && focus.values.length > 0 && html`<div class="vals">
-            <div class="k">Values (${focus.values.length})</div>
-            <div class="vlist">${focus.values.slice(0, 18).map((v, i) => html`<span key=${i}>${v}</span>`)}
-              ${focus.values.length > 18 && html`<em>+${focus.values.length - 18} more</em>`}</div></div>`}
-        </div>`
-      : html`<div class="fs-detail empty">Pick fields in the list - several at once if you like.
-          Click an Entity Field to open the fields inside it.</div>`}
-
-      <div class="fs-opts">
-        <div class="k">Add as</div>
-        <div class="seg">
-          <button class=${mode === 'column' ? 'on' : ''} onClick=${() => setMode('column')}>Result column</button>
-          <button class=${mode === 'criteria' ? 'on' : ''} onClick=${() => setMode('criteria')}>Filter (launch input)</button>
-        </div>
-        ${mode === 'column' && sections.length > 1 && html`<label class="mt12">Into</label>
-          <select value=${into} onChange=${e => setInto(e.target.value)}>
-            ${sections.map(s => html`<option key=${s.id} value=${s.id}>${s.label}</option>`)}</select>`}
-        <div class="hint">${mode === 'column' ? 'Each field becomes a column; its path goes to the build.'
-                                              : 'A date becomes a From / To pair; a pick-list offers its values.'}</div>
-        <button class="go block mt12" disabled=${chosen.length === 0} onClick=${doAdd}>
-          ${chosen.length ? `Add ${chosen.length} field${chosen.length === 1 ? '' : 's'}` : 'Add Field(s)'}</button>
-      </div>
-    </div>
-  </div>`;
-}
-
 /* ------------------------------------------------------------------------- app */
 function App() {
   const [boot, setBoot] = useState(null);
@@ -339,9 +140,8 @@ function App() {
   const [title, setTitle] = useState('');
   const [intent, setIntent] = useState('');
   const [sections, setSections] = useState([newSection()]);
-  const [params, setParams] = useState([]);          // optional: none until someone adds one
-  const [pickCols, setPickCols] = useState(false);
-  const [pickCrit, setPickCrit] = useState(false);
+  const [criteria, setCriteria] = useState([]);      // Search Criteria - optional
+  const [draftAt, setDraftAt] = useState(null);
   const [busy, setBusy] = useState(false);
   const [res, setRes] = useState(null);
   const [imported, setImported] = useState(null);
@@ -410,6 +210,18 @@ function App() {
     fetch('/api/bootstrap').then(r => r.json()).then(d => {
       setBoot(d);
       if (d.projects.length) setProject(d.projects[0].name);
+      // A draft of this form - criteria and columns included - survives a reload. It lives in
+      // this browser only; the submitted spec.json is the record.
+      try {
+        const dr = JSON.parse(localStorage.getItem(DRAFT) || 'null');
+        if (dr && dr.v === 1) {
+          if (dr.project !== undefined) setProject(dr.project);
+          setTpl(dr.tpl || ''); setName(dr.name || ''); setTitle(dr.title || ''); setIntent(dr.intent || '');
+          if (Array.isArray(dr.sections) && dr.sections.length) setSections(dr.sections);
+          if (Array.isArray(dr.criteria)) setCriteria(dr.criteria);
+          setDraftAt(dr.at || null);
+        }
+      } catch (e) { /* no storage: the form still works */ }
       if (d.jobs && window.JTIBuild) {
         SESSION.h = { 'X-JTI-Session': d.jobs.session };
         // A refresh comes back to its build - if the server still knows it. A job from an
@@ -422,6 +234,15 @@ function App() {
       }
     });
   }, []);
+
+  useEffect(() => {
+    if (!boot) return;
+    const t = setTimeout(() => {
+      try { localStorage.setItem(DRAFT, JSON.stringify({ v: 1, at: Date.now(), project, tpl, name, title, intent, sections, criteria })); }
+      catch (e) { /* ignore */ }
+    }, 300);
+    return () => clearTimeout(t);
+  }, [boot, project, tpl, name, title, intent, sections, criteria]);
 
   // Is Claude parked on /api/wait? Shown live, because the answer decides what the Write
   // button DOES - hand the spec straight over, or print a command to copy - and a user who
@@ -468,12 +289,16 @@ function App() {
           cols: s.cols.filter(c => c.header.trim() && c.field.trim())
                       .map(c => [c.header.trim(), Number(c.width) || 20, c.align, c.field.trim()]),
         })).filter(s => s.cols.length),
-        params: params.filter(p => p.name.trim()).map(p => [p.name.trim(), p.type]),
+        params: criteria.filter(c => c.name.trim()).flatMap(c => F().paramsOf(c)),
         paths: Object.fromEntries(sections.flatMap(s => s.cols.filter(c => c.path && c.field.trim())
           .map(c => [c.field.trim(), c.path]))),
-        criteria: Object.values(params.filter(p => p.path && p.name.trim()).reduce((acc, p) => {
-          (acc[p.group] = acc[p.group] || { path: p.path, kind: p.kind, lookup: p.lookup || null, params: [] }).params.push(p.name.trim());
-          return acc; }, {})),
+        criteria: criteria.filter(c => c.name.trim()).map(c => ({
+          path: c.path, label: c.label, operator: c.operator, lookup: c.lookup, multi: c.multi,
+          lookupFormat: c.lookupFormat, required: c.required, hidden: c.hidden, default: c.dflt,
+          type: c.dtype, params: F().paramsOf(c).map(p => p[0]) })),
+        columnOptions: Object.fromEntries(sections.flatMap(s => s.cols.filter(c => c.field.trim()).map(c =>
+          [c.field.trim(), { link: !!c.link, sort: c.sort || '', aggregate: c.aggregate || 'None',
+                             format: c.format || '', customFormat: c.customFormat || '', truncate: c.truncate || '' }]))),
       }),
     }).then(r => r.json()).then(d => {
       setBusy(false);
@@ -485,40 +310,30 @@ function App() {
   };
   const another = () => { window.JTIBuild.remember(null); setJob(null); setRes(null); setName(''); };
 
-  // ---- field-browser picks: a column, or a launch input that filters on the field
+  // ---- the two add panes: Search Criteria and Result Columns
   const colPaths = new Set(sections.flatMap(s => s.cols.filter(c => c.path).map(c => c.path)));
-  const critPaths = new Set(params.filter(p => p.path).map(p => p.path));
-  const addColumn = (f, pth, secId) => {
-    setSections(xs => {
-      const taken = new Set(xs.flatMap(s => s.cols.map(c => c.field)));
-      const segs = pth.split('.').slice(1).map(x => x.replace('[]', ''));
-      let key = f.name.replace(/^cf_/, '');
-      for (let i = segs.length - 2; taken.has(key) && i >= 0; i--)
-        key = segs[i] + key[0].toUpperCase() + key.slice(1);
-      const col = { id: uid(), header: human(f.name), width: 20, align: 'Left', field: key, path: pth };
-      const at = Math.max(0, xs.findIndex(s => String(s.id) === String(secId)));
-      return xs.map((sec, i) => i !== at ? sec : { ...sec, key: sec.key || 'ROWS',
-        cols: [...sec.cols.filter(c => c.header.trim() || c.field.trim()), col] });
-    });
-    setSecOpen(true);
-  };
-  const addCriteria = (f, pth) => {
-    const base = human(f.name).replace(/\s+/g, '');
-    const date = f.label === 'date', num = f.label === 'number';
-    const group = uid();
-    const rows = date
-      ? [['From', 'java.util.Date'], ['To', 'java.util.Date']].map(([sfx, t]) =>
-          ({ id: uid(), name: base + sfx, type: t, path: pth, kind: 'range', group }))
-      : [{ id: uid(), name: base, type: num ? 'java.lang.Integer' : 'java.lang.String', path: pth,
-           kind: num ? 'equals' : 'in', group, lookup: f.lookup || null }];
-    setParams(xs => [...xs.filter(p => p.name.trim()), ...rows]);
-  };
+  const critPaths = new Set(criteria.filter(c => c.path).map(c => c.path));
+  // A path already in the list is never added twice, however the add was triggered.
+  const addCriteria = (items, opts) => setCriteria(xs => {
+    const have = new Set(xs.map(c => c.path).filter(Boolean));
+    return [...xs, ...items.filter(({ pth }) => !have.has(pth)).map(({ f, pth }) => F().newCriterion(f, pth, opts))];
+  });
+  const addColumns = (items, opts) => setSections(xs => {
+    const taken = new Set(xs.flatMap(s => s.cols.map(c => c.field)));
+    const have = new Set(xs.flatMap(s => s.cols.map(c => c.path)).filter(Boolean));
+    const cols = items.filter(({ pth }) => !have.has(pth)).map(({ f, pth }) => { const c = F().newColumn(f, pth, opts, taken); taken.add(c.field); return c; });
+    const at = Math.max(0, xs.findIndex(s => String(s.id) === String(opts.into)));
+    return xs.map((sec, i) => i !== at ? sec : { ...sec, key: sec.key || 'ROWS',
+      cols: [...sec.cols.filter(c => c.header.trim() || c.field.trim() || c.path), ...cols] });
+  });
+  const sectionList = sections.map((sc, i) => ({ id: sc.id, label: sc.title || sc.key || 'Section ' + (i + 1) }));
+  const startOver = () => { try { localStorage.removeItem(DRAFT); } catch (e) {} location.reload(); };
 
   const tplObj = boot.templates.find(t => t.module === tpl);
   const projObj = boot.projects.find(p => p.name === project);
   const tplDone = !!tpl && (tpl !== PICTURE || !!look);
   const contentDone = realCols > 0 || hasBrief || (tpl === PICTURE && !!look);
-  const namedInputs = params.filter(p => p.name.trim()).map(p => p.name.trim());
+  const namedInputs = criteria.filter(c => c.name.trim()).map(c => c.label || c.name);
   const canBuild = !(busy || !tpl || (tpl === PICTURE && !look) || needsSay);
   const Num = ({ n, done }) => html`<div class="num">${done ? '✓' : n}</div>`;
 
@@ -657,72 +472,29 @@ function App() {
             </div>
           </section>
 
-          <section class=${'step' + (secOpen ? ' open' : '') + (realCols > 0 ? ' done' : '')}>
-            <button type="button" class="step-h" onClick=${() => setSecOpen(o => !o)}>
-              <${Num} n="5" done=${realCols > 0}/>
-              <div><h2>Sections and columns<span class="opt">optional</span></h2>
-                <p class="lead h2sum">${realCols > 0
-                  ? `${sections.length} section${sections.length === 1 ? '' : 's'}, ${realCols} column${realCols === 1 ? '' : 's'}${secOpen ? '' : ' — click to edit'}`
-                  : hasBrief
-                    ? 'None typed — Claude will build them from your brief'
-                    : 'None yet — type them here, or describe the report in the brief above'}</p></div>
-              <span class="right chev">${secOpen ? '−' : '+'}</span>
-            </button>
-            ${secOpen && html`<${React.Fragment}>
-              <div class="pickbar">
-                <button class=${'mini' + (pickCols ? ' on' : '')} onClick=${() => setPickCols(o => !o)}>
-                  ${pickCols ? 'Hide fields' : 'Browse fields'}</button>
-                <span class="hint">Click through the fields this project's eSeries really has, and
-                  add them as columns — or type them below.</span>
-              </div>
-              ${pickCols && html`<${FieldPicker} mode="column" project=${project} addedCols=${colPaths} addedCrit=${critPaths}
-                  sections=${sections.map((sc, i) => ({ id: sc.id, label: sc.title || sc.key || 'Section ' + (i + 1) }))}
-                  onColumn=${addColumn} onFilter=${addCriteria}/>`}
-              <div class="hint">One section per grid. Widths are relative — they get scaled to
-                the page, so they need not add to 100.</div>
-              ${sections.map(s => html`
-                <${Section} key=${s.id} s=${s} only=${sections.length === 1}
-                  set=${u => setSections(xs => xs.map(x => (x.id === s.id ? u : x)))}
-                  remove=${() => setSections(xs => xs.filter(x => x.id !== s.id))}/>`)}
-              <button class="mini" onClick=${() => setSections(xs => [...xs, newSection()])}>
-                + section</button>
-            <//>`}
+          <section class=${'step' + (criteria.length ? ' done' : '')}>
+            <div class="step-h"><${Num} n="5" done=${criteria.length > 0}/>
+              <div><h2>Search Criteria<span class="opt">optional</span></h2><p class="lead">What the person
+                running the report fills in to narrow it down — its launch inputs. Pick the fields; set each
+                one's operator, default and behaviour in the list below.</p></div></div>
+            <${F().FieldBrowser} project=${project} purpose="criteria" taken=${critPaths} sections=${sectionList}
+                                  onAdd=${addCriteria}/>
+            <div class="listhead"><h3>Search Criteria Fields</h3><span>${criteria.length}</span>
+              <button class="mini" onClick=${() => setCriteria(xs => [...xs, { ...F().newCriterion(null, '', {}), open: true }])}>+ Input by hand</button></div>
+            <${F().CriteriaList} items=${criteria} setItems=${setCriteria}/>
           </section>
 
-          <section class="step">
-            <div class="step-h"><${Num} n="6" done=${namedInputs.length > 0}/>
-              <div><h2>Launch inputs<span class="opt">optional</span></h2><p class="lead">What
-                the person running the report fills in to narrow it down — a date range, a case
-                type.</p></div></div>
-            <div class="pickbar">
-              <button class=${'mini' + (pickCrit ? ' on' : '')} onClick=${() => setPickCrit(o => !o)}>
-                ${pickCrit ? 'Hide fields' : 'Browse fields'}</button>
-              <span class="hint">Pick a field to filter on: a date becomes a From / To pair, anything
-                else one input.</span>
-            </div>
-            ${pickCrit && html`<${FieldPicker} mode="criteria" project=${project} addedCols=${colPaths} addedCrit=${critPaths}
-                  sections=${sections.map((sc, i) => ({ id: sc.id, label: sc.title || sc.key || 'Section ' + (i + 1) }))}
-                  onColumn=${addColumn} onFilter=${addCriteria}/>`}
-            ${params.length === 0 ? html`<div class="empty-note">None yet. Leave it that way and
-              Claude works out any inputs from your brief — asking only if it genuinely cannot
-              tell — or add them here.</div>` : html`
-            <table>
-              <thead><tr><th class="p1">Name</th><th>Type</th><th></th><th class="c4"></th></tr></thead>
-              <tbody>
-                ${params.map(p => html`
-                  <tr key=${p.id}>
-                    <td><input type="text" placeholder="StartDate" value=${p.name}
-                          onInput=${e => setParams(xs => xs.map(x => x.id === p.id ? { ...x, name: e.target.value } : x))}/></td>
-                    <td><select value=${p.type}
-                          onChange=${e => setParams(xs => xs.map(x => x.id === p.id ? { ...x, type: e.target.value } : x))}>
-                          ${TYPES.map(([v, l]) => html`<option key=${v} value=${v}>${l}</option>`)}
-                        </select></td>
-                    <td>${p.path && html`<span class="fp-code" title=${p.path}>filters ${p.path.split('.').slice(1).join(' › ')}${p.lookup ? ' \u00B7 pick-list ' + p.lookup : ''}</span>`}</td>
-                    <td><button class="x" onClick=${() => setParams(xs => xs.filter(x => x.id !== p.id))}>×</button></td>
-                  </tr>`)}
-              </tbody>
-            </table>`}
-            <div class="actions"><button class="mini" onClick=${() => setParams(xs => [...xs, newParam()])}>+ input</button></div>
+          <section class=${'step' + (realCols > 0 ? ' done' : '')}>
+            <div class="step-h"><${Num} n="6" done=${realCols > 0}/>
+              <div><h2>Result Columns<span class="opt">optional</span></h2><p class="lead">What each row of the
+                report shows. Pick the fields; label, order, sort, format and group them in the list below.
+                ${realCols === 0 && hasBrief ? ' None picked — Claude will build them from your brief.' : ''}</p></div></div>
+            <${F().FieldBrowser} project=${project} purpose="results" taken=${colPaths} sections=${sectionList}
+                                  onAdd=${addColumns}/>
+            <div class="listhead"><h3>Result Columns</h3><span>${realCols}</span>
+              <button class="mini" onClick=${() => setSections(xs => xs.map((x, i) => i === xs.length - 1 ? { ...x, cols: [...x.cols, newCol()] } : x))}>+ Column by hand</button>
+              <button class="mini" onClick=${() => setSections(xs => [...xs, { ...newSection(), cols: [] }])}>+ Section</button></div>
+            <${F().ResultsList} sections=${sections} setSections=${setSections}/>
           </section>
         </div>
 
@@ -738,7 +510,7 @@ function App() {
               <dt>Content</dt><dd class=${contentDone ? '' : 'empty'}>${realCols > 0
                 ? `${realCols} column${realCols === 1 ? '' : 's'}`
                 : hasBrief ? 'From your brief' : (tpl === PICTURE && look) ? 'From the picture' : 'Not described'}</dd>
-              <dt>Inputs</dt><dd class=${namedInputs.length ? '' : 'empty'}>${namedInputs.join(', ') || 'None'}</dd>
+              <dt>Criteria</dt><dd class=${namedInputs.length ? '' : 'empty'}>${namedInputs.join(', ') || 'None'}</dd>
             </dl>
             <button class="go block" disabled=${!canBuild} onClick=${submit}>
               ${jobsMode ? (busy ? 'Starting…' : 'Build report')
@@ -767,6 +539,7 @@ function App() {
                         <//>`}
                   <//>` : res.message}
               </div>`}
+            ${draftAt && html`<div class="note mt8">Draft kept in this browser · <button class="linkbtn" onClick=${startOver}>Start over</button></div>`}
             <div class="assure">Nothing here bypasses verification — every build runs the same
               gates, and you look at every page before anything is imported.</div>
           </div></div>

@@ -81,7 +81,7 @@ to repeat what they just typed into a form.
 When it has them, `paths` maps each column picked in the builder's field browser to its SDK
 path (`Case.parties[].person.lastName`; `[]` is one value per related record), and `criteria`
 lists the launch inputs made from a field: the path each filters and whether it is a `range`
-(From/To), `in` or `equals`, plus a pick-list's `lookup` list name. They were read from the project's Data Dictionary (or its SDK), so use them as the
+(From/To), `in` or `equals`, plus a pick-list's `lookup` list name, and the eSeries-style settings chosen in the builder (`operator`, `multi`, `lookupFormat`, `required`, `hidden`, `default`); `spec.columnOptions` gives each column `link`, `sort`, `aggregate`, `format`/`customFormat` and `truncate`. Apply them in the rule, and name in the handoff any the layout cannot show. They were read from the project's Data Dictionary (or its SDK), so use them as the
 traversals and filters. No columns and no inputs picked: derive both from the brief.
 
 ```bash

@@ -253,6 +253,47 @@
   .seg button + button { border-left:1px solid var(--rule-2) } .seg button.on { background:var(--navy); color:#fff }
   @media (max-width:980px) { .fs { grid-template-columns:1fr } .fs-left { border-right:0; border-bottom:1px solid var(--rule) } }
 
+  /* ---- the two add panes (Search Criteria, Result Columns) ---- */
+  .fb { display:grid; grid-template-columns:minmax(0,2fr) minmax(250px,1fr); border:1px solid var(--rule);
+        border-radius:var(--r); overflow:hidden; background:#fff; box-shadow:var(--sh-2) }
+  .fb-left { display:flex; flex-direction:column; min-width:0; border-right:1px solid var(--rule) }
+  .fb-right { display:flex; flex-direction:column; background:#FCFCFD; min-width:0 }
+  .fb-none { display:block }
+  .fb .fs-scroll { height:360px }
+  .fb tr[data-k]:focus { outline:2px solid var(--navy); outline-offset:-2px }
+  .fs-detail .empty { color:var(--muted); font-size:13px }
+  .picked { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px }
+  .sr { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0) }
+  .optrow { display:flex; flex-wrap:wrap; gap:16px; margin:4px 0 10px }
+  label.cb { display:flex; gap:6px; align-items:center; font-weight:500; color:var(--ink); margin:0; font-size:13px; cursor:pointer }
+  label.cb input { accent-color:var(--navy) }
+  .mt8 { margin-top:10px }
+  .linkbtn { border:0; background:none; color:var(--navy); font-weight:600; padding:0; font-size:12.5px; text-decoration:underline }
+  /* the lists - eSeries "Search Criteria Fields" / "Result Columns" */
+  .listhead { display:flex; align-items:center; gap:10px; margin:18px 0 8px }
+  .listhead h3 { margin:0; font-size:14px; color:var(--ink) }
+  .listhead > span { font-size:12px; font-weight:700; color:var(--navy); background:var(--navy-tint); border-radius:999px; padding:1px 8px }
+  .listhead .mini:first-of-type { margin-left:auto }
+  .items { list-style:none; margin:0; padding:0; border:1px solid var(--rule); border-radius:var(--r-sm); overflow:hidden; background:#fff }
+  .item + .item { border-top:1px solid var(--rule) }
+  .ih { display:flex; align-items:center; gap:8px; padding:6px 8px 6px 10px }
+  .item.open > .ih { background:var(--navy-tint) }
+  .grip { color:var(--faint); font-size:15px }
+  .ilabel { flex:1; min-width:0; display:flex; align-items:center; gap:8px; flex-wrap:wrap; background:none; border:0;
+            text-align:left; padding:4px 0; font:inherit; color:inherit }
+  .ilabel b { font-weight:650 } .isum { font-size:12px; color:var(--muted) }
+  .ipar { font:11.5px ui-monospace,Menlo,monospace; color:var(--muted); white-space:nowrap }
+  .ih .x:disabled { opacity:.25; cursor:default }
+  .ied { padding:12px 14px 14px; border-top:1px solid var(--rule); background:#FCFCFD }
+  .grid2 { display:grid; grid-template-columns:repeat(auto-fill,minmax(190px,1fr)); gap:10px 14px; margin-bottom:10px }
+  .grid2 .span2 { grid-column:1 / -1 }
+  .results { display:flex; flex-direction:column; gap:12px }
+  .rsh { display:flex; gap:8px; margin-bottom:6px }
+  .rsh .rst { flex:1 } .rsh .rsk { flex:0 0 150px; font:12.5px ui-monospace,Menlo,monospace; text-transform:uppercase }
+  @media (max-width:980px) { .fb { grid-template-columns:1fr } .fb-left { border-right:0; border-bottom:1px solid var(--rule) } }
+  @media (max-width:640px) { .fb .fs-table th:last-child, .fb .fs-table td.de { display:none } .fb .fs-table th:nth-child(2) { width:auto }
+                             .fb .fs-tools { flex-wrap:wrap } .fb .fs-find { flex:1 1 100% } }
+
   /* ---- summary rail ---- */
   .rail { position:sticky; top:94px }
   .summary { background:var(--card); border:1px solid var(--rule); border-radius:var(--r);
@@ -374,4 +415,5 @@
 <script src="/vendor/react.production.min.js"></script>
 <script src="/vendor/react-dom.production.min.js"></script>
 <script src="/vendor/htm.umd.js"></script>
+<script src="/fields_ui.js"></script>
 <script src="/app.js"></script>
