@@ -112,9 +112,10 @@ command. See `README.md` for what each file in the plugin does.
 - A JasperReports Server install for local rendering (default
   `/Applications/jasperreports-server-9.0.0` — override with the `JRS` environment
   variable if yours lives elsewhere)
-- An SDK/JAR export from the target eSeries environment, for field verification
-  (the builder asks for one on the page when the project has none; you can skip it, at the
-  cost of unverified field names)
+- An SDK/JAR export from each target eSeries environment (System Setup → Metadata →
+  Entities → Download SDK). **Required:** a project with no SDK on file cannot be built - the
+  builder says so when you pick the project, and the build asks for the jar on the page and
+  waits for it. A stale one (180 days or more) can be replaced or kept.
 
 ## Troubleshooting
 

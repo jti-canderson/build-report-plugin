@@ -102,7 +102,7 @@ loaded by name, which could be a different installed version):
 | Stage | What to do |
 |---|---|
 | `validated` | Read the spec. Check it has a template (or a `look_like` picture) and either columns or a brief. |
-| `destination` | `python3 "$P/scripts/project.py" sdk-decide "<destination>"`. Exit 0: done, with the SDK line as the status. Exit 10: ask (below). |
+| `destination` | `python3 "$P/scripts/project.py" sdk-decide "<destination>"`. Exit 0: done, with the SDK line as the status. Exit 11: the project has no usable SDK - **required**: ask for it with no way to skip (below) and do not go past this stage without one. Exit 10: the SDK is stale - ask, and the user may skip (below). |
 | `requirements` | **Picked fields first.** `spec.paths` maps each column picked in the field browser to its SDK path (e.g. `Case.parties[].person.lastName`); `spec.criteria` lists launch inputs made from a field, with the path each filters and whether it is a `range` (From/To), `in` or `equals`, and for a pick-list its `lookup` list name (a launch input for it takes that list's values). Each criterion also carries the settings chosen in the builder, named as in the eSeries criterion editor: `operator` (`EQUALS`, `STARTS_WITH`, `ENDS_WITH`, `CONTAINS`, `IN`, `NOT_IN`, `BLANK`, `NOT_BLANK`, `GREATER_THAN`, or `RANGE` for a From/To date), `multi` (multi-select lookup; the value arrives as codes), `required` (register the input REQUIRED), `hidden` (a fixed filter: apply `default`, no launch input) and `default` (`@TODAY` / `@THIS_WEEK` for dates). `spec.columnOptions` gives each column `link`, `sort` (`ASCEND`/`DESCEND` - the rule's row order), `aggregate` (`GROUP_BY` groups rows, `SUM`/`COUNT`/... a total - pick a grouped template or say in the handoff it was not honoured), `format` (a date / money / number pattern, `YES_NO`, or `CUSTOM` with `customFormat` using `@value`) and `truncate` (characters). Apply them in the rule. **Launch inputs are generated, not written.** When `spec.criteria` is present, scaffold writes `verification/launch_inputs.groovy`: paste it UNCHANGED at the top of the rule and build the query from `def w = applyLaunchInputs(new Where())` (add the rule's own conditions to `w` after). It reads every input by its exact launch-form name, converts dates / lists / numbers from the text eSeries sends, applies each `default` when the input is left blank, and adds the attested Where call. Never rename an input, re-read one by hand, or add a second filter on the same field - `finish.sh` runs `verification/launch_inputs_check.groovy`, which launches the rule blank, filled and in the alternate arrival formats and fails the build if any input does not reach its filter. A pick-list `default` is a CODE (the Data Dictionary lists labels). Anything the template cannot show - a link in the PDF - is listed in the handoff as not honoured, never silently dropped. They came from the project's Data Dictionary (or its SDK), so use them as the traversals and filters; `[]` means one value per related record, so decide (and log) whether that is one row each or a joined list. **Nothing picked:** derive the columns from the brief (record them under `"derived"` in `spec.json`), and the launch inputs too, since a brief that says "filed in a date range" means a From/To pair on the filing date. Assume and log (`jobs.py log`) wherever a reasonable person would; ask on the page (section 4) only when two readings give materially different reports. Then the lookups (the `lookup` switch decides targeted or full) and check every field against the SDK. |
 | `plan` | Write the rule (`<Name>_V1.groovy`). It is the judgment file, and every line of it is a decision. |
 | `scaffold` | `python3 "$J" run --stage scaffold -- python3 "$P/scripts/scaffold.py" spec.json --out .`. If it says `kept … (exists)`, the folder holds an earlier unfinished build's scaffold (the page allows a rebuild only then); run it again with `--force`, which replaces only the scaffold's own `gen_jrxml.py`, `verification/fixture.py` and `verification/run.sh`. |
@@ -153,16 +153,32 @@ file, `file`: the uploaded file's path inside the job folder). One question at a
 - `choice`: one of the options; `--allow-text` also lets the user type their own answer.
 - `text` or `longtext`: a short or longer free answer.
 - `file`: **only when a file is genuinely required**, such as the SDK when `sdk-decide` exits
-  10. Offer a way out as an option:
+  11 or 10.
+
+  **Exit 11 - no usable SDK in the project: REQUIRED.** No `--option`, no `--optional`, so
+  the page offers no Skip. Say why it is needed and where to get it:
 
   ```bash
-  python3 "$J" ask --id sdk-required --type file --title "Field list needed" \
-      --prompt "No current SDK for <project>. In eSeries: System Setup → Metadata → Entities → Download SDK. Upload the jar here, or skip - without it a wrong field name prints a blank column with no error." \
-      --option "skip=Skip - build without field checks"
+  python3 "$J" ask --id sdk-required --type file --title "SDK required" \
+      --prompt "<project> has no SDK on file, and a report cannot be built without one: it is how every field is checked, and without it a wrong field name prints a blank column with no error. In eSeries: System Setup → Metadata → Entities → Download SDK. Upload the jar here."
   ```
 
-  With a file: `python3 "$P/scripts/project.py" sdk-register "<destination>" "<file>"`. With
-  skip: `jobs.py log --level warn "No SDK: no field was verified against this environment"`.
+  Register the upload (`python3 "$P/scripts/project.py" sdk-register "<destination>"
+  "<file>"`), then run `sdk-decide` again. Still 11 (the upload was not a readable jar): say
+  so and ask again with a new `--id`. **Never build without it**: not on a timeout, not
+  because the brief is simple, not because a Data Dictionary is on file (the Data Dictionary
+  feeds the field browser; the SDK is what checks the fields). A timeout (exit 5) ends the job.
+
+  **Exit 10 - the SDK is stale.** Ask the same way, with a way out:
+
+  ```bash
+  python3 "$J" ask --id sdk-stale --type file --title "Newer SDK?" \
+      --prompt "The SDK for <project> is <n> days old. In eSeries: System Setup → Metadata → Entities → Download SDK. Upload a newer jar, or keep using the one on file." \
+      --option "keep=Keep the one on file"
+  ```
+
+  With a file: register it as above. With keep: `jobs.py log --level warn "SDK is <n> days
+  old: fields were checked against it"`.
 
 ## 5. Finish, and go back to waiting
 

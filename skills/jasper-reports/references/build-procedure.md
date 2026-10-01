@@ -45,9 +45,10 @@ because the page is where the user answers: nothing waits on the chat.
 
 1. **The SDK is decided in code.** `python3 "$P/scripts/project.py" sdk-decide "<project
    folder>"`. Exit **0** prints one `SDK ...` line - a current, readable SDK: log it and do not
-   ask. Exit **10** prints `ASK ...` with the reason (none on file, file gone, stale,
-   unreadable): ask on the page with a `file` question (see `/build-report`), with the
-   where-to-get-it directions, because then the user really does have to act.
+   ask. Exit **11** prints `REQUIRED ...` (none on file, file gone, unreadable): the SDK is
+   required - ask on the page with a `file` question that has no Skip (see `/build-report`),
+   with the where-to-get-it directions, and do not build until `sdk-decide` exits 0. Exit
+   **10** prints `ASK ...` (stale): ask the same way, but the user may keep the old one.
 2. **Derived columns are recorded, not confirmed.** A brief-only spec (below) has its
    columns derived and written back into `spec.json`, with the derivation recorded under
    `"derived"` and logged to the page:
@@ -56,7 +57,7 @@ because the page is where the user answers: nothing waits on the chat.
    "derived": {"from": "intent",
                "columns": ["Case Number <- caseNumber", "Type <- caseType"],
                "assumptions": ["one row per case", "date range filters filingDate"],
-               "sdk": "the sdk-decide line, or 'none - fields unverified'"}
+               "sdk": "the sdk-decide line"
    ```
 
 **Ask only when getting it wrong would materially change the report, or create a real
@@ -67,7 +68,7 @@ correctness risk** - and say which one it is. In practice that means:
   installments);
 - a money figure whose definition is genuinely open (paid, balance, collected - see the
   financials skill);
-- `sdk-decide` exits 10.
+- `sdk-decide` exits 11 (required) or 10 (stale).
 
 Anything else - a column order, a heading, a width, a default sort - is a call you make and
 record as an assumption. **Every gate, the three deliverables, looking at every rendered

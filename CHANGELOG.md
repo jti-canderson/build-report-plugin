@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.34.1 - 2026-10-01
+
+**The SDK is required when a project has none.** A build for a project with no usable SDK
+on file (none registered, the recorded file gone, or a file that cannot be read) now asks
+for the jar on the page with no Skip, and does not go past the *Destination and SDK* stage
+without it. The server refuses a skip on that question. Before, the page offered
+"Skip - build without field checks", and a build could ship with no field verified against
+the client's environment.
+
+- `project.py sdk-decide` exits **11** (`REQUIRED ...`) for a missing or unreadable SDK.
+  A stale but readable SDK still exits 10: the page asks, and **Keep the one on file** goes on.
+- The builder says so as soon as such a project is picked: *No SDK on file for this project*,
+  with where to get one.
+- Tests: the old "asks (exit 10)" check is split into required (none, gone, unreadable,
+  stale-and-unreadable) and stale; two more check the command's required question has no
+  way out and the page shows the notice.
+
 ## 0.34.0 - 2026-09-30
 
 **`/build-report` is now the browser builder.** The whole build happens on one local page

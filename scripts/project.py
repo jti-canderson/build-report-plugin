@@ -17,7 +17,8 @@ and a wrong guess is silent: the report compiles here and behaves differently th
     project.py list
     project.py resolve  <name|relative path> [--create]
     project.py sdk-status <project-folder>
-    project.py sdk-decide <project-folder>   exit 0 = current SDK, don't ask; 10 = ask
+    project.py sdk-decide <project-folder>   exit 0 = current SDK, don't ask; 10 = ask (stale);
+                                             11 = REQUIRED: no usable SDK, the build waits for one
 
 SCOPE: every path this touches is resolved under the WORKSPACE ROOT and a path that
 escapes it is refused. The plugin has no business anywhere else, and a tool that writes
@@ -252,7 +253,8 @@ def cmd_sdk_status(folder):
     return 0
 
 
-ASK = 10     # sdk-decide: the user has to be asked
+ASK = 10        # sdk-decide: the user has to be asked (the SDK is stale; they may go on without)
+REQUIRED = 11   # sdk-decide: no usable SDK in the project - the build cannot go on without one
 
 
 def cmd_sdk_decide(folder):
@@ -260,8 +262,10 @@ def cmd_sdk_decide(folder):
 
     Exit 0 and one line to put in the build log and the handoff when a current, readable SDK
     is on file: nobody needs to confirm a file they registered months ago and that has not
-    gone stale. Exit ASK (10) with the reason when the user genuinely has to act: no SDK,
-    the recorded file is gone, it is STALE, or it cannot be read.
+    gone stale. Exit REQUIRED (11) when the project has no usable SDK - none recorded, the
+    recorded file is gone, or it cannot be read: the build asks for one and does not go on
+    without it, because without it no field is checked and a wrong one prints a blank column
+    with no error. Exit ASK (10) when the SDK is only STALE: ask, but the user may go on.
 
     `sdk-status` is unchanged; this is what fast-mode builds call instead. Deciding here
     makes the no-question path deterministic and testable, rather than a sentence in the
@@ -273,16 +277,13 @@ def cmd_sdk_decide(folder):
         return ASK
     sdk = _meta(folder).get("sdk")
     if not sdk:
-        print("ASK     no SDK/JAR recorded for this project")
-        return ASK
+        print("REQUIRED no SDK/JAR recorded for this project")
+        return REQUIRED
     stored = folder / sdk["stored"]
     if not stored.exists():
-        print(f"ASK     recorded as {sdk['filename']} but the file is gone")
-        return ASK
+        print(f"REQUIRED recorded as {sdk['filename']} but the file is gone")
+        return REQUIRED
     age = (datetime.date.today() - datetime.date.fromisoformat(sdk["registered"])).days
-    if age >= STALE_DAYS:
-        print(f"ASK     {sdk['filename']} is {age} days old (stale after {STALE_DAYS})")
-        return ASK
     # READABLE, not merely present: a truncated download or a renamed HTML error page sits on
     # disk looking like an SDK. A jar/xlsx is a zip, so it has to open as one.
     try:
@@ -294,7 +295,10 @@ def cmd_sdk_decide(folder):
         elif stored.stat().st_size == 0 or not os.access(stored, os.R_OK):
             raise ValueError("empty or unreadable")
     except Exception as e:                                  # noqa: BLE001
-        print(f"ASK     {sdk['filename']} is on file but cannot be read ({type(e).__name__})")
+        print(f"REQUIRED {sdk['filename']} is on file but cannot be read ({type(e).__name__})")
+        return REQUIRED
+    if age >= STALE_DAYS:       # after the read check: a stale file that cannot be read is no SDK
+        print(f"ASK     {sdk['filename']} is {age} days old (stale after {STALE_DAYS})")
         return ASK
     print(f"SDK     {sdk['filename']}, registered {sdk['registered']} ({age} day"
           f"{'s' if age != 1 else ''} ago) - current; used without asking")

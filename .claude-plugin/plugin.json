@@ -1,6 +1,6 @@
 {
   "name": "jti-reports",
-  "version": "0.34.0",
+  "version": "0.34.1",
   "description": "Build eSeries (Sustain/Symphony) Jasper reports from JTI house templates. /build-report opens a browser builder: pick fields from your environment, watch the build, preview the pages and download the verified rule, layout and rule zip.",
   "author": {
     "name": "Journal Technologies"

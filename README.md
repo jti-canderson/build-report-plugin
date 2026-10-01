@@ -97,7 +97,9 @@ Nothing is imported into eSeries: importing the zip is yours to do.
 
 Each project folder carries `.jti-project.json` — the client name, the target
 environment, and the registered SDK/JAR with its date and hash. `/build-report` reads it
-to decide whether to ask for an SDK, and flags one older than 180 days.
+through `project.py sdk-decide`: with no usable SDK on file (none, file gone, unreadable) the
+SDK is **required** - the build asks for the jar on the page with no Skip and does not go on
+without it. One older than 180 days is flagged and can be replaced or kept.
 
 The SDK matters because the local render harness runs against whatever JasperReports and
 domain classes are on the machine. For a client that is not OKDAC that is an assumption,
@@ -153,7 +155,7 @@ python3 scripts/build_mode.py
 | Switch | Default | Other value | What the other value does |
 |---|---|---|---|
 | `JTI_VERIFIER` | `legacy` | `fast` | `finish.sh` runs the same unchanged gate scripts in **one** JVM, fast-start JIT. Falls back to legacy, saying why, for any harness that is not an exact, unmodified, supported scaffold harness (`# JTI_SCAFFOLD_HARNESS_VERSION=1 sha256=...` on line 2 of `verification/run.sh`) |
-| `JTI_INTERACTION` | `confirm` | `unattended` | SDK decided by `project.py sdk-decide` (asks only when missing, stale or unreadable); brief-only columns recorded under `"derived"` instead of confirmed in chat |
+| `JTI_INTERACTION` | `confirm` | `unattended` | SDK decided by `project.py sdk-decide` (requires one when missing or unreadable, asks when stale); brief-only columns recorded under `"derived"` instead of confirmed in chat |
 | `JTI_LOOKUP` | `full` | `targeted` | `scripts/facts.py` and `scripts/precedents.py` instead of reading model-facts.md whole and exploring folders |
 | `JTI_BUILD_PLAN` | `off` | `opt-in` | `scripts/build_plan.py run build-plan.json` (fast lane only). **Opt-in for this release**: the script exits 4 unless this is set |
 

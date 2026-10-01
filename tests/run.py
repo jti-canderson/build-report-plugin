@@ -767,8 +767,9 @@ print("RESOLVE", same, wrong, refused, typo)
 
     tier("core")
     # ---- phase 3: no pause for a current SDK - decided in code ---------------------
-    # sdk-decide exits 0 only for a current AND readable SDK; anything the user would have to
-    # fix (none, gone, stale, unreadable) exits 10 so the build asks. Each case is built here.
+    # sdk-decide exits 0 only for a current AND readable SDK. No usable SDK (none, gone,
+    # unreadable) exits 11: REQUIRED, the build cannot go on without one. Only STALE exits 10
+    # (ask, may keep the old one). Each case is built here.
     import zipfile as _zfd
     pd = os.path.join(ws, "SDK Probe")
     os.makedirs(pd, exist_ok=True)
@@ -789,14 +790,33 @@ print("RESOLVE", same, wrong, refused, typo)
     json.dump(meta, open(meta_p, "w"))
     open(os.path.join(pd, meta["sdk"]["stored"]), "wb").write(b"<html>404 Not Found</html>")
     rc3, o3 = run(["python3", proj, "sdk-decide", pd], env=penv)
+    meta["sdk"]["registered"] = "2025-01-01"                 # stale AND unreadable
+    json.dump(meta, open(meta_p, "w"))
+    rc4, o4 = run(["python3", proj, "sdk-decide", pd], env=penv)
+    os.remove(os.path.join(pd, meta["sdk"]["stored"]))       # recorded, but the file is gone
+    rc5, o5 = run(["python3", proj, "sdk-decide", pd], env=penv)
     check("sdk-decide: current readable SDK -> no question (exit 0, one SDK line)",
           rc1 == 0 and o1.startswith("SDK ") and "used without asking" in o1, o1)
-    check("sdk-decide asks when the SDK is missing, stale, or unreadable (exit 10)",
-          rc0 == 10 and rc2 == 10 and "days old" in o2 and rc3 == 10 and "cannot be read" in o3,
-          f"none={rc0} stale={rc2} {o2.strip()} unreadable={rc3} {o3.strip()}")
+    check("sdk-decide: no usable SDK is REQUIRED (exit 11) - none, file gone, unreadable, "
+          "and stale-but-unreadable",
+          rc0 == 11 and o0.startswith("REQUIRED") and rc5 == 11 and "gone" in o5
+          and rc3 == 11 and "cannot be read" in o3 and rc4 == 11 and "cannot be read" in o4,
+          f"none={rc0} gone={rc5} unreadable={rc3} stale+unreadable={rc4} {o4.strip()}")
+    check("sdk-decide: a stale but readable SDK asks and may be kept (exit 10)",
+          rc2 == 10 and o2.startswith("ASK") and "days old" in o2, f"stale={rc2} {o2.strip()}")
     cmd_md = open(os.path.join(PLUGIN, "commands", "build-report.md"), encoding="utf8").read()
     proc = open(os.path.join(PLUGIN, "skills", "jasper-reports", "references",
                              "build-procedure.md"), encoding="utf8").read()
+    _req = re.search(r'ask --id sdk-required .*?```', cmd_md, re.S)
+    check("build-report: a missing SDK is asked for with no Skip, and the build never goes on "
+          "without it",
+          _req is not None and "--option" not in _req.group(0) and "--optional" not in _req.group(0)
+          and "Exit 11" in cmd_md and "Never build without it" in cmd_md
+          and "Exit **11**" in proc and "skip - build without field checks" not in cmd_md.lower(),
+          "command text")
+    _app = open(os.path.join(PLUGIN, "scripts", "app.js"), encoding="utf8").read()
+    check("builder page: a project with no SDK says up front that the build will require one",
+          "!projObj.sdk" in _app and "does not go on without it" in _app, "app.js")
     check("build-report: the SDK is decided in code (sdk-decide), asked on the page only when "
           "it must be, and derived columns are recorded under \"derived\"",
           "sdk-decide" in cmd_md and "--type file" in cmd_md and "scripts/build_mode.py" in cmd_md

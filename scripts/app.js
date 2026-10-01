@@ -435,6 +435,10 @@ function App() {
             <div class="hint">Not listed? <b>Browse</b> to any folder on this Mac — including
               Downloads or Home. Anything outside the workspace still works; it just will not
               show up in this list next time.</div>
+            ${projObj && !projObj.sdk && html`<div class="todo mt8"><b>No SDK on file for this
+              project.</b> The build asks you to upload one and does not go on without it - it is
+              how every field is checked. In eSeries: <b>System Setup → Metadata → Entities →
+              Download SDK</b>.</div>`}
           </section>
 
           <section class=${'step' + (tplDone ? ' done' : '')}>
