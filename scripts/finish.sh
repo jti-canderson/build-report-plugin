@@ -13,6 +13,11 @@
 set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# The report folder's top holds only what ships (.jrxml, rule, zip, launcher); the spec, the
+# generator and the notes live in verification/ (scripts/layout.py). A report built before
+# that is moved over here, once, before either verifier looks for anything.
+[ $# -ge 2 ] && python3 "$ROOT/scripts/layout.py" migrate .
+
 # ---- verifier: legacy (default) or fast --------------------------------------------
 #   JTI_VERIFIER=fast   the same gates with the rule and render in ONE JVM
 #                       (scripts/verify_fast.py - it hands back to this file, unchanged,
@@ -65,9 +70,9 @@ trap _perf_exit EXIT
 # stale artifact. It failed loudly that time; the same ordering silently passes a stale
 # layout whenever the old one happens to satisfy the contract, which is a false green.
 mark regenerate
-if [ -f gen_jrxml.py ]; then
+if [ -f verification/gen_jrxml.py ]; then
   echo "== 0/4  regenerate ========================================"
-  python3 gen_jrxml.py || fail 0 "gen_jrxml.py failed"
+  python3 verification/gen_jrxml.py || fail 0 "verification/gen_jrxml.py failed"
   echo
 fi
 
@@ -153,7 +158,7 @@ echo
 mark verdict
 echo "== verdict ================================================"
 ok=1
-for f in "$RULE" "$JRXML" RULE-*.zip RULE_REGISTRATION.txt JRXML_CONTRACT.txt; do
+for f in "$RULE" "$JRXML" RULE-*.zip verification/RULE_REGISTRATION.txt verification/JRXML_CONTRACT.txt; do
   if [ -f "$f" ]; then echo "  ok      $f"; else echo "  MISSING $f"; ok=0; fi
 done
 [ "${RENDER_SKIPPED:-0}" = 1 ] && echo "  WARN    layout unproven - no render was run"

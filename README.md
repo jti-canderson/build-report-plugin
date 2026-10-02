@@ -73,7 +73,8 @@ Nothing is imported into eSeries: importing the zip is yours to do.
 | `scripts/serve_builder.py`, `scripts/jobs.py` | the builder page and its job coordinator |
 | `skills/jasper-reports/references/build-procedure.md` | how a submitted job is built |
 | `scripts/project.py` | project folders and per-project SDK/JAR tracking |
-| `scripts/scaffold.py` | generate `gen_jrxml.py` + verification boilerplate from a `spec.json` |
+| `scripts/layout.py` | where each report-folder file lives: only what ships at the top, the rest in `verification/` |
+| `scripts/scaffold.py` | generate `verification/gen_jrxml.py` + verification boilerplate from a `spec.json` |
 | `scripts/finish.sh` | the pre-handoff gate: contract check → render → truncation check → rule zip |
 | `scripts/sdk_fields.py` | walk an SDK jar's `extends` chain, report field vs. getter owner |
 | `templates/` | six house templates, the render harness, `contract_check.py` |

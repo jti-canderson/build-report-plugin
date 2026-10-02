@@ -6,6 +6,7 @@ in <workspace>/.jti-builder/server.json (mode 0600). The browser can ask for pre
 actions only - there is no route that takes a command or a filesystem path.
 """
 import json
+import os
 import pathlib
 import re
 import time
@@ -183,7 +184,7 @@ class Routes:
                       "title": (payload.get("title") or "").strip()
                       or payload["name"].strip().replace("_", " "),
                       "folder": str(folder), "destination": str(folder.parent)}
-            j, tok = self.s.create(report, "spec.json", pre)
+            j, tok = self.s.create(report, "verification/spec.json", pre)
         h._send(200, json.dumps({"ok": True, "job": j["id"], "token": tok,
                                  "folder": report["folder"]}))
         return True
@@ -224,6 +225,25 @@ class Routes:
             with self.s.lock:
                 r = self.cancel(self.s.get(jid))
             h._send(200, json.dumps(r)); return True
+        if method == "POST" and action == "attach":
+            h._send(200, json.dumps(self.attach(h, j)))
+            return True
+        if method == "POST" and action == "revise":
+            b = body_json(h) or {}
+            ok, msg = self.s.revise(self.s.get(jid), b.get("text"), self.images(j, b.get("images")))
+            if not ok:
+                raise Refuse(409, msg)
+            h._send(200, json.dumps({"ok": True, "message": msg,
+                                     "job": self.s.public(self.s.get(jid))}))
+            return True
+        if method == "POST" and action == "inquire":
+            b = body_json(h) or {}
+            ok, msg = self.s.inquire(self.s.get(jid), b.get("text"), self.images(j, b.get("images")))
+            if not ok:
+                raise Refuse(409, msg)
+            h._send(200, json.dumps({"ok": True, "message": msg,
+                                     "job": self.s.public(self.s.get(jid))}))
+            return True
         if method == "POST" and action == "answer":
             with self.s.lock:
                 r = self.post_answer(h, self.s.get(jid), body_json(h))
@@ -284,7 +304,25 @@ class Routes:
                 h._send(200, json.dumps({"ok": True, "job": None, "finished": True,
                                          "reason": "closed" if j == "CLOSED" else "done"}))
                 return True
+            if isinstance(j, tuple):                       # ("INQUIRY", job, question)
+                _, jj, q = j
+                d = self.claimed(jj)
+                d.update({"revision": None, "status": jj["status"],
+                          "inquiry": {"n": q["n"], "text": q["text"], "images": q.get("images") or []},
+                          "earlier": [{"q": x["text"], "a": x["answer"]}
+                                      for x in jj.get("inquiries") or [] if x["answer"]]})
+                h._send(200, json.dumps({"ok": True, "job": d}))
+                return True
             h._send(200, json.dumps({"ok": True, "job": self.claimed(j) if j else None}))
+            return True
+        if action == "reply":
+            n = b.get("n")
+            if not isinstance(n, int):
+                raise Refuse(400, "n must be the question number")
+            ok, msg = s.reply(str(b.get("job") or ""), n, b.get("text"))
+            if not ok:
+                raise Refuse(409, msg)
+            h._send(200, json.dumps({"ok": True}))
             return True
         with s.lock:
             j = s.worker_job()
@@ -437,6 +475,60 @@ class Routes:
         self.s.save(j)
         return {"ok": True}
 
+    # Screenshots pasted into the "Questions or changes?" box. Stored inside the job's own
+    # hidden folder under a name the SERVER picks; the request then names them by that id,
+    # and only ids that exist there are passed on to Claude (as paths it can open).
+    IMAGE_TYPES = {"image/png": (".png", b"\x89PNG"), "image/jpeg": (".jpg", b"\xff\xd8\xff"),
+                   "image/gif": (".gif", b"GIF8"), "image/webp": (".webp", b"RIFF")}
+    MAX_IMAGE = 10 * 1024 * 1024
+    IMAGE_ID = re.compile(r"^img-\d+-[0-9a-f]{8}\.(png|jpg|gif|webp)$")
+
+    def attach_dir(self, j):
+        d = pathlib.Path(j["report"]["folder"]) / ".jti-build" / "attachments"
+        if d.is_symlink() or d.parent.is_symlink():
+            raise Refuse(400, "attachment folder is a symlink")
+        return d
+
+    def attach(self, h, j):
+        import secrets as _s
+        if j["status"] != "complete":
+            raise Refuse(409, "pictures can be added once the report is built")
+        kind = (h.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+        if kind not in self.IMAGE_TYPES:
+            raise Refuse(415, "only a PNG, JPEG, GIF or WebP picture can be pasted")
+        n = h.headers.get("Content-Length")
+        if n is None:
+            raise Refuse(411, "Content-Length is required")
+        n = int(n)
+        if n <= 0 or n > self.MAX_IMAGE:
+            raise Refuse(413, "pictures are limited to 10 MB")
+        data = h.rfile.read(n)
+        ext, magic = self.IMAGE_TYPES[kind]
+        if len(data) != n or not data.startswith(magic):
+            raise Refuse(400, "that is not a picture of the type it claims to be")
+        d = self.attach_dir(j)
+        d.mkdir(mode=0o700, parents=True, exist_ok=True)
+        name = f"img-{int(time.time())}-{_s.token_hex(4)}{ext}"
+        with open(d / name, "xb") as f:
+            f.write(data)
+        os.chmod(d / name, 0o600)
+        return {"ok": True, "id": name, "bytes": n}
+
+    def images(self, j, ids):
+        """The pasted pictures a request names, as absolute paths - ids the server issued for
+        THIS job only. Anything else is refused rather than silently dropped."""
+        if not ids:
+            return []
+        if not isinstance(ids, list) or len(ids) > J.Store.MAX_IMAGES:
+            raise Refuse(400, f"up to {J.Store.MAX_IMAGES} pictures per message")
+        d, out = self.attach_dir(j), []
+        for i in ids:
+            p = d / str(i)
+            if not isinstance(i, str) or not self.IMAGE_ID.match(i) or p.is_symlink() or not p.is_file():
+                raise Refuse(400, "a pasted picture was not found - paste it again")
+            out.append(str(p))
+        return out
+
     def upload(self, h, j, qid):
         """The file for a `file` question, streamed to the job's own upload folder. The name
         is reduced to a safe basename; nothing about the path comes from the browser."""
@@ -518,7 +610,9 @@ class Routes:
         spec = J.Store._read(folder / j["spec"]) or {}
         return {"id": j["id"], "folder": str(folder), "spec_path": str(folder / j["spec"]),
                 "spec": spec, "destination": j["report"]["destination"],
-                "helper": str(pathlib.Path(J.HERE) / "jobs.py")}
+                "helper": str(pathlib.Path(J.HERE) / "jobs.py"),
+                # Set when the user asked for changes to the report this job already built.
+                "revision": j.get("revision")}
 
     def record_gates(self, j, b):
         """Every gate passed. The SERVER hashes what was verified - the rule, the .jrxml and
@@ -557,7 +651,7 @@ class Routes:
         # The documents must have been WRITTEN, not just generated: a NOTES block still
         # holding contract_docs' "TODO before this ships" seed is an unfinished handoff.
         import contract_docs as CD
-        for name in ("RULE_REGISTRATION.txt", "JRXML_CONTRACT.txt"):
+        for name in ("verification/RULE_REGISTRATION.txt", "verification/JRXML_CONTRACT.txt"):
             p = safe_file(folder, name)
             t = p.read_text(encoding="utf8", errors="replace") if p else ""
             i = t.find(CD.BEGIN)
@@ -575,8 +669,10 @@ class Routes:
         for name in g["files"]:
             add("rule" if name.endswith(".groovy") else "jrxml" if name.endswith(".jrxml")
                 else "rule-zip", name)
-        for name in ("RULE_REGISTRATION.txt", "JRXML_CONTRACT.txt"):
+        for name in ("verification/RULE_REGISTRATION.txt", "verification/JRXML_CONTRACT.txt"):
             add("doc", name)
+        # The folder-view launcher (static-text Velocity), generated from spec.launcher.
+        add("launcher", safe_name(j["report"]["name"]) + "_Launcher.vm")
         vdir = folder / "verification"
         if vdir.is_dir() and not vdir.is_symlink():
             for p in sorted(vdir.glob("*.pdf")):

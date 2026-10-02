@@ -58,16 +58,19 @@ def describe(d):
     rule = next((r for r in rules if re.search(r"_V\d+\.groovy$", r)), rules[0] if rules else "")
     rt, jt = read(os.path.join(d, rule)), read(os.path.join(d, jr))
     spec = {}
-    if "spec.json" in fns:
+    # verification/ for a report built now, the top for one built before (layout.py).
+    import layout
+    at = lambda n: layout.find(d, n)
+    if os.path.exists(at("spec.json")):
         try:
-            spec = json.loads(read(os.path.join(d, "spec.json")))
+            spec = json.loads(read(at("spec.json")))
         except ValueError:
             spec = {}
-    con = read(os.path.join(d, "JRXML_CONTRACT.txt"))
-    hand = read(os.path.join(d, "HANDOFF.md"))
-    reg = read(os.path.join(d, "RULE_REGISTRATION.txt"))
+    con = read(at("JRXML_CONTRACT.txt"))
+    hand = read(at("HANDOFF.md"))
+    reg = read(at("RULE_REGISTRATION.txt"))
     tpl = spec.get("template") or (re.search(r"Template:\s*(\S+)", con) or [None, ""])[1] or \
-        (re.search(r"^import (\w+) as T", read(os.path.join(d, "gen_jrxml.py")), re.M) or [None, ""])[1]
+        (re.search(r"^import (\w+) as T", read(at("gen_jrxml.py")), re.M) or [None, ""])[1]
     # root entity: what the spec says, else the class the rule loads or searches
     root = spec.get("root") or ""
     if not root:

@@ -27,6 +27,9 @@ HELPER (what the /build-report command runs; it talks to the server over 127.0.0
                                          nobody answered in time (the job is now timed out)
     jobs.py fail --stage <stage> --message "<why>" [--retryable]
     jobs.py complete                     verify and register the deliverables; finish
+    jobs.py reply --job ID --n N "<answer>"
+                                         answer a question asked about a finished report
+                                         (`wait` returned an `inquiry`); changes no file
     jobs.py status                       print the job as the browser sees it
 
 Every helper call reports the cancel flag: exit 6 means the user cancelled - stop at once.
@@ -58,8 +61,11 @@ STAGES = [
     ("validated", 5, "Specification validated", "Validating the specification"),
     ("destination", 12, "Destination and SDK checked", "Checking the destination and SDK"),
     ("requirements", 22, "Requirements and field sources resolved", "Resolving requirements and field sources"),
-    ("plan", 35, "Rule and build plan prepared", "Preparing the rule"),
-    ("scaffold", 45, "Report scaffolded", "Scaffolding the report"),
+    # Scaffold BEFORE the rule: scaffold writes verification/launch_inputs.groovy, which the
+    # rule starts with. In the old order (rule at 35, scaffold at 45) the worker wrote the
+    # rule after scaffold had already ticked, and the rule stage was left unticked.
+    ("scaffold", 35, "Report scaffolded", "Scaffolding the report"),
+    ("plan", 45, "Rule written", "Writing the rule"),
     ("fixtures", 55, "Fixtures prepared", "Preparing fixture rows"),
     ("contract", 62, "Contract check passed", "Checking the rule/layout contract"),
     ("rule", 72, "Rule execution passed", "Running the rule"),
@@ -114,6 +120,12 @@ def atomic_write(path, data, mode=0o600):
     os.replace(tmp, path)
 
 
+def pointer_dir():
+    """Where each running job server leaves a pointer to its state, per user. The test suite
+    sets JTI_POINTER_DIR so its servers and helpers never see - or reach - a real one."""
+    return pathlib.Path(os.environ.get("JTI_POINTER_DIR") or pathlib.Path.home() / ".jti-builder")
+
+
 def state_dir(root=None):
     import project as P
     d = pathlib.Path(root or P.ROOT) / ".jti-builder"
@@ -147,7 +159,10 @@ class Store:
         self.jobs = {}                               # id -> job (cache of what is on disk)
         srv = self._read(self.dir / "server.json") or {}
         self.worker_token = srv.get("worker_token") or secrets.token_urlsafe(32)
-        self.session_token = secrets.token_urlsafe(32)   # new every start; the page fetches it
+        # Kept across restarts, like the worker token: a page opened before a restart still
+        # holds the old one, and with a fresh token its tab-closed beacon was refused (403)
+        # and its Build button failed - so the listener never heard the tab close (10-01).
+        self.session_token = srv.get("session_token") or secrets.token_urlsafe(32)
         self.index = self._read(self.dir / "index.json") or {}
         self.claim_waiters = 0
         self.last_claim = 0.0        # when a worker last long-polled (the gaps between polls)
@@ -167,12 +182,12 @@ class Store:
     def publish(self, port):
         atomic_write(self.dir / "server.json", json.dumps(
             {"port": port, "pid": os.getpid(), "worker_token": self.worker_token,
-             "started": time.time()}, indent=2))
+             "session_token": self.session_token, "started": time.time()}, indent=2))
         # Where THIS server keeps its state, for a helper started from another folder: a job
         # server reused from a different workspace was unreachable (found 09-30). The
         # pointer holds a path only - the worker token stays in the 0600 server.json.
         try:
-            home = pathlib.Path.home() / ".jti-builder"
+            home = pointer_dir()
             home.mkdir(mode=0o700, exist_ok=True)
             for old in home.glob("server-*.json"):          # prune servers that have exited
                 if not _alive(Store._read(old) or {}):
@@ -259,13 +274,104 @@ class Store:
              "done": ["submitted"], "events": [], "report": report, "spec": spec_rel,
              "pre_existing": pre_existing, "question": None, "answers": {},
              "cancel_requested": False, "child": None, "failure": None, "gates": None,
-             "artifacts": [], "partial": [], "worker_seen": None, "claimed": None}
+             "artifacts": [], "partial": [], "worker_seen": None, "claimed": None,
+             "revision": None, "revisions": [], "inquiries": []}
         with self.lock:
             self.event(j, "submitted", "submitted", j["status_text"])
             self.index[jid] = report["folder"]
             atomic_write(self.dir / "index.json", json.dumps(self.index, indent=1))
             self.save(j)
         return j, tok
+
+    MAX_REVISION = 20000
+
+    MAX_IMAGES = 6
+
+    def revise(self, j, text, images=None):
+        """The page's "Request changes" box on a COMPLETE job. The same job goes back to
+        submitted with the request attached, so the waiting worker claims it again, changes
+        the report it already built, re-runs every gate and completes it again. Returns
+        (ok, message)."""
+        text = (text or "").strip() if isinstance(text, str) else ""
+        if not text:
+            return False, "Say what you would like changed."
+        if len(text) > self.MAX_REVISION:
+            return False, "That is too long - keep it under 20,000 characters."
+        with self.lock:
+            if j["status"] != "complete":
+                return False, "Changes can be requested once the report is built."
+            other = self.active()
+            if other and other["id"] != j["id"]:
+                return False, "Another build is running - request changes when it ends."
+            n = len(j.get("revisions") or []) + 1
+            req = {"n": n, "text": text, "at": time.time(), "images": list(images or [])}
+            j.setdefault("revisions", []).append(req)
+            # The setup stages are not redone for a change to the same report (same project,
+            # SDK and field sources), so they stay ticked; everything from the rule on reruns.
+            kept = [k for k in ("submitted", "validated", "destination", "requirements")
+                    if k in j.get("done", [])] or ["submitted"]
+            j.update({"revision": req, "status": "submitted", "stage": "submitted",
+                      "running": False, "percent": max(PERCENT[k] for k in kept), "done": kept,
+                      "status_text": "Waiting for Claude to make the changes",
+                      "question": None, "failure": None, "gates": None, "artifacts": [],
+                      "cancel_requested": False, "child": None, "claimed": None})
+            self.event(j, "revision", "submitted", f"Changes requested (round {n})")
+            self.save(j)
+            self.changed.notify_all()
+        return True, "Sent - Claude will make the changes and verify the report again."
+
+    # -- questions about a finished report ("Ask a question" on the page)
+    INQUIRY_RECLAIM = 1200      # a question claimed this long ago and never answered is offered again
+
+    def inquire(self, j, text, images=None):
+        """A question about a COMPLETE report. Unlike revise(), nothing about the job changes:
+        it stays complete, its downloads stay valid, and the worker only answers in words."""
+        text = (text or "").strip() if isinstance(text, str) else ""
+        if not text:
+            return False, "Type your question."
+        if len(text) > self.MAX_REVISION:
+            return False, "That is too long - keep it under 20,000 characters."
+        with self.lock:
+            if j["status"] != "complete":
+                return False, "Questions can be asked once the report is built."
+            qs = j.setdefault("inquiries", [])
+            if any(q["answer"] is None for q in qs):
+                return False, "Claude is still answering your last question."
+            qs.append({"n": len(qs) + 1, "text": text, "at": time.time(), "images": list(images or []),
+                       "claimed": None, "answer": None, "answered_at": None})
+            self.event(j, "inquiry", "complete", f"Question asked ({len(qs)})")
+            self.save(j)
+            self.changed.notify_all()
+        return True, "Sent - Claude will answer here."
+
+    def pending_inquiry(self):
+        """(job, question) for the oldest unanswered question nobody is working on."""
+        now = time.time()
+        for jid in list(self.index):
+            j = self.get(jid)
+            if not j or j.get("status") != "complete":
+                continue
+            for q in j.get("inquiries") or []:
+                if q["answer"] is None and (not q["claimed"] or now - q["claimed"] > self.INQUIRY_RECLAIM):
+                    return j, q
+        return None
+
+    def reply(self, jid, n, text):
+        text = (text or "").strip() if isinstance(text, str) else ""
+        with self.lock:
+            j = self.get(jid)
+            q = next((x for x in (j or {}).get("inquiries") or [] if x["n"] == n), None)
+            if not q:
+                return False, "no such question"
+            if q["answer"] is not None:
+                return False, "that question was already answered"
+            if not text:
+                return False, "the answer is empty"
+            q["answer"], q["answered_at"] = text[:self.MAX_REVISION], time.time()
+            self.event(j, "inquiry-answered", "complete", f"Question {n} answered")
+            self.save(j)
+            self.changed.notify_all()
+        return True, "answered"
 
     def worker_connected(self):
         """A worker parked on claim - or between two of its 50 s polls - or mid-build."""
@@ -335,6 +441,12 @@ class Store:
                         self.page_seen = self.page_closing = None
                         self.stopped = True
                         return "CLOSED"
+                    if not (j and j["status"] == "submitted"):
+                        pi = self.pending_inquiry()       # builds first, then questions
+                        if pi:
+                            pi[1]["claimed"] = time.time()
+                            self.save(pi[0])
+                            return ("INQUIRY", pi[0], pi[1])
                     if j and j["status"] == "submitted":
                         j["status"], j["claimed"] = "running", time.time()
                         j["worker_seen"] = time.time()
@@ -382,6 +494,10 @@ class Store:
         """One structured JTI-GATE line from finish.sh / verify_fast.py."""
         stage = GATE_STAGE.get(gate)
         if kind == "started" and stage:
+            # The gates run ON the rule file, so it has been written. A worker that wrote it
+            # without reporting the stage still gets the tick, rather than a grey row.
+            if "plan" not in j["done"]:
+                self.done(j, "plan", "Rule written")
             if gate == "regenerate":
                 self.start(j, stage, "Regenerating the layout")
             else:
@@ -500,7 +616,7 @@ def _server():
     if not s:
         # The running job server may belong to another workspace: follow the pointer of a
         # LIVE one, the standard port first (test servers on random ports never win).
-        ptrs = [Store._read(f) or {} for f in (pathlib.Path.home() / ".jti-builder").glob("server-*.json")]
+        ptrs = [Store._read(f) or {} for f in pointer_dir().glob("server-*.json")]
         live = sorted((x for x in ptrs if x.get("state_dir") and _alive(x)),
                       key=lambda x: (x.get("port") != 8789, -int(x.get("pid") or 0)))
         for x in live:
@@ -682,6 +798,8 @@ def main(argv):
     q.add_argument("--option", action="append", default=[])
     q.add_argument("--allow-text", action="store_true"); q.add_argument("--optional", action="store_true")
     q.add_argument("--timeout", type=int, default=3600)
+    rp = sub.add_parser("reply"); rp.add_argument("--job", required=True)
+    rp.add_argument("--n", type=int, required=True); rp.add_argument("text")
     rn = sub.add_parser("run"); rn.add_argument("--stage", required=True)
     rn.add_argument("--gates", action="store_true"); rn.add_argument("argv", nargs=argparse.REMAINDER)
     a = ap.parse_args(argv)
@@ -720,6 +838,10 @@ def main(argv):
     if a.cmd == "complete":
         r = _checked(call("/api/worker/complete"))
         print(f"  job COMPLETE - {len(r.get('artifacts') or [])} deliverable(s) registered")
+        return 0
+    if a.cmd == "reply":
+        _checked(call("/api/worker/reply", {"job": a.job, "n": a.n, "text": a.text}))
+        print("  answered on the page")
         return 0
     if a.cmd == "run":
         return run_child(a)

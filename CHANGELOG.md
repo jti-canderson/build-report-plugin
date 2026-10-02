@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.35.0 - 2026-10-01
+
+**Ask a question or request changes after a build, with pasted screenshots.** When a report
+finishes, the page shows a *Questions or changes?* box under the results.
+
+- **Request changes** sends the job back to the build worker as a new round (up to 20,000
+  characters). The page shows *Making your changes (round n)*, and the finished round replaces
+  the downloads. The setup stages stay ticked, so the checklist does not start again.
+- **Ask a question** gets an answer in a thread on the page and changes no files. The page
+  polls until the answer arrives.
+- **Paste a screenshot** (Cmd+V) into either box. Up to 6 pictures, 10 MB each, PNG, JPEG,
+  GIF or WebP, checked by their first bytes. They are saved under `.jti-build/attachments/`
+  (owner-only) and handed to the worker as file paths. The worker is told to open each one.
+- The build instructions now cover revisions: re-apply hand overrides instead of running
+  `scaffold.py --force` over them; make the preview show the change; give an alternative
+  its own section rather than squeezing it into a header.
+
+**Launcher look.** The Velocity launcher can be a text link, or a **Blue**, **Grey** or **Red**
+button. The buttons only use eSeries' own classes: `btn btn-primary`, `btn btn-default`,
+`btn btn-danger`. The plugin adds no styling of its own. The launcher is now written by
+`scripts/launcher.py` as `<Name>_Launcher.vm`.
+
+**Report folders are easier to navigate.** The top of a report folder now holds only what
+gets deployed: the `.jrxml`, the Groovy rule, the `RULE-*.zip` and the launcher `.vm`. The
+spec, `gen_jrxml.py`, `HANDOFF.md`, `JRXML_CONTRACT.txt`, `RULE_REGISTRATION.txt`, fixtures
+and rendered samples go in `verification/`. `scripts/layout.py` is the single source for
+where each file lives. It reads either place, so older reports keep working.
+`scaffold.py` and `finish.sh` move an old flat folder's files on the next rebuild. An
+unmodified `run.sh` and `gen_jrxml.py` are repointed; hand-edited ones are left alone.
+Run it by hand with `python3 scripts/layout.py migrate <folder>`.
+
+**Closing the tab stops the worker after a server restart.** The session token is now kept
+in the server's pointer file. Before, a restarted server made a new one, and the page's
+close signal was refused with a 403, so the Claude listener kept waiting.
+
+- Tests: the suite uses its own pointer folder (`JTI_POINTER_DIR`), so it can never reach
+  a builder the user has running. New checks cover the launcher classes, the folder layout and
+  migration, questions, revisions, screenshot upload limits and types, and the token
+  surviving a restart.
+- The form gate knows `linkFormPathIndex` (a linked form's path index). A platform export
+  with one was reported as a fault, *XStream and JSON disagree*, though both halves agreed.
+- `model-facts.md`: findings from the 1 October builds (fixture newline escaping,
+  `Party.person` has no getter, fixture keys going stale when header columns change, a vanished
+  SDK file, a long-running builder serving old code).
+
 ## 0.34.1 - 2026-10-01
 
 **The SDK is required when a project has none.** A build for a project with no usable SDK

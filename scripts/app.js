@@ -31,6 +31,9 @@ const SESSION = { h: {} };
 window.SESSION_HEADERS = () => SESSION.h;
 const F = () => window.JTIFields;
 const DRAFT = 'jti-builder-draft';
+// A draft left by an EARLIER builder run (a tab closed without building, another day) is not
+// put back into the form - a new /build-report starts clean. It waits here to be offered.
+const OLD_DRAFT = 'jti-builder-draft-earlier';
 
 /* ---------------------------------------------------------------- folder browser */
 function FolderBrowser({ onPick, onClose }) {
@@ -130,6 +133,86 @@ function FolderBrowser({ onPick, onClose }) {
     </div>`;
 }
 
+/* ----------------------------------------------------------------------- drafts */
+const draftCols = dr => (dr.sections || []).reduce((n, s) => n + (s.cols || []).filter(c => (c.field || '').trim()).length, 0);
+const draftHasWork = dr => !!(dr.name || dr.title || (dr.intent || '').trim() || dr.tpl || draftCols(dr) || (dr.criteria || []).length);
+const draftWhen = at => (at ? new Date(at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : 'an earlier session');
+const draftSize = dr => {
+  const c = draftCols(dr), k = (dr.criteria || []).length;
+  const bits = [c && `${c} column${c === 1 ? '' : 's'}`, k && `${k} search criteri${k === 1 ? 'on' : 'a'}`].filter(Boolean);
+  return bits.length ? ' (' + bits.join(', ') + ')' : '';
+};
+
+/* --------------------------------------------------------------------- launcher */
+const NO_LAUNCHER = { on: false, icon: '', text: '', param: 'caseId', style: 'link' };
+// The .vm puts the eSeries classes on the link (launcher.py BUTTON_CLASS) and eSeries draws
+// the button. This preview only approximates those classes - it is not what ships.
+const LAUNCH_STYLES = [['link', 'Text link'], ['blue', 'Blue button'], ['grey', 'Grey button'], ['red', 'Red button']];
+const LAUNCH_CLASS = { blue: 'btn btn-primary', grey: 'btn btn-default', red: 'btn btn-danger' };
+const LAUNCH_LOOK = {
+  link: { color: '#054CFF' },
+  blue: { background: '#337AB7', border: '1px solid #2E6DA4', color: '#fff' },
+  grey: { background: '#fff', border: '1px solid #CCC', color: '#333' },
+  red: { background: '#D9534F', border: '1px solid #D43F3A', color: '#fff' },
+};
+function launchCss(style, hasText) {
+  if (style === 'link' || !LAUNCH_LOOK[style]) return LAUNCH_LOOK.link;
+  return { display: 'inline-flex', alignItems: 'center', gap: '6px', padding: hasText ? '5px 12px' : '5px 8px',
+           borderRadius: '4px', fontSize: '13px', fontWeight: 600, lineHeight: 1.2, whiteSpace: 'nowrap',
+           textDecoration: 'none', cursor: 'pointer', verticalAlign: 'middle', ...LAUNCH_LOOK[style] };
+}
+const COMMON_ICONS = ['i-print', 'printer', 'i-report', 'i-document-pdf', 'i-pdf', 'i-open-in-new'];
+function launcherIssue(l, cat) {
+  const icon = (l.icon || '').trim();
+  if (icon && cat && (cat.font.length || cat.svg.length) && !cat.font.includes(icon) && !cat.svg.includes(icon))
+    return `"${icon}" is not an eSeries icon class - pick one from the list.`;
+  if ((l.text || '').length > 80) return 'the link text is longer than 80 characters.';
+  if (!/^[A-Za-z][A-Za-z0-9_]{0,59}$/.test((l.param || '').trim()))
+    return 'name the launch input that receives the record id (letters, digits, underscores - e.g. caseId).';
+  return '';
+}
+function LauncherStep({ n, value: l, set, icons, title }) {
+  const cat = icons || { font: [], svg: [] };
+  const upd = o => set(x => ({ ...x, ...o }));
+  const icon = l.icon.trim();
+  const fam = !icon ? '' : cat.font.includes(icon) ? 'font icon' : cat.svg.includes(icon) ? 'colour icon' : 'not an eSeries icon';
+  return html`
+    <section class=${'step' + (l.on ? ' done' : '')}>
+      <div class="step-h"><div class="num">${l.on ? '✓' : n}</div>
+        <div><h2>Launcher<span class="opt">optional</span></h2><p class="lead">A link or icon you
+          paste into a folder view as static text (Velocity), so the report runs for the record on
+          that screen with one click — no search form.</p></div></div>
+      <label class="cb"><input type="checkbox" checked=${l.on} onChange=${e => upd({ on: e.target.checked })}/>
+        I want static-text Velocity that runs this report</label>
+      ${l.on && html`
+        <div class="grid2 mt12">
+          <div><label>Icon (optional)</label>
+            <input type="text" list="jti-icons" placeholder="e.g. i-print" value=${l.icon}
+                   onInput=${e => upd({ icon: e.target.value })}/>
+            <datalist id="jti-icons">${[...cat.font, ...cat.svg].map(c => html`<option key=${c} value=${c}/>`)}</datalist>
+            <div class="hint">${fam ? fam + ' · ' : ''}Quick picks: ${COMMON_ICONS.filter(c => cat.font.includes(c) || cat.svg.includes(c)).map((c, i) => html`${i ? ', ' : ''}<button key=${c} class="linkbtn" onClick=${() => upd({ icon: c })}>${c}</button>`)}.
+              Every class is on the eSeries style guide, <b>/ecms/help/style</b>.</div></div>
+          <div><label>Link text (optional)</label>
+            <input type="text" maxLength="80" placeholder=${l.icon.trim() ? 'Icon only' : 'Run ' + (title || 'the report')} value=${l.text}
+                   onInput=${e => upd({ text: e.target.value })}/>
+            <div class="hint">Shown next to the icon. Blank with an icon: icon only.</div></div>
+          <div><label>Look</label>
+            <div class="seg">${LAUNCH_STYLES.map(([k, lbl]) => html`<button key=${k} type="button"
+              class=${(l.style || 'link') === k ? 'on' : ''} onClick=${() => upd({ style: k })}>${lbl}</button>`)}</div>
+            <div class="launch-preview">
+              <a href="javascript:void(0)" style=${launchCss(l.style || 'link', !!(l.text.trim() || !icon))}
+                 onClick=${e => e.preventDefault()}>${icon && html`<span class="lp-icon">${icon}</span>`}${(l.text.trim() || (icon ? '' : 'Run ' + (title || 'the report')))}</a>
+            </div>
+            <div class="hint">${LAUNCH_CLASS[l.style] ? html`Adds <code>class="${LAUNCH_CLASS[l.style]}"</code>; eSeries draws the button. ` : ''}Preview
+              is approximate and shows the icon class by name; on the eSeries screen it is the real icon.</div></div>
+          <div><label>Launch input that gets the record's id</label>
+            <input type="text" value=${l.param} onInput=${e => upd({ param: e.target.value })}/>
+            <div class="hint">The report is run with this input set to the id of the record on the
+              screen. Added to the report if it is not one of the Search Criteria.</div></div>
+        </div>`}
+    </section>`;
+}
+
 /* ------------------------------------------------------------------------- app */
 function App() {
   const [boot, setBoot] = useState(null);
@@ -141,7 +224,10 @@ function App() {
   const [intent, setIntent] = useState('');
   const [sections, setSections] = useState([newSection()]);
   const [criteria, setCriteria] = useState([]);      // Search Criteria - optional
+  // A static-text launcher for a folder view (spec.launcher) - generated by scaffold, never hand-written.
+  const [launcher, setLauncher] = useState(NO_LAUNCHER);
   const [draftAt, setDraftAt] = useState(null);
+  const [oldDraft, setOldDraft] = useState(null);  // a draft from an earlier run, offered not applied
   const [busy, setBusy] = useState(false);
   const [res, setRes] = useState(null);
   const [imported, setImported] = useState(null);
@@ -213,18 +299,23 @@ function App() {
   useEffect(() => {
     fetch('/api/bootstrap').then(r => r.json()).then(d => {
       setBoot(d);
-      if (d.projects.length) setProject(d.projects[0].name);
+      // The folder used last, if it still exists - otherwise the first listed project.
+      const last = (d.recent || [])[0];
+      if (last) setProject(last.name); else if (d.projects.length) setProject(d.projects[0].name);
       // A draft of this form - criteria and columns included - survives a reload. It lives in
       // this browser only; the submitted spec.json is the record.
+      // Only a draft from THIS run (a reload) goes straight back in; an older one is offered.
       try {
         const dr = JSON.parse(localStorage.getItem(DRAFT) || 'null');
-        if (dr && dr.v === 1) {
-          if (dr.project !== undefined) setProject(dr.project);
-          setTpl(dr.tpl || ''); setName(dr.name || ''); setTitle(dr.title || ''); setIntent(dr.intent || '');
-          if (Array.isArray(dr.sections) && dr.sections.length) setSections(dr.sections);
-          if (Array.isArray(dr.criteria)) setCriteria(dr.criteria);
+        if (dr && dr.v === 1 && dr.run && dr.run === d.run) {
+          applyDraft(dr);
           setDraftAt(dr.at || null);
-        }
+        } else if (dr && dr.v === 1 && draftHasWork(dr)) {
+          localStorage.setItem(OLD_DRAFT, JSON.stringify(dr));
+          localStorage.removeItem(DRAFT);
+        } else localStorage.removeItem(DRAFT);
+        const old = JSON.parse(localStorage.getItem(OLD_DRAFT) || 'null');
+        if (old && old.v === 1) setOldDraft(old);
       } catch (e) { /* no storage: the form still works */ }
       if (d.jobs && window.JTIBuild) {
         SESSION.h = { 'X-JTI-Session': d.jobs.session };
@@ -248,11 +339,11 @@ function App() {
   useEffect(() => {
     if (!boot) return;
     const t = setTimeout(() => {
-      try { localStorage.setItem(DRAFT, JSON.stringify({ v: 1, at: Date.now(), project, tpl, name, title, intent, sections, criteria })); }
+      try { localStorage.setItem(DRAFT, JSON.stringify({ v: 1, run: boot.run, at: Date.now(), project, tpl, name, title, intent, sections, criteria, launcher })); }
       catch (e) { /* ignore */ }
     }, 300);
     return () => clearTimeout(t);
-  }, [boot, project, tpl, name, title, intent, sections, criteria]);
+  }, [boot, project, tpl, name, title, intent, sections, criteria, launcher]);
 
   // Is Claude parked on /api/wait? Shown live, because the answer decides what the Write
   // button DOES - hand the spec straight over, or print a command to copy - and a user who
@@ -280,7 +371,10 @@ function App() {
 
   // A browsed folder may not be in the dropdown; show it as a real option rather than
   // silently falling back to the first project.
-  const known = boot.projects.some(p => p.name === project);
+  // Workspace projects, then folders used before that this workspace does not list.
+  const recentOnly = (boot.recent || []).filter(r => !r.listed);
+  const allProjects = [...boot.projects, ...recentOnly];
+  const known = allProjects.some(p => p.name === project);
 
   // Columns can come from a typed grid OR the brief OR a picture. `realCols` counts only the
   // columns that would actually survive submit() (header AND field filled), so the default
@@ -318,6 +412,7 @@ function App() {
           path: c.path, label: c.name || F().human(c.field || 'input'), operator: c.operator, lookup: c.lookup,
           multi: c.multi, required: c.required, hidden: c.hidden, default: c.dflt,
           type: c.dtype, params: F().paramsOf(c).map(p => p[0]) })),
+        launcher: launcher.on ? { icon: launcher.icon.trim(), text: launcher.text.trim(), param: launcher.param.trim(), style: launcher.style || 'link' } : undefined,
         columnOptions: Object.fromEntries(sections.flatMap(s => s.cols.filter(c => c.field.trim()).map(c =>
           [c.field.trim(), { link: !!c.link, sort: c.sort || '', aggregate: c.aggregate || 'None',
                              format: c.format || '', customFormat: c.customFormat || '', truncate: c.truncate || '' }]))),
@@ -374,14 +469,24 @@ function App() {
   });
   const sectionList = sections.map((sc, i) => ({ id: sc.id, label: sc.title || sc.key || 'Section ' + (i + 1) }));
   const startOver = () => { try { localStorage.removeItem(DRAFT); } catch (e) {} location.reload(); };
+  function applyDraft(dr) {
+    if (dr.project !== undefined) setProject(dr.project);
+    setTpl(dr.tpl || ''); setName(dr.name || ''); setTitle(dr.title || ''); setIntent(dr.intent || '');
+    if (Array.isArray(dr.sections) && dr.sections.length) setSections(dr.sections);
+    if (Array.isArray(dr.criteria)) setCriteria(dr.criteria);
+    setLauncher(dr.launcher && typeof dr.launcher === 'object' ? { ...NO_LAUNCHER, ...dr.launcher } : NO_LAUNCHER);
+  }
+  const dropOld = () => { try { localStorage.removeItem(OLD_DRAFT); } catch (e) {} setOldDraft(null); };
+  const restoreOld = () => { applyDraft(oldDraft); setDraftAt(oldDraft.at || null); dropOld(); };
 
   const tplObj = boot.templates.find(t => t.module === tpl);
-  const projObj = boot.projects.find(p => p.name === project);
+  const projObj = allProjects.find(p => p.name === project);
   const tplDone = !!tpl && (tpl !== PICTURE || !!look);
   const contentDone = realCols > 0 || hasBrief || (tpl === PICTURE && !!look);
   const namedInputs = criteria.flatMap(c => F().paramsOf(c).map(p => p[0]));
   const critIssues = F().problems(criteria).filter(b => !b.warn);
-  const canBuild = !(busy || !tpl || (tpl === PICTURE && !look) || needsSay || critIssues.length);
+  const launchIssue = launcher.on ? launcherIssue(launcher, boot.icons) : '';
+  const canBuild = !(busy || !tpl || (tpl === PICTURE && !look) || needsSay || critIssues.length || launchIssue);
   const Num = ({ n, done }) => html`<div class="num">${done ? '✓' : n}</div>`;
 
   if (jobsMode && job) return html`
@@ -400,6 +505,11 @@ function App() {
       <${DoneBar} msg=${doneMsg} watching=${watching}/>
       ${boot.version && boot.version.stale && html`
         <div class="banner">⚠︎ ${boot.version.message}</div>`}
+      ${oldDraft && !job && html`
+        <div class="banner draft">An unsent report from ${draftWhen(oldDraft.at)} is saved in this
+          browser: <b>${oldDraft.name || 'untitled'}</b>${draftSize(oldDraft)}.
+          <button class="mini" onClick=${restoreOld}>Restore it</button>
+          <button class="linkbtn" onClick=${dropOld}>Discard</button></div>`}
       <main class="shell">
         <div class="hero">
           <div class="copy">
@@ -428,13 +538,19 @@ function App() {
                     ${p.label} — ${p.reports} report${p.reports === 1 ? '' : 's'},
                     ${p.dd ? ' Data Dictionary on file' : p.sdk ? ' field list (SDK) on file' : ' no field list'}${p.environment ? ', ' + p.environment : ''}
                   </option>`)}
+                ${recentOnly.length > 0 && html`<optgroup label="Recently used">
+                  ${recentOnly.map(p => html`
+                    <option key=${p.name} value=${p.name}>
+                      ${p.label} (${p.where}) — ${p.reports} report${p.reports === 1 ? '' : 's'},
+                      ${p.dd ? ' Data Dictionary on file' : p.sdk ? ' field list (SDK) on file' : ' no field list'}${p.environment ? ', ' + p.environment : ''}
+                    </option>`)}</optgroup>`}
                 ${!known && html`<option value=${project}>${project || 'Workspace folder'}  (browsed)</option>`}
               </select>
               <button class="mini fix" onClick=${() => setBrowsing(true)}>Browse…</button>
             </div>
-            <div class="hint">Not listed? <b>Browse</b> to any folder on this Mac — including
-              Downloads or Home. Anything outside the workspace still works; it just will not
-              show up in this list next time.</div>
+            <div class="hint">Not listed? <b>Browse</b> to the folder. Every folder you build in is
+              remembered and listed under <b>Recently used</b> next time, whichever folder
+              Claude Code was started in.</div>
             ${projObj && !projObj.sdk && html`<div class="todo mt8"><b>No SDK on file for this
               project.</b> The build asks you to upload one and does not go on without it - it is
               how every field is checked. In eSeries: <b>System Setup → Metadata → Entities →
@@ -474,7 +590,7 @@ function App() {
                 ${lookErr && html`<div class="out err">${lookErr}</div>`}
                 ${look && html`<div class="out ok">Attached <b>${look.name}</b> —
                   ${Math.max(1, Math.round(look.bytes / 1024))} KB. It gets copied into the
-                  report folder as <code>reference/${look.name}</code> so the build can look at
+                  report folder as <code>verification/reference/${look.name}</code> so the build can look at
                   it.</div>`}
               </div>`}
           </section>
@@ -549,6 +665,8 @@ function App() {
               <button class="mini" onClick=${() => setSections(xs => [...xs, { ...newSection(), cols: [] }])}>+ Section</button></div>
             <${F().ResultsList} sections=${sections} setSections=${setSections}/>
           </section>
+
+          <${LauncherStep} n="7" value=${launcher} set=${setLauncher} icons=${boot.icons} title=${title || name}/>
         </div>
 
         <aside class="rail">
@@ -564,6 +682,8 @@ function App() {
                 ? `${realCols} column${realCols === 1 ? '' : 's'}`
                 : hasBrief ? 'From your brief' : (tpl === PICTURE && look) ? 'From the picture' : 'Not described'}</dd>
               <dt>Criteria</dt><dd class=${namedInputs.length ? '' : 'empty'}>${namedInputs.join(', ') || 'None'}</dd>
+              <dt>Launcher</dt><dd class=${launcher.on ? '' : 'empty'}>${launcher.on
+                ? [(LAUNCH_STYLES.find(x => x[0] === (launcher.style || 'link')) || LAUNCH_STYLES[0])[1], launcher.icon.trim(), launcher.text.trim() ? '“' + launcher.text.trim() + '”' : ''].filter(Boolean).join(' · ') : 'None'}</dd>
             </dl>
             <button class="go block" disabled=${!canBuild} onClick=${submit}>
               ${jobsMode ? (busy ? 'Starting…' : 'Build report')
@@ -571,6 +691,7 @@ function App() {
             ${!tpl && html`<div class="todo">Pick a template first.</div>`}
             ${tpl === PICTURE && !look && html`<div class="todo">Attach the picture you want it to look like.</div>`}
             ${needsSay && html`<div class="todo">Add columns, or describe the report in the brief — one of the two.</div>`}
+            ${launchIssue && html`<div class="todo">Launcher: ${launchIssue}</div>`}
             ${critIssues.length > 0 && html`<div class="todo">Fix ${critIssues.length === 1 ? 'a search criterion' : critIssues.length + ' search criteria'} first — ${critIssues[0].msg}</div>`}
             ${watching !== null && html`<div class=${'watch' + (watching ? ' on' : '')}><span class="dot"/>
               <span>${jobsMode ? (watching ? 'Claude is ready — the build starts as soon as you click.'

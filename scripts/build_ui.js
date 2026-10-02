@@ -43,7 +43,7 @@
     timed_out: 'Timed out waiting for an answer',
   };
 
-  function useJob(job) {
+  function useJob(job, round) {
     const [snap, setSnap] = useState(null);
     const [conn, setConn] = useState('connecting');
     useEffect(() => {
@@ -73,7 +73,7 @@
         };
       } else startPoll();
       return () => { alive = false; if (es) es.close(); if (poll) clearInterval(poll); };
-    }, [job && job.id]);
+    }, [job && job.id, round]);
     return [snap, conn, setSnap];
   }
 
@@ -165,7 +165,8 @@
   }
 
   const KIND = { rule: 'Rule source', jrxml: 'Report layout', 'rule-zip': 'Rule ZIP (import this)',
-                 doc: 'Document', pdf: 'Rendered PDF', page: 'Page image' };
+                 doc: 'Document', pdf: 'Rendered PDF', page: 'Page image',
+                 launcher: 'Launcher (static-text Velocity)' };
   function CompletePanel({ job, snap, onAnother }) {
     const t = '?t=' + encodeURIComponent(job.token);
     const base = '/api/jobs/' + job.id;
@@ -192,8 +193,89 @@
     </div>`;
   }
 
+  // After a build: ASK about the report (answered in words, nothing changes) or REQUEST a
+  // change (Claude changes THIS report, re-runs every gate and completes it again).
+  function RevisePanel({ job, snap, onSent, onSnap }) {
+    const [text, setText] = useState('');
+    const [busy, setBusy] = useState('');
+    const [err, setErr] = useState('');
+    const [pics, setPics] = useState([]);          // pasted screenshots: {key, url, id, err}
+    const past = snap.revisions || [];
+    const asked = snap.inquiries || [];
+    const uploading = pics.some(p => !p.id && !p.err);
+    // Paste a screenshot straight into the box: each one is uploaded to this job's folder and
+    // goes to Claude with the message. Text pastes are left alone.
+    const onPaste = e => {
+      const files = [...((e.clipboardData && e.clipboardData.items) || [])]
+        .filter(it => it.kind === 'file' && /^image\//.test(it.type)).map(it => it.getAsFile()).filter(Boolean);
+      if (!files.length) return;
+      e.preventDefault();
+      files.forEach(f => {
+        const key = Math.random().toString(36).slice(2);
+        if (pics.length >= 6) { setErr('Up to 6 pictures per message.'); return; }
+        setPics(ps => [...ps, { key, url: URL.createObjectURL(f) }]);
+        fetch('/api/jobs/' + job.id + '/attach', { method: 'POST', body: f,
+          headers: { 'X-JTI-Job': job.token, 'Content-Type': f.type } })
+          .then(r => r.json()).then(d => setPics(ps => ps.map(p => p.key !== key ? p
+            : d.ok ? { ...p, id: d.id } : { ...p, err: d.message || 'Could not add that picture.' })))
+          .catch(() => setPics(ps => ps.map(p => p.key === key ? { ...p, err: 'Could not reach the builder.' } : p)));
+      });
+    };
+    const drop = key => setPics(ps => ps.filter(p => { if (p.key === key) URL.revokeObjectURL(p.url); return p.key !== key; }));
+    const waiting = asked.some(q => q.answer == null);
+    // The event stream ends with a finished job, so poll while a question is open.
+    useEffect(() => {
+      if (!waiting) return;
+      const t = setInterval(() => fetch('/api/jobs/' + job.id + '?t=' + encodeURIComponent(job.token))
+        .then(r => r.ok ? r.json() : null).then(d => { if (d && d.job) onSnap(d.job); }).catch(() => {}), 2500);
+      return () => clearInterval(t);
+    }, [waiting, job.id]);
+    const send = kind => {
+      setBusy(kind); setErr('');
+      fetch('/api/jobs/' + job.id + (kind === 'ask' ? '/inquire' : '/revise'), { method: 'POST',
+        body: JSON.stringify({ text, images: pics.filter(p => p.id).map(p => p.id) }),
+        headers: { 'X-JTI-Job': job.token, 'Content-Type': 'application/json' } })
+        .then(r => r.json()).then(d => {
+          setBusy('');
+          if (!d.ok) { setErr(d.message || 'Could not send that.'); return; }
+          setText(''); pics.forEach(p => URL.revokeObjectURL(p.url)); setPics([]);
+          if (kind === 'ask') onSnap(d.job); else onSent(d.job);
+        })
+        .catch(() => { setBusy(''); setErr('Could not reach the builder - try again.'); });
+    };
+    return html`<div class="bpanel revise">
+      <h3>Questions or changes?</h3>
+      <p class="note">Ask anything about this report - where a column comes from, what a filter
+        does, why something prints the way it does - and Claude answers here without changing
+        anything. Or describe a change, and Claude changes this report and verifies it again; the
+        files above are replaced when it passes.</p>
+      ${asked.length > 0 && html`<div class="thread">${asked.map(q => html`<div key=${q.n} class="qa">
+        <div class="q"><b>You asked</b> ${q.text}${(q.images || []).length > 0 && html` <span class="note">(with ${q.images.length} picture${q.images.length > 1 ? 's' : ''})</span>`}</div>
+        <div class=${'a' + (q.answer == null ? ' pending' : '')}>${q.answer == null
+          ? html`<span class="spin1"/> Claude is looking into it…` : html`<b>Claude</b> ${q.answer}`}</div></div>`)}</div>`}
+      <textarea maxLength="20000" placeholder="e.g. Where does the Courtroom column come from?  or  Add the filing date after the case number. Paste a screenshot here if it helps."
+                value=${text} onInput=${e => setText(e.target.value)} onPaste=${onPaste}/>
+      ${pics.length > 0 && html`<div class="pics">${pics.map(p => html`<div key=${p.key} class=${'pic' + (p.err ? ' bad' : '')}>
+        <img src=${p.url} alt="pasted screenshot"/>
+        <button class="x" title="Remove" onClick=${() => drop(p.key)}>×</button>
+        <div class="cap">${p.err || (p.id ? 'Added' : 'Adding…')}</div></div>`)}</div>`}
+      <p class="note">Paste a screenshot (⌘V / Ctrl+V) into the box to send it with your message.</p>
+      <div class="actions mt12">
+        <button class="go sm" disabled=${!!busy || !text.trim() || waiting || uploading}
+                onClick=${() => send('ask')}>${busy === 'ask' ? 'Sending…' : 'Ask a question'}</button>
+        <button class="mini" disabled=${!!busy || !text.trim() || uploading}
+                onClick=${() => send('change')}>${busy === 'change' ? 'Sending…' : 'Request changes'}</button>
+        <span class="note">If no Claude session is waiting, it starts the next time /build-report runs.</span>
+      </div>
+      ${err && html`<p class="note warnline">${err}</p>`}
+      ${past.length > 0 && html`<details class="mt12"><summary>Earlier change requests (${past.length})</summary>
+        <ol class="revs">${past.map(r => html`<li key=${r.n}>${r.text}</li>`)}</ol></details>`}
+    </div>`;
+  }
+
   function BuildScreen({ job, stages, onAnother }) {
-    const [snap, conn] = useJob(job);
+    const [round, setRound] = useState(0);
+    const [snap, conn, setSnap] = useJob(job, round);
     if (conn === 'gone' && !snap) return html`<div class="bpanel bad"><h3>This build is no longer
       available</h3><p>The link is out of date or the job was removed.</p>
       <button class="go sm" onClick=${onAnother}>Build another report</button></div>`;
@@ -230,6 +312,11 @@
       ${snap.question && html`<${QuestionPanel} key=${snap.question.id + snap.question.asked}
                                     job=${job} q=${snap.question}/>`}
       ${snap.status === 'complete' && html`<${CompletePanel} job=${job} snap=${snap} onAnother=${onAnother}/>`}
+      ${snap.status === 'complete' && html`<${RevisePanel} job=${job} snap=${snap} onSnap=${setSnap}
+            onSent=${d => { if (d) setSnap(d); setRound(r => r + 1); }}/>`}
+      ${snap.revision && !term && html`<div class="bpanel"><h3>Making your changes (round ${snap.revision.n})</h3>
+        <p class="qprompt">${snap.revision.text}</p>${(snap.revision.images || []).length > 0
+          && html`<p class="note">With ${snap.revision.images.length} pasted picture${snap.revision.images.length > 1 ? 's' : ''}.</p>`}</div>`}
       ${snap.status === 'failed' && html`<${FailurePanel} snap=${snap}/>`}
       ${snap.status === 'timed_out' && html`<div class="bpanel bad"><h3>Timed out</h3>
         <p>The build waited for an answer${snap.timed_out && snap.timed_out.title

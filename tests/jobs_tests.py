@@ -103,6 +103,7 @@ def run(check, skip, ctx):
     run_phase2(check, skip, ctx)
     run_phase3(check, skip, ctx)
     run_phase4(check, skip, ctx)
+    run_revise(check, skip, ctx)
     run_phase5(check, skip, ctx)
     run_fields(check, skip, ctx)
     run_dd(check, skip, ctx)
@@ -217,7 +218,7 @@ def run_phase1(check, skip, ctx):
               code == 200 and len(jid or "") == 16 and len(tok or "") >= 24
               and claimed.get("id") == jid and claimed.get("folder") == folder
               and claimed.get("spec", {}).get("name") == "Flow_Probe"
-              and os.path.isfile(os.path.join(folder, "spec.json")), f"{code} {d} {c.stdout[:200]}")
+              and os.path.isfile(os.path.join(folder, "verification", "spec.json")), f"{code} {d} {c.stdout[:200]}")
         check("jobs: progress events are ordered (seq 1..n) and percent never goes down",
               all(r == 0 for r in rcs) and [e["seq"] for e in ev] == list(range(1, len(ev) + 1))
               and pct == sorted(pct) and j["percent"] == 55
@@ -269,7 +270,7 @@ def run_phase1(check, skip, ctx):
               c == 409 and "never overwritten" in d3.get("message", ""), d3)
         bare = {"project": "Proj", "name": "Bare_Spec", "template": "tabular_list", "intent": "x"}
         c, d4 = srv.submit(bare)
-        spec = json.load(open(os.path.join(ws, "Proj", "Bare_Spec", "spec.json"))) if c == 200 else {}
+        spec = json.load(open(os.path.join(ws, "Proj", "Bare_Spec", "verification", "spec.json"))) if c == 200 else {}
         check("jobs: a spec posted without the list fields gets empty lists, never null",
               c == 200 and spec.get("meta") == [] and spec.get("tiles") == []
               and spec.get("variants") == ["full", "none"], spec)
@@ -287,7 +288,7 @@ def run_phase1(check, skip, ctx):
         check("default builder (the /build-report one): no job API, no session token, and "
               "/api/spec still writes a spec with no token",
               "jobs" not in srv.boot and c1 == 404 and c2 == 200 and d.get("ok")
-              and os.path.isfile(os.path.join(ws, "Proj", "Old_Path", "spec.json")), (c1, c2, d))
+              and os.path.isfile(os.path.join(ws, "Proj", "Old_Path", "verification", "spec.json")), (c1, c2, d))
     finally:
         srv.stop()
     md = open(os.path.join(plugin, "commands", "build-report.md"), encoding="utf8").read()
@@ -322,7 +323,7 @@ def probe_job(plugin, ctx, srv, ws, name="Probe_Report"):
     c = helper(plugin, ws, "wait", "--secs", "10")
     folder = json.loads(c.stdout)["folder"]
     subprocess.run([sys.executable, os.path.join(plugin, "scripts", "scaffold.py"),
-                    os.path.join(folder, "spec.json"), "--out", folder],
+                    os.path.join(folder, "verification", "spec.json"), "--out", folder],
                    capture_output=True, check=True)
     shutil.copy(os.path.join(ctx["fix"], "good_rule.groovy"), os.path.join(folder, f"{name}_V1.groovy"))
     fx = os.path.join(folder, "verification", "fixture.py")
@@ -340,7 +341,7 @@ def fill_notes(plugin, folder):
     sys.path.insert(0, os.path.join(plugin, "scripts"))
     import contract_docs as CD
     for fn in ("JRXML_CONTRACT.txt", "RULE_REGISTRATION.txt"):
-        p = os.path.join(folder, fn)
+        p = os.path.join(folder, "verification", fn)
         t = open(p).read()
         m = re.search(re.escape(CD.BEGIN) + r"\n(.*?)\n" + re.escape(CD.END), t, re.S)
         if m and m.group(1).startswith("TODO before this ships"):
@@ -393,12 +394,20 @@ def run_phase2(check, skip, ctx):
         j = srv.snap(jid, tok)
         kinds = [(e["kind"], e["stage"]) for e in j["events"]]
         done = [e["stage"] for e in j["events"] if e["kind"] == "done"]
-        check("jobs: finish.sh's structured JTI-GATE lines drive the stages, in order, to 93%",
-              r.returncode == 0 and done == ["contract", "rule", "render", "truncation", "package"]
+        check("jobs: finish.sh's structured JTI-GATE lines drive the stages, in order, to 93% - "
+              "and tick the unreported rule stage first (the gates run on the rule)",
+              r.returncode == 0 and done == ["plan", "contract", "rule", "render", "truncation", "package"]
               and j["percent"] == 93 and ("gates_passed", "package") in kinds
               and set((j["gates"] or {}).get("files", {})) >= {"Probe_Report_V1.groovy",
                                                                 "Probe_Report.jrxml"},
               r.stdout[-600:] + json.dumps(kinds))
+        sys.path.insert(0, os.path.join(plugin, "scripts"))
+        import jobs as JM
+        order = [k for k, *_ in JM.STAGES]
+        check("jobs: scaffold comes before the rule stage (scaffold writes launch_inputs.groovy, "
+              "which the rule starts with)",
+              order.index("scaffold") < order.index("plan") < order.index("fixtures")
+              and JM.PERCENT["scaffold"] < JM.PERCENT["plan"], order)
         check("jobs: the gates' output reaches the job log, not the event list",
               any("All gates passed" in ln for ln in j["log_tail"])
               and not any("All gates passed" in e["status"] for e in j["events"]), j["log_tail"][-5:])
@@ -424,7 +433,7 @@ def run_phase2(check, skip, ctx):
               and "GATE 1 FAILED" in j["failure"]["excerpt"] and j["failure"]["auto_attempts"] == 1,
               j.get("failure"))
         # a rebuild in the same folder (allowed: this job created the report files) starts clean
-        code, d = srv.submit(json.load(open(os.path.join(folder, "spec.json"))) | {"project": "Proj"})
+        code, d = srv.submit(json.load(open(os.path.join(folder, "verification", "spec.json"))) | {"project": "Proj"})
         again = srv.snap(d.get("job"), d.get("token")) if code == 200 else None
         check("jobs: a rebuild over an unfinished build's own files is allowed, with its own log",
               code == 200 and again and not any("GATE 1 FAILED" in ln for ln in again["log_tail"]),
@@ -614,7 +623,7 @@ def run_phase4(check, skip, ctx):
         check("jobs: the report package holds the rule, layout, zip, documents and PDFs (no PNGs)",
               code == 200 and hd.get("Content-Disposition") == 'attachment; filename="Probe_Report-package.zip"'
               and "Probe_Report_V1.groovy" in names and "Probe_Report.jrxml" in names
-              and "JRXML_CONTRACT.txt" in names and "RULE_REGISTRATION.txt" in names
+              and "verification/JRXML_CONTRACT.txt" in names and "verification/RULE_REGISTRATION.txt" in names
               and any(n.startswith("RULE-") for n in names)
               and any(n.endswith(".pdf") for n in names) and not any(n.endswith(".png") for n in names),
               names)
@@ -638,6 +647,113 @@ def run_phase4(check, skip, ctx):
         c_p = srv.get(f"/api/jobs/{jid}/package{t}")[0]
         check("jobs: a file changed, or swapped for a symlink, after completion is not served",
               c_t == 409 and c_s == 409 and c_p == 409, (c_t, c_s, c_p))
+    finally:
+        srv.stop()
+
+
+# ── after a build: ask a question (answered in words) or request changes (rebuilt) ────
+def run_revise(check, skip, ctx):
+    plugin, root = ctx["plugin"], ctx["ws"]
+    if not ctx["jrs"]:
+        return skip("jobs: requesting changes after a build", "no JasperReports install")
+    ws = fresh_ws(root, "revise")
+    srv = Server(plugin, ws).start()
+    try:
+        jid, tok, folder = probe_job(plugin, ctx, srv, ws)
+        hdr = {"X-JTI-Job": tok}
+        early = srv.js("POST", f"/api/jobs/{jid}/revise", {"text": "too soon"}, hdr)
+        run_gates(plugin, ws, folder)
+        fill_notes(plugin, folder)
+        c1 = helper(plugin, ws, "complete")
+        # -- a question: answered on the page, the job and its downloads untouched
+        before = srv.snap(jid, tok)
+        q_bad = srv.js("POST", f"/api/jobs/{jid}/inquire", {"text": "x"}, {"X-JTI-Job": "nope"})[0]
+        q_empty = srv.js("POST", f"/api/jobs/{jid}/inquire", {"text": " "}, hdr)[0]
+        q_code, q_d = srv.js("POST", f"/api/jobs/{jid}/inquire", {"text": "Where does Type come from?"}, hdr)
+        q_twice = srv.js("POST", f"/api/jobs/{jid}/inquire", {"text": "and another"}, hdr)[0]
+        qw = helper(plugin, ws, "wait", "--secs", "10")
+        qgot = json.loads(qw.stdout) if qw.returncode == 0 else {}
+        mid = srv.snap(jid, tok)
+        rp = helper(plugin, ws, "reply", "--job", jid, "--n", "1", "From the case's caseType.")
+        rp2 = helper(plugin, ws, "reply", "--job", jid, "--n", "1", "again")
+        after = srv.snap(jid, tok)
+        art = after["artifacts"][0] if after["artifacts"] else {}
+        dl = srv.get(f"/api/jobs/{jid}/file/{art.get('id')}?t={tok}")[0]
+        check("jobs: a question about a finished report reaches the waiting worker with its text, "
+              "is answered on the page, and changes nothing - still complete, same downloads",
+              q_bad == 403 and q_empty == 409 and q_code == 200 and q_twice == 409
+              and (qgot.get("inquiry") or {}).get("text") == "Where does Type come from?"
+              and qgot.get("id") == jid and qgot.get("status") == "complete"
+              and mid["status"] == "complete" and mid["artifacts"] == before["artifacts"]
+              and rp.returncode == 0 and rp2.returncode == 1
+              and after["inquiries"][0]["answer"] == "From the case's caseType."
+              and after["status"] == "complete" and after["artifacts"] == before["artifacts"]
+              and dl == 200, (q_bad, q_empty, q_code, q_twice, qw.stdout[-300:], rp.stdout, rp2.stdout))
+        # -- a pasted screenshot: uploaded to the job's own folder, named by the server, and
+        # passed to the worker as a path; anything that is not a real picture is refused
+        png = b"\x89PNG\r\n\x1a\n" + b"\0" * 64
+        a_code, _, a_body = srv.req("POST", f"/api/jobs/{jid}/attach", headers={"X-JTI-Job": tok,
+                                    "Content-Type": "image/png"}, raw=png)
+        pid = json.loads(a_body or b"{}").get("id", "")
+        a_txt = srv.req("POST", f"/api/jobs/{jid}/attach", headers={"X-JTI-Job": tok,
+                        "Content-Type": "text/plain"}, raw=b"hello")[0]
+        a_fake = srv.req("POST", f"/api/jobs/{jid}/attach", headers={"X-JTI-Job": tok,
+                         "Content-Type": "image/png"}, raw=b"not a png at all")[0]
+        a_tok = srv.req("POST", f"/api/jobs/{jid}/attach", headers={"X-JTI-Job": "nope",
+                        "Content-Type": "image/png"}, raw=png)[0]
+        q_forged = srv.js("POST", f"/api/jobs/{jid}/inquire",
+                          {"text": "see this", "images": ["../../../etc/passwd"]}, hdr)[0]
+        q2 = srv.js("POST", f"/api/jobs/{jid}/inquire", {"text": "What is circled here?", "images": [pid]}, hdr)[0]
+        q2w = helper(plugin, ws, "wait", "--secs", "10")
+        q2got = (json.loads(q2w.stdout) if q2w.returncode == 0 else {}).get("inquiry") or {}
+        q2img = (q2got.get("images") or [""])[0]
+        helper(plugin, ws, "reply", "--job", jid, "--n", "2", "The case number.")
+        check("jobs: a pasted screenshot is stored in the job's hidden folder under a server-made "
+              "name and reaches the worker as a path; non-pictures, fakes, bad tokens and forged "
+              "ids are refused",
+              a_code == 200 and re.match(r"^img-\d+-[0-9a-f]{8}\.png$", pid) and a_txt == 415
+              and a_fake == 400 and a_tok == 403 and q_forged == 400 and q2 == 200
+              and q2got.get("text") == "What is circled here?"
+              and q2img == os.path.join(folder, ".jti-build", "attachments", pid)
+              and open(q2img, "rb").read() == png,
+              (a_code, pid, a_txt, a_fake, a_tok, q_forged, q2, q2w.stdout[-300:]))
+        bad_tok = srv.js("POST", f"/api/jobs/{jid}/revise", {"text": "x"}, {"X-JTI-Job": "nope"})[0]
+        empty = srv.js("POST", f"/api/jobs/{jid}/revise", {"text": "   "}, hdr)
+        code, d = srv.js("POST", f"/api/jobs/{jid}/revise",
+                         {"text": "Rename the Type column to Case Type"}, hdr)
+        j = srv.snap(jid, tok)
+        check("jobs: changes can be requested only on a finished build, with the job's token, "
+              "and not blank",
+              c1.returncode == 0 and early[0] == 409 and bad_tok == 403 and empty[0] == 409
+              and code == 200 and d.get("ok"), (c1.stdout[-200:], early, bad_tok, empty, code, d))
+        check("jobs: a change request puts the SAME job back in the queue with the request, "
+              "its old gates and downloads cleared (setup stages stay ticked, the rest rerun)",
+              j["status"] == "submitted" and j["revision"]["n"] == 1
+              and j["revision"]["text"] == "Rename the Type column to Case Type"
+              and j["gates"] is None and j["artifacts"] == []
+              and j["percent"] < 30 and "contract" not in j["done"] and "package" not in j["done"], j)
+        w = helper(plugin, ws, "wait", "--secs", "10")
+        got = json.loads(w.stdout) if w.returncode == 0 else {}
+        running = srv.js("POST", f"/api/jobs/{jid}/revise", {"text": "again"}, hdr)[0]
+        c_early = helper(plugin, ws, "complete")
+        r2 = run_gates(plugin, ws, folder)
+        c2 = helper(plugin, ws, "complete")
+        j2 = srv.snap(jid, tok)
+        check("jobs: the waiting worker claims it with the request text, in the same folder; it "
+              "cannot complete until the gates pass again, then completes with its history",
+              got.get("id") == jid and got.get("folder") == folder
+              and (got.get("revision") or {}).get("text") == "Rename the Type column to Case Type"
+              and running == 409 and c_early.returncode == 1 and r2.returncode == 0
+              and c2.returncode == 0 and j2["status"] == "complete" and j2["percent"] == 100
+              and len(j2["revisions"]) == 1 and j2["artifacts"],
+              (w.stdout[-300:], running, c_early.stdout[-200:], c2.stdout[-200:]))
+        ui = open(os.path.join(plugin, "scripts", "build_ui.js"), encoding="utf8").read()
+        check("builder page: a finished build shows a 'Questions or changes?' box that posts "
+              "to /revise and follows the job again",
+              "Questions or changes?" in ui and "'/revise'" in ui and "'/inquire'" in ui
+              and "onPaste=${onPaste}" in ui and "'/attach'" in ui
+              and "Ask a question" in ui and "RevisePanel" in ui
+              and "useJob(job, round)" in ui, "build_ui.js")
     finally:
         srv.stop()
 
@@ -686,7 +802,7 @@ def run_phase5(check, skip, ctx):
               and cpid and not pid_alive(cpid) and took < 10, f"rc={p.returncode} {took:.1f}s {out[-300:]}")
         check("jobs: a cancelled job is CANCELLED - never successful - and lists what it created",
               j["status"] == "cancelled" and j["artifacts"] == [] and "partial.txt" in j["partial"]
-              and "spec.json" in j["partial"] and "my-notes.txt" not in j["partial"], j["partial"])
+              and "verification/spec.json" in j["partial"] and "my-notes.txt" not in j["partial"], j["partial"])
         check("jobs: cancelling leaves every file in place, the user's own included",
               open(os.path.join(folder, "my-notes.txt")).read() == "mine\n"
               and os.path.exists(os.path.join(folder, "partial.txt")), os.listdir(folder))
@@ -810,8 +926,8 @@ def run_fields(check, skip, ctx):
         c, _ = srv.js("POST", "/api/spec", spec)
         spec2 = dict(spec_for("Picked_Bad"), paths=["not", "a", "map"], criteria="nope")
         srv.js("POST", "/api/spec", spec2)
-        s1 = json.load(open(os.path.join(ws, "Proj", "Picked", "spec.json")))
-        s2 = json.load(open(os.path.join(ws, "Proj", "Picked_Bad", "spec.json")))
+        s1 = json.load(open(os.path.join(ws, "Proj", "Picked", "verification", "spec.json")))
+        s2 = json.load(open(os.path.join(ws, "Proj", "Picked_Bad", "verification", "spec.json")))
         check("fields: picked paths and filters are kept in spec.json; malformed ones dropped",
               c == 200 and s1.get("paths") == spec["paths"]
               and s1.get("criteria") == [{"path": "Case.filingDate", "operator": "range",
@@ -827,7 +943,7 @@ def run_fields(check, skip, ctx):
                                                 "format": "", "customFormat": "", "truncate": "12"},
                                  "caseType": {"link": False, "sort": "sideways", "aggregate": "EXPLODE"}}
         srv.js("POST", "/api/spec", full)
-        s3 = json.load(open(os.path.join(ws, "Proj", "Configured", "spec.json")))
+        s3 = json.load(open(os.path.join(ws, "Proj", "Configured", "verification", "spec.json")))
         c0, c1 = s3["criteria"]
         check("fields: criterion settings (operator, pick-list, required, default) and column options "
               "(link, sort, aggregate, truncate) are kept; values outside the eSeries sets are refused",
@@ -933,7 +1049,7 @@ def run_dd(check, skip, ctx):
         spec["criteria"] = [{"path": "Case.caseStatus", "kind": "in", "lookup": "CASE_STATUS",
                              "params": ["CaseStatus"]}]
         srv.js("POST", "/api/spec", spec)
-        s = json.load(open(os.path.join(ws, "Proj", "Lookup_Pick", "spec.json")))
+        s = json.load(open(os.path.join(ws, "Proj", "Lookup_Pick", "verification", "spec.json")))
         check("fields: a filter picked on a pick-list keeps the list name in spec.json",
               s.get("criteria", [{}])[0].get("lookup") == "CASE_STATUS", s.get("criteria"))
     finally:
@@ -986,6 +1102,24 @@ def run_closed(check, skip, ctx):
         check("closed: a check-in still in flight from the CLOSED tab (same id, after its beacon) "
               "does not cancel the close - Claude stops after the grace, not the page timeout",
               w.returncode == 8 and time.time() - t0 < 10, (w.returncode, round(time.time() - t0, 1)))
+    finally:
+        srv.stop()
+    # A page opened BEFORE the server restarted still holds the session token it fetched
+    # then. Its close beacon (and its Build button) must still work afterwards (10-01).
+    ws = fresh_ws(root, "closed_restart")
+    srv = Server(plugin, ws, env={"JTI_CLOSE_GRACE": "2", "JTI_PAGE_TTL": "120"}).start()
+    old_tok = srv.session
+    srv.stop()
+    srv = Server(plugin, ws, env={"JTI_CLOSE_GRACE": "2", "JTI_PAGE_TTL": "120"}).start()
+    try:
+        srv.js("GET", "/api/watching?page=D")
+        c, _ = srv.js("POST", "/api/session/closed", {"session": old_tok, "page": "D"})
+        t0 = time.time(); w = helper(plugin, ws, "wait", "--secs", "15")
+        code, d = srv.js("POST", "/api/jobs", spec_for("After_Restart"), {"X-JTI-Session": old_tok})
+        check("closed: after a server restart, a tab opened before it still stops Claude when "
+              "closed, and its Build button still submits (the session token survives a restart)",
+              srv.session == old_tok and c == 200 and w.returncode == 8 and time.time() - t0 < 10
+              and code == 200, (c, w.returncode, round(time.time() - t0, 1), code, d))
     finally:
         srv.stop()
 

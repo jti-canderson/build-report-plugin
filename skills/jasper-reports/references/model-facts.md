@@ -866,3 +866,98 @@ a column heading is a `S.static()`, not a field — so a heading clipped by its 
 invisible to it. On this build the heading `Charge` printed as `Charg` through a completely
 green gate, and only reading the rendered page found it. **Look at the headings, every
 time.** A narrow right-hand column with a word longer than its digits is the usual shape.
+
+---
+
+## Scaffolded `fixture.py` does not escape newlines — multi-line cells split TSV rows
+
+*Found 2026-10-01 building `OKDAC D6 Plugin Samples/Case_Summary` with jti-reports 0.34.1
+(`perf/report-build-speed`, 2c2b4d9).*
+
+`scaffold.py` writes the TSV line as `str(r[k]).replace("\t", " ")` only. A fixture cell with
+`\n` (stacked contact lines, "name [role]" lists, type + result) writes a REAL newline, which
+starts a new TSV row: the page shows a panel heading twice, blank rows, and a dozen bogus
+truncation failures. `render_check.groovy` already turns a literal `\\n` back into a newline,
+and the hand-fixed `Case_Involvements` fixture carries `.replace("\n", "\\n")`. Add that
+replace to the writer after scaffolding (or fix it in `scaffold.py`) before trusting a
+truncation failure on a multi-line cell.
+
+## `Party.person` has no getter (local 2026-10-01 jar)
+
+`sdk_fields.py` on `ecourt-sdk-local-2026-10-01.jar`: `person` is a field on `Party` with
+**no getter anywhere on the chain** — same shape as `CaseSeal.effectiveFrom/To`. Groovy can
+read the field directly, but on a lazy proxy that may be null, which would blank every
+Contact Information cell (`parties.person.cf_preferred*`) on both party panels. Unproven
+either way; the folder view renders the path. First thing to check if contacts print blank.
+
+## Scaffolded `fixture.py` KEYS go stale when `gen_jrxml.py` gains `header_cols`
+
+*Found 2026-10-01 building `OKDAC D6 Plugin Samples/Case_Involvements` (0.34.1, 2c2b4d9).*
+
+`scaffold.py` writes `KEYS` from the template's DEFAULT header (`hAttorney`, `hDefense`,
+`hVerticalUnit`...). Porting a precedent's `HEADER_COLS` into `gen_jrxml.py` changes the
+jrxml's fields but not `KEYS`, so the fixture writes columns the layout no longer has and
+omits the ones it does. After any generator edit, re-read KEYS from the regenerated jrxml
+(`re.findall(r'<field name="([^"]+)"', ...)`) before rendering.
+
+Same build: the project's `.jti-project.json` still named an SDK whose file had vanished
+from `sdk/` since the morning's build; `sdk-decide` exits 11 ("the file is gone"), and a
+re-upload of the identical jar (same sha) cleared it. Cause not found.
+
+## A long-lived builder server can run CODE from before the current checkout state
+
+*Found 2026-10-01 building `OKDAC D6 Plugin Samples/Events` (0.34.1, perf/report-build-speed,
+2c2b4d9) in a session where the server had been left running from an earlier `/test-report`.*
+
+`serve_builder.py` is started with `nohup ... &` and `jobs.py wait`/`run`/`complete` just talk
+to it over HTTP; "report builder ALREADY RUNNING" short-circuits the whole startup block, so a
+server process that has been alive since before a scaffold/doc-location change keeps serving
+its OLD in-memory code indefinitely, even though every file on disk is current. Here, this
+report's `RULE_REGISTRATION.txt`/`JRXML_CONTRACT.txt` landed under `verification/` (the current
+`scaffold.py`/`finish.sh` convention on this branch), but the stale server's `complete` handler
+still looked for them at the report-folder ROOT (the convention `../Case_Involvements` was
+built under, earlier the same session) and refused with "cannot complete - no verified doc in
+the report folder" - a message that names the DOC kind, not the path, so it does not point at
+the real cause. `jobs.py status` still showed every stage done; only `complete` failed.
+
+**Fix: `pkill -f serve_builder.py` and start it again** before trusting a confusing refusal
+from `complete`/`run --gates` that contradicts a file you can see on disk. Job state survives
+the restart (it lives in `.jti-builder` on disk, not server memory), so this costs nothing.
+If "ALREADY RUNNING" ever stops matching what the checkout actually does, restart first.
+
+## Case-header money fields, and swapping only the eSeries Screen title band
+
+*Found 2026-10-01 rebuilding the `OKDAC D6 Plugin Samples/Events` header to the OKDAC
+`caseheader` Velocity, `ecourt-sdk-local-2026-10-01.jar`, `javap -c`.*
+
+- `Case.getBalanceofInvoicesCents()` is a **`-1L` sentinel**; `sdk_fields.py` calls it
+  `field-backed`. `Case.getCf_obligationsBalance()` and `getCf_restitutionsBalance()` are
+  derived (`aconst_null`). The screen's Total / Fees / Restitutions badges read exactly these.
+  No corpus rule reads any of the three, so their formulas are unknown: read the same fields,
+  reject null and -1, print a dash. Do not swap in your own sum, which can disagree with the badge.
+- `Case.getNextEvent()`, `getCaseTypeLabel()`, `getStatusLabel()` and `getLocationLabel()` are
+  derived as well; `statusDate` and `receivedDate` are field-backed.
+- **To keep `eseries_summary`'s panels and replace only its header**, set
+  `T._title = <your function>` in `gen_jrxml.py` before `T.build()`, and pass your header's
+  fields as `header_cols=[(0, 0, [(f, f) for f in FIELDS])]` so the template declares them.
+  The template's own header block is never drawn. See `Events/verification/case_header.py`.
+- MIN_LEAD is 1.45, so a **9pt box needs 14pt** (13 fails). Headers are where this bites.
+
+## Builder traps: `sdk-decide` from the report folder, and adding a criterion in a revision
+
+*Found 2026-10-01 building `~/Downloads/Case_Summary` with `/test-report` (0.34.1, 2c2b4d9).*
+
+- **`project.py sdk-decide` run from INSIDE the report folder exits 10 with `ASK outside
+  <report folder> - cannot check the SDK`.** `/build-report` says to run every command from
+  the report folder, but the project root is resolved from cwd when no `.jti-root` exists, so
+  the destination is "outside" it. Exit 10 reads like "stale SDK, ask"; it is not. Run
+  `sdk-decide` with cwd = the destination folder (here `~/Downloads`), which printed a current SDK.
+- **A revision that adds a Search Criterion but no column is run WITHOUT `--force`, so
+  `verification/gen_jrxml.py` is kept, and its `PARAMS` still lacks the new input.** The
+  jrxml then declares no `<parameter>` for it and the launch form never shows it. Add the
+  input to `PARAMS` by hand (criteria first, then the plain params) and regenerate.
+  `launch_inputs.groovy` is rewritten either way.
+- **The generated launch block declares `def <inputName>` for EVERY input, the plain
+  `caseId` included.** A rule that already had a local of that name (`def caseNumber = ...`)
+  now has a duplicate declaration. Rename the RULE's local, never the block, which must be
+  pasted unchanged. Paste it after the `import` lines: Groovy refuses an import after a statement.

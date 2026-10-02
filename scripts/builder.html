@@ -58,6 +58,8 @@
   @keyframes pulse { 50% { box-shadow:0 0 0 6px rgba(23,178,106,0) } }
   .banner { background:var(--warn-bg); border-bottom:1px solid var(--warn-rule); color:var(--warn);
             padding:10px 32px; font-size:13px; text-align:center }
+  .banner.draft { background:var(--navy-tint); color:var(--ink-2); border-bottom-color:var(--line, #E4E7EC) }
+  .banner.draft .mini { margin:0 6px 0 10px }
 
   /* ---- page shell ---- */
   .shell { max-width:1280px; margin:0 auto; padding:28px 32px 64px; display:grid;
@@ -271,6 +273,8 @@
   .optrow { display:flex; flex-wrap:wrap; gap:16px; margin:4px 0 10px }
   label.cb { display:flex; gap:6px; align-items:center; font-weight:500; color:var(--ink); margin:0; font-size:13px; cursor:pointer }
   label.cb input { accent-color:var(--navy) }
+  .launch-preview { margin-top:10px; padding:14px; border:1px dashed var(--rule-2); border-radius:var(--r-sm); background:#fff }
+  .launch-preview .lp-icon { font:500 10.5px ui-monospace,Menlo,monospace; opacity:.85; border:1px dashed currentColor; border-radius:3px; padding:0 3px }
   .mt8 { margin-top:10px }
   .linkbtn { border:0; background:none; color:var(--navy); font-weight:600; padding:0; font-size:12.5px; text-decoration:underline }
   /* the lists - eSeries "Search Criteria Fields" / "Result Columns" */
@@ -390,6 +394,18 @@
   .bpanel { border:1px solid var(--rule); border-radius:var(--r); padding:16px 18px; margin-top:18px; background:#fff }
   .bpanel h3 { margin:0 0 6px; font-size:15.5px }
   .bpanel.bad { background:var(--bad-bg); border-color:var(--bad-rule) } .bpanel.bad h3 { color:var(--bad) }
+  .bpanel.revise textarea { width:100%; min-height:90px; margin-top:8px }
+  .bpanel.revise .thread { margin-top:10px; display:flex; flex-direction:column; gap:10px }
+  .bpanel.revise .qa .q { font-size:13.5px }
+  .bpanel.revise .qa .a { margin-top:4px; padding:10px 12px; background:var(--bg-2, #F4F6FA); border-radius:var(--r-sm); font-size:13.5px; white-space:pre-wrap }
+  .bpanel.revise .qa .a.pending { color:var(--ink-2) }
+  .bpanel.revise .pics { display:flex; flex-wrap:wrap; gap:10px; margin-top:10px }
+  .bpanel.revise .pic { position:relative; width:120px; border:1px solid var(--rule); border-radius:var(--r-sm); background:#fff; padding:4px }
+  .bpanel.revise .pic img { display:block; width:100%; height:80px; object-fit:cover; border-radius:3px }
+  .bpanel.revise .pic .cap { font-size:11.5px; color:var(--ink-2); margin-top:3px }
+  .bpanel.revise .pic.bad .cap { color:#B42318 }
+  .bpanel.revise .pic .x { position:absolute; top:-8px; right:-8px; width:22px; height:22px; padding:0; border-radius:50%; line-height:20px; font-size:14px; background:#fff; border:1px solid var(--rule-2); cursor:pointer }
+  .bpanel.revise .revs { margin:6px 0 0 18px; padding:0; font-size:13px; color:var(--ink-2) }
   .bpanel.ask { background:var(--warn-bg); border-color:var(--warn-rule); box-shadow:0 0 0 4px rgba(247,144,9,.08) }
   .bpanel.done { background:var(--ok-bg); border-color:var(--ok-rule) } .bpanel.done h3 { color:var(--ok) }
   .qprompt { color:var(--ink-2) }

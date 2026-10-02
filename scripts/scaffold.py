@@ -12,7 +12,7 @@ cell in silence. This generates FROM the spec, the same way parse_cols() compute
 instead of anyone doing the arithmetic by hand.
 
 WHAT IT WRITES  (three files, ~170 lines, none of it a decision)
-    gen_jrxml.py                 the template call
+    verification/gen_jrxml.py    the template call (the .jrxml it writes goes to the report folder)
     verification/fixture.py      the KEYS list, the row plumbing, the TSV writer
     verification/Fixture.groovy  the object graph rulecheck.groovy RUNS the rule against
     verification/run.sh          regenerate -> render each variant -> collect output
@@ -107,7 +107,7 @@ def gen_jrxml(s):
     # TPL = ~/JaspersoftWorkspace/MyReports/jti-reports-plugin/templates, so every generated
     # layout worked only on a machine with that exact checkout, and an installed plugin on
     # anyone else's failed at its first gate.
-    L += ['    python3 gen_jrxml.py', '"""', 'import os', 'import pathlib', 'import re', 'import sys', '',
+    L += ['    python3 verification/gen_jrxml.py', '"""', 'import os', 'import pathlib', 'import re', 'import sys', '',
           f'MADE_BY = {str(pathlib.Path(__file__).resolve().parent.parent)!r}   # the plugin that scaffolded this',
           '',
           '',
@@ -163,7 +163,9 @@ def gen_jrxml(s):
     L += [
           '', '',
           'if __name__ == "__main__":',
-          '    out = pathlib.Path(__file__).parent / f"{NAME}.jrxml"',
+          '    # Lives in verification/ (scripts/layout.py); the .jrxml goes to the report folder.',
+          '    here = pathlib.Path(__file__).resolve().parent',
+          '    out = (here.parent if here.name == "verification" else here) / f"{NAME}.jrxml"',
           '    out.write_text(build())',
           '    print(f"wrote {out.name}  ({len(SECTIONS)} sections, "',
           '          f"{sum(len(s[2]) for s in SECTIONS)} columns, {len(PARAMS)} parameters)")', '']
@@ -347,7 +349,7 @@ def gen_run(s):
          '',
          f'WANT="${{2:-{" ".join(variants)}}}"',
          'rm -f verification/*_p*.png verification/*.pdf verification/fixture_*.tsv',
-         'python3 gen_jrxml.py',
+         'python3 verification/gen_jrxml.py',
          '',
          '# A TSV per variant, written BEFORE the JVM starts - one shared fixture.tsv would',
          '# be overwritten by the next variant before the JVM had read it.',
@@ -395,6 +397,12 @@ def main():
     if len(sys.argv) < 2 or sys.argv[1].startswith('-'):
         print(__doc__); sys.exit(2)
 
+    # `spec.json` and `verification/spec.json` both find the spec, whichever layout the
+    # report folder has (scripts/layout.py).
+    import layout
+    if not os.path.exists(sys.argv[1]):
+        sys.argv[1] = layout.find(os.path.dirname(os.path.abspath(sys.argv[1])),
+                                  os.path.basename(sys.argv[1]))
     spec = json.load(open(sys.argv[1], encoding='utf8'))
     # A "match this picture" spec carries no template on purpose: the builder could not pick
     # one and neither can this script - something has to LOOK at the reference first. Say
@@ -428,6 +436,20 @@ def main():
             print(f"    - {e}")
         sys.exit(2)
 
+    # The launcher (a "run this report" link for a folder view), when one is asked for.
+    import launcher as LA
+    bad = LA.validate(spec.get('launcher'))
+    if bad:
+        print("  the launcher cannot be built as it stands:")
+        for e in bad:
+            print(f"    - {e}")
+        sys.exit(2)
+    if spec.get('launcher'):
+        spec['launcher'] = LA.clean(spec['launcher'])
+        if LA.normalise(spec):
+            print(f"  note    added launch input {spec['launcher']['param']} (java.lang.Long): the "
+                  f"launcher posts the record's id to it - the rule must read it")
+
     # Refuse at scaffold time rather than emitting a gen_jrxml.py that dies on first run.
     kw = build_kwargs(spec['template'])
     if kw is None:
@@ -446,24 +468,29 @@ def main():
               f"  generator from jti_style primitives (build-procedure.md, Custom layouts).")
         sys.exit(2)
 
+    # The report folder: --out, else the spec's own folder (or the one above verification/,
+    # where the builder writes it - scripts/layout.py).
+    import layout
     out = os.path.abspath(sys.argv[sys.argv.index('--out') + 1]) if '--out' in sys.argv \
-        else os.path.dirname(os.path.abspath(sys.argv[1]))
+        else layout.report_dir(sys.argv[1])
     force = '--force' in sys.argv
     os.makedirs(os.path.join(out, 'verification'), exist_ok=True)
+    for n in layout.migrate(out):                 # a report built before the move
+        print(f"  moved   {n} -> verification/{n}")
 
     # Write and RUN gen_jrxml first: the fixture's key list is read off the generated
     # jrxml, so it cannot disagree with the layout it is meant to fill.
-    gj = os.path.join(out, 'gen_jrxml.py')
+    gj = os.path.join(out, 'verification', 'gen_jrxml.py')
     if not os.path.exists(gj) or force:
         open(gj, 'w', encoding='utf8').write(gen_jrxml(spec))
-        print(f"  wrote   gen_jrxml.py  ({len(gen_jrxml(spec).splitlines())} lines)")
+        print(f"  wrote   verification/gen_jrxml.py  ({len(gen_jrxml(spec).splitlines())} lines)")
     else:
-        print("  kept    gen_jrxml.py  (exists - --force to overwrite)")
-    r = subprocess.run([sys.executable, 'gen_jrxml.py'], cwd=out,
+        print("  kept    verification/gen_jrxml.py  (exists - --force to overwrite)")
+    r = subprocess.run([sys.executable, os.path.join('verification', 'gen_jrxml.py')], cwd=out,
                        capture_output=True, text=True)
     if r.returncode != 0:
         print(r.stdout + r.stderr)
-        print("  gen_jrxml.py failed - fix the spec before scaffolding the rest")
+        print("  verification/gen_jrxml.py failed - fix the spec before scaffolding the rest")
         sys.exit(1)
     print("  " + r.stdout.strip())
     jrxml = os.path.join(out, spec['name'] + '.jrxml')
@@ -492,6 +519,13 @@ def main():
             print(f"  wrote   {rel}  ({len(body.splitlines())} lines)")
         elif os.path.exists(pth):
             os.remove(pth)
+    # The launcher is derived from spec.launcher alone, so it is regenerated like the launch
+    # inputs. With no launcher asked for, an existing .vm is LEFT - it may be hand-written.
+    vm = LA.gen(spec, [n for n in re.findall(r'<parameter\s+name="([^"]+)"', open(jrxml, encoding='utf8').read())])
+    if vm:
+        open(os.path.join(out, LA.filename(spec)), 'w', encoding='utf8').write(vm)
+        print(f"  wrote   {LA.filename(spec)}  (launcher: {spec['launcher']['icon'] or 'no icon'}, "
+              f"posts {spec['launcher']['param']})")
     for rel, body, ex in files:
         p = os.path.join(out, rel)
         if os.path.exists(p) and not force:

@@ -74,7 +74,71 @@ be run again. Exit **0** prints the claimed job as JSON: `folder` (the report fo
 canonical output; everything is written there and nowhere else), `spec` (what the user
 submitted), and `destination` (the project folder they picked).
 
+### A job with `inquiry`: a question about a finished report
+
+**Pasted screenshots.** An `inquiry` or a `revision` can carry `images`: absolute paths to
+screenshots the user pasted into the box (an eSeries screen, a page of the PDF with something
+circled). **Open every one with the Read tool and look at it before you answer or change
+anything** - "make it look like this" or "this column is wrong" usually means only the
+picture says which. Never copy them into the report folder or the deliverables.
+
+When `wait` prints a job with an `inquiry` (`{n, text}`), the user clicked **Ask a question**
+on a finished report. It is a question, not a change request: **change no file and run no
+gate.** The job stays complete and its downloads stay valid. `earlier` lists the questions
+already answered for this report, for context.
+
+- Read what you need from the report folder (the rule, `verification/spec.json`,
+  `verification/JRXML_CONTRACT.txt`, `verification/RULE_REGISTRATION.txt`, the rendered
+  pages, the SDK) and answer in plain English, as briefly as the question allows. Say where
+  a value comes from by field path when that is the question. If you are not sure, say so;
+  never guess at what eSeries holds.
+- Answer it with `python3 "$J" reply --job <id> --n <n> "<answer>"`. Do not use `ask`,
+  `start`, `done` or `complete` for it - the job is not being built.
+- If the honest answer is "that would need a change" (they asked whether it could show
+  something it does not), say what the change would be and that **Request changes** on the
+  page will make it. Do not make it yourself.
+- Then go straight back to step 2 and `wait` again.
+
+### A job with `revision`: changes to a report you already built
+
+When the claimed job has a `revision` (`{n, text}`), the user has looked at the finished
+report and typed what they want changed in the page's **Questions or changes?** box and clicked **Request changes**. It is
+the SAME report in the SAME folder - not a new build:
+
+- Do not re-ask the four questions, re-check the SDK or re-scaffold from scratch. Read
+  `revision.text`, then change what it asks for: the spec (`verification/spec.json`), the
+  rule, and the fixture rows to match. If a column changes, update the spec and re-run
+  `scaffold.py verification/spec.json --out . --force` so the layout, launch inputs and
+  launcher are regenerated, never hand-edited. `--force` also resets `verification/fixture.py`
+  to TODO rows: give it real rows again before the gates. It regenerates
+  `verification/gen_jrxml.py` from the template defaults too, so any override added to it by
+  hand in an earlier round (a one-wide `HEADER_COLS`, a `markup="styled"` field) is GONE:
+  diff it against the previous copy and reapply each one before running the gates. For a
+  change that does not touch the columns (a heading, the launcher, the rule's logic), do not
+  use `--force` at all: edit the spec and run scaffold without it.
+- Report it like any build: `jobs.py start plan "Applying the requested changes"`, then the
+  same gates row as below (`jobs.py run --stage contract --gates -- finish.sh …`). Fill the NOTES blocks
+  again, adding a line for what changed in this round, then `complete`. The
+  page shows the new files when it passes.
+- **The preview must show the change.** The rendered pages come from the fixture rows, not
+  from the rule, so a change to order, grouping or totals is invisible unless the rows show
+  it: put the fixture rows in the order the rule now produces (newest first means the rows
+  ARE newest first), and give a new column or total real values. Someone who asked for
+  "newest first" and sees 10/14, 09/02, 12/01 will reasonably conclude it was ignored.
+- Something that cannot be done, such as a chart or a click inside the PDF, is said on the
+  page with `jobs.py ask --type choice` before you build, never silently dropped. An unclear
+  request is asked about the same way, once. **An alternative you offer must be genuinely
+  useful once built**: a summary of counts is its own small section or table with room for
+  every value, not text squeezed into a fixed-width header box where it is cut to "+2 more".
+- Log each change you made (`jobs.py log`), so the technical log shows what the round did.
+
 ## 3. Build it, reporting each stage
+
+**The report folder's top holds only what ships**: the rule (`<Name>_V1.groovy`), the
+`.jrxml`, `RULE-<Code>.zip` and `<Name>_Launcher.vm`. Everything else - `spec.json`,
+`gen_jrxml.py`, `RULE_REGISTRATION.txt`, `JRXML_CONTRACT.txt`, `HANDOFF.md`, fixtures and
+rendered pages - goes in `verification/` (`scripts/layout.py`). Never write a support file at
+the top.
 
 The stages and their percentages are fixed in `jobs.py`. Report each one when it STARTS
 (`jobs.py start <stage> "<what you are doing>"`) and when it is DONE (`jobs.py done <stage>
@@ -103,13 +167,14 @@ loaded by name, which could be a different installed version):
 |---|---|
 | `validated` | Read the spec. Check it has a template (or a `look_like` picture) and either columns or a brief. |
 | `destination` | `python3 "$P/scripts/project.py" sdk-decide "<destination>"`. Exit 0: done, with the SDK line as the status. Exit 11: the project has no usable SDK - **required**: ask for it with no way to skip (below) and do not go past this stage without one. Exit 10: the SDK is stale - ask, and the user may skip (below). |
-| `requirements` | **Picked fields first.** `spec.paths` maps each column picked in the field browser to its SDK path (e.g. `Case.parties[].person.lastName`); `spec.criteria` lists launch inputs made from a field, with the path each filters and whether it is a `range` (From/To), `in` or `equals`, and for a pick-list its `lookup` list name (a launch input for it takes that list's values). Each criterion also carries the settings chosen in the builder, named as in the eSeries criterion editor: `operator` (`EQUALS`, `STARTS_WITH`, `ENDS_WITH`, `CONTAINS`, `IN`, `NOT_IN`, `BLANK`, `NOT_BLANK`, `GREATER_THAN`, or `RANGE` for a From/To date), `multi` (multi-select lookup; the value arrives as codes), `required` (register the input REQUIRED), `hidden` (a fixed filter: apply `default`, no launch input) and `default` (`@TODAY` / `@THIS_WEEK` for dates). `spec.columnOptions` gives each column `link`, `sort` (`ASCEND`/`DESCEND` - the rule's row order), `aggregate` (`GROUP_BY` groups rows, `SUM`/`COUNT`/... a total - pick a grouped template or say in the handoff it was not honoured), `format` (a date / money / number pattern, `YES_NO`, or `CUSTOM` with `customFormat` using `@value`) and `truncate` (characters). Apply them in the rule. **Launch inputs are generated, not written.** When `spec.criteria` is present, scaffold writes `verification/launch_inputs.groovy`: paste it UNCHANGED at the top of the rule and build the query from `def w = applyLaunchInputs(new Where())` (add the rule's own conditions to `w` after). It reads every input by its exact launch-form name, converts dates / lists / numbers from the text eSeries sends, applies each `default` when the input is left blank, and adds the attested Where call. Never rename an input, re-read one by hand, or add a second filter on the same field - `finish.sh` runs `verification/launch_inputs_check.groovy`, which launches the rule blank, filled and in the alternate arrival formats and fails the build if any input does not reach its filter. A pick-list `default` is a CODE (the Data Dictionary lists labels). Anything the template cannot show - a link in the PDF - is listed in the handoff as not honoured, never silently dropped. They came from the project's Data Dictionary (or its SDK), so use them as the traversals and filters; `[]` means one value per related record, so decide (and log) whether that is one row each or a joined list. **Nothing picked:** derive the columns from the brief (record them under `"derived"` in `spec.json`), and the launch inputs too, since a brief that says "filed in a date range" means a From/To pair on the filing date. Assume and log (`jobs.py log`) wherever a reasonable person would; ask on the page (section 4) only when two readings give materially different reports. Then the lookups (the `lookup` switch decides targeted or full) and check every field against the SDK. |
-| `plan` | Write the rule (`<Name>_V1.groovy`). It is the judgment file, and every line of it is a decision. |
-| `scaffold` | `python3 "$J" run --stage scaffold -- python3 "$P/scripts/scaffold.py" spec.json --out .`. If it says `kept … (exists)`, the folder holds an earlier unfinished build's scaffold (the page allows a rebuild only then); run it again with `--force`, which replaces only the scaffold's own `gen_jrxml.py`, `verification/fixture.py` and `verification/run.sh`. |
+| `requirements` | **Picked fields first.** `spec.paths` maps each column picked in the field browser to its SDK path (e.g. `Case.parties[].person.lastName`); `spec.criteria` lists launch inputs made from a field, with the path each filters and whether it is a `range` (From/To), `in` or `equals`, and for a pick-list its `lookup` list name (a launch input for it takes that list's values). Each criterion also carries the settings chosen in the builder, named as in the eSeries criterion editor: `operator` (`EQUALS`, `STARTS_WITH`, `ENDS_WITH`, `CONTAINS`, `IN`, `NOT_IN`, `BLANK`, `NOT_BLANK`, `GREATER_THAN`, or `RANGE` for a From/To date), `multi` (multi-select lookup; the value arrives as codes), `required` (register the input REQUIRED), `hidden` (a fixed filter: apply `default`, no launch input) and `default` (`@TODAY` / `@THIS_WEEK` for dates). `spec.columnOptions` gives each column `link`, `sort` (`ASCEND`/`DESCEND` - the rule's row order), `aggregate` (`GROUP_BY` groups rows, `SUM`/`COUNT`/... a total - pick a grouped template or say in the handoff it was not honoured), `format` (a date / money / number pattern, `YES_NO`, or `CUSTOM` with `customFormat` using `@value`) and `truncate` (characters). Apply them in the rule. **Launch inputs are generated, not written.** When `spec.criteria` is present, scaffold writes `verification/launch_inputs.groovy`: paste it UNCHANGED at the top of the rule and build the query from `def w = applyLaunchInputs(new Where())` (add the rule's own conditions to `w` after). It reads every input by its exact launch-form name, converts dates / lists / numbers from the text eSeries sends, applies each `default` when the input is left blank, and adds the attested Where call. Never rename an input, re-read one by hand, or add a second filter on the same field - `finish.sh` runs `verification/launch_inputs_check.groovy`, which launches the rule blank, filled and in the alternate arrival formats and fails the build if any input does not reach its filter. A pick-list `default` is a CODE (the Data Dictionary lists labels). Anything the template cannot show - a link in the PDF - is listed in the handoff as not honoured, never silently dropped. They came from the project's Data Dictionary (or its SDK), so use them as the traversals and filters; `[]` means one value per related record, so decide (and log) whether that is one row each or a joined list. **Nothing picked:** derive the columns from the brief (record them under `"derived"` in `verification/spec.json`), and the launch inputs too, since a brief that says "filed in a date range" means a From/To pair on the filing date. Assume and log (`jobs.py log`) wherever a reasonable person would; ask on the page (section 4) only when two readings give materially different reports. Then the lookups (the `lookup` switch decides targeted or full) and check every field against the SDK. |
+| `scaffold` | `python3 "$J" run --stage scaffold -- python3 "$P/scripts/scaffold.py" verification/spec.json --out .`. If it says `kept … (exists)`, the folder holds an earlier unfinished build's scaffold (the page allows a rebuild only then); run it again with `--force`, which replaces only the scaffold's own `verification/gen_jrxml.py`, `verification/fixture.py` and `verification/run.sh`. Scaffold comes BEFORE the rule: it writes `verification/launch_inputs.groovy`, which the rule starts with. |
+| `launcher` (no stage of its own) | `spec.launcher` = `{icon, text, param, style}`, from the builder's Launcher step: scaffold writes `<Name>_Launcher.vm` from it and the page offers it as a download. **Never write a launcher by hand.** If the brief asks for one ("velocity to trigger it", "a print button on the case screen") and `spec.launcher` is absent, add `"launcher": {"icon": "", "text": "Print <Title>", "param": "<the record-id input, e.g. caseId>", "style": "link"}` to `verification/spec.json` (`style`: `link`, or `blue` / `grey` / `red` for a button - eSeries `btn btn-primary` / `btn btn-default` / `btn btn-danger`) before scaffolding and log it. The rule must read `param` as the record id (scaffold adds it to `params` if missing). Icon classes: `templates/eseries_icons.json`. |
+| `plan` | `jobs.py start plan`, write the rule (`<Name>_V1.groovy`), then `jobs.py done plan "<Name>_V1.groovy written"`. It is the judgment file, and every line of it is a decision. (The gates tick this stage themselves if you forget, since they run on the rule.) |
 | `fixtures` | Give `verification/fixture.py` real, awkward rows. |
 | gates | `python3 "$J" run --stage contract --gates -- "$P/scripts/finish.sh" <Name>_V1.groovy <Name>.jrxml --code <Name> --name "<Title>"`. **This one command reports contract, rule, render, truncation and package itself**; do not report those stages by hand. |
 | `review` | Read EVERY page image in `verification/`. Done only when you have looked at each one. |
-| `documentation` | Fill the NOTES blocks in `JRXML_CONTRACT.txt` and `RULE_REGISTRATION.txt`. |
+| `documentation` | Fill the NOTES blocks in `verification/JRXML_CONTRACT.txt` and `verification/RULE_REGISTRATION.txt`. |
 | finish | `python3 "$J" complete` |
 
 **The gates must run through `jobs.py run --gates`.** That is how the page learns each gate's

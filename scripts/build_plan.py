@@ -517,7 +517,10 @@ def write_spec(p, folder):
             "params": [[x["name"], x["class"]] for x in p["params"]],
             "root": p["root"], "variants": (p.get("verification") or {}).get("variants")
             or ["full", "none"], "intent": p.get("intent", ""), "meta": [], "tiles": []}
-    path = os.path.join(folder, "spec.json")
+    import layout
+    layout.migrate(folder)
+    path = layout.path(folder, "spec.json")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     old = {}
     if os.path.exists(path):
         try:
@@ -628,7 +631,7 @@ def fill_notes(p, folder, res):
         reg.append("  - rule_zip.py emits every input OPTIONAL: set the REQUIRED ones by hand after"
                    " importing, or build the zip with rule_import.py --input name:type::REQUIRED")
     for fn, block in (("JRXML_CONTRACT.txt", con), ("RULE_REGISTRATION.txt", reg)):
-        path = os.path.join(folder, fn)
+        path = os.path.join(folder, "verification", fn)
         if not os.path.exists(path):
             continue
         t = open(path, encoding="utf8").read()
@@ -647,8 +650,8 @@ def inventory(p, folder):
     return {"rule": p["rule"] if p["rule"] in names else None,
             "jrxml": next((n for n in names if n.endswith(".jrxml")), None),
             "zip": next((n for n in names if n.startswith("RULE-") and n.endswith(".zip")), None),
-            "registration": "RULE_REGISTRATION.txt" in names,
-            "contract": "JRXML_CONTRACT.txt" in names,
+            "registration": "RULE_REGISTRATION.txt" in v,
+            "contract": "JRXML_CONTRACT.txt" in v,
             "pdfs": sorted(n for n in v if n.endswith(".pdf")),
             "pages": sorted(n for n in v if n.endswith(".png"))}
 

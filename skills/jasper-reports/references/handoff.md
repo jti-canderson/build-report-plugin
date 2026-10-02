@@ -4,7 +4,7 @@ Two artifacts, one source of truth.
 
 | File | Lives in | Audience | Format |
 |---|---|---|---|
-| `HANDOFF.md` | the report folder | the next person (or instance) to touch the report | Markdown, terse, updated constantly |
+| `HANDOFF.md` | the report folder's `verification/` | the next person (or instance) to touch the report | Markdown, terse, updated constantly |
 | `Deployment Guide- <Report Name> (<Report_Code>).docx` | the report folder | the client, the ticket, a deployer | Word, prose, regenerated from the above |
 
 `HANDOFF.md` is authoritative. The docx is a rendering of it, so never write facts into the

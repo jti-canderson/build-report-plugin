@@ -40,6 +40,9 @@ import tempfile
 import time
 import zipfile
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import layout  # noqa: E402
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 PLUGIN = os.path.dirname(HERE)
 REAL_JRS = os.environ.get("JRS") or next(
@@ -87,16 +90,16 @@ def detect(folder):
         raise SystemExit(f"  cannot tell which rule/jrxml to use in {folder}: {rules} {jrxml}")
     rule = next((r for r in rules if re.search(r"_V\d+\.groovy$", r)), rules[0])
     code = name = template = ""
-    reg = os.path.join(folder, "RULE_REGISTRATION.txt")
+    reg = layout.find(folder, "RULE_REGISTRATION.txt")
     if os.path.exists(reg):
         t = open(reg, encoding="utf8").read()
         m = re.search(r"^Code\s+(\S+)", t, re.M); code = m.group(1) if m else ""
         m = re.search(r"^Name\s+(.+)$", t, re.M); name = m.group(1).strip() if m else ""
-    con = os.path.join(folder, "JRXML_CONTRACT.txt")
+    con = layout.find(folder, "JRXML_CONTRACT.txt")
     if os.path.exists(con):
         m = re.search(r"Template:\s*(\S+)", open(con, encoding="utf8").read())
         template = m.group(1) if m else ""
-    spec = os.path.join(folder, "spec.json")
+    spec = layout.find(folder, "spec.json")
     if os.path.exists(spec):
         s = json.load(open(spec, encoding="utf8"))
         template = template or s.get("template") or ""
@@ -225,7 +228,7 @@ def manifest(folder, d):
          "jrxml_sha": hashlib.sha1(re.sub(r'uuid="[^"]*"', 'uuid=""', jr).encode()).hexdigest()[:12],
          "jrxml_elements": jr.count("<reportElement")}
     for doc in ("RULE_REGISTRATION.txt", "JRXML_CONTRACT.txt"):
-        p = os.path.join(folder, doc)
+        p = layout.find(folder, doc)
         m[doc] = hashlib.sha1(open(p, "rb").read()).hexdigest()[:12] if os.path.exists(p) else None
     zips = sorted(x for x in os.listdir(folder) if x.startswith("RULE-") and x.endswith(".zip"))
     m["zip"] = {}

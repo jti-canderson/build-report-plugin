@@ -110,23 +110,31 @@ do it column by column. A column you cannot source is a question worth asking.
 beside it. The folder name is the report's human Name, with spaces. Create it before writing
 the first file.
 
+**The top of the folder holds only what gets deployed** - the rule, its zip, the layout and
+the launcher. Everything else goes in `verification/`, so the folder is easy to navigate
+(`scripts/layout.py` is the one definition; a report built flat before that is moved over the
+next time scaffold.py or finish.sh runs on it).
+
 ```
 <Report Name>/
   <Report_Name>_V<n>.groovy   the rule source; bump the version only once one works
   RULE-<Report_Code>.zip      the rule as an importable export, if one was produced
                               (see the report-deployment skill)
   <Report_Name>.jrxml         the layout - generated, never hand-edited
-  gen_jrxml.py                the generator that emits the .jrxml
-  journal_mark.b64            logo asset, copied here so the folder stands alone
-  RULE_REGISTRATION.txt       what to type into the empty rule form
-  JRXML_CONTRACT.txt          fields, grouping, geometry, what is and is not verified
-  verification/               Fixture.groovy, Assertions.groovy, run.sh
-                              run.sh is COPIED from assets/run_template.sh - do not
-                              write one from scratch; the template carries the raster
-                              step and the walk-up skill lookup
-  HANDOFF.md                  the living handoff context
-  Deployment Guide- <Report Name> (<Report_Code>).docx
-  Outdated Versions/          superseded rules, once there is more than one
+  <Report_Name>_Launcher.vm   static-text Velocity that runs the report, when asked for
+  verification/
+    spec.json                 what was asked for (the builder writes it here)
+    gen_jrxml.py              the generator; it writes the .jrxml one level UP
+    RULE_REGISTRATION.txt     what to type into the empty rule form
+    JRXML_CONTRACT.txt        fields, grouping, geometry, what is and is not verified
+    HANDOFF.md                the living handoff context
+    Deployment Guide- <Report Name> (<Report_Code>).docx
+    Fixture.groovy, fixture.py, run.sh, launch_inputs*.groovy, rendered PDFs/PNGs
+                              run.sh comes from scaffold.py (or, for a hand-built
+                              report, is COPIED from assets/run_template.sh - do not
+                              write one from scratch)
+    reference/                a picture the builder was asked to match
+    Outdated Versions/        superseded rules, once there is more than one
 ```
 
 File stems use `Title_Case_With_Underscores` and match the rule Code and the Reports Admin
@@ -375,12 +383,12 @@ something that runs.
    **Verified**, and carry any unresolved guess into **Needs your input** as the question the
    critic phrased. It fires when a wrong answer would look as plausible as a right one — not
    merely when the logic is long; if you can compile, Execute or probe it instead, do that.
-8. **Registration text** — write `RULE_REGISTRATION.txt`: Code, Name, Category `Reports`, a
+8. **Registration text** — write `verification/RULE_REGISTRATION.txt`: Code, Name, Category `Reports`, a
    one-line Description, Transaction End `false`, Engine `SCRIPT`, every **input** row as
    *name / REQUIRED|OPTIONAL / class* (bare name, no underscore, matching the JRXML
    `<parameter>` exactly), and the **output** row `data` / `REQUIRED` / `java.util.List`.
    This is documentation for the person deploying, not something you action.
-9. **Handoff** — write or update `HANDOFF.md` before you report back.
+9. **Handoff** — write or update `verification/HANDOFF.md` before you report back.
 10. **Report back** — **show the rendered pages**, then a files table, then **Verified**
     (what you actually ran), **Not verified** (never empty — a local render proves layout,
     never traversals), and **Needs your input** (numbered list). Keep it short. Reasoning

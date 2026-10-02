@@ -106,13 +106,13 @@ columns is the only added step.
 
 ### `look_like` — the spec says "match this picture"
 
-A spec with `"template": ""` and `"look_like": "reference/<file>"` is someone who did not
+A spec with `"template": ""` and `"look_like": "verification/reference/<file>"` is someone who did not
 want any of the six. **Read the picture before anything else** — it is sitting in the report
 folder next to the spec — then log in ONE line which template you are starting from and
 carry on. Do not ask for a template; they already answered, with a picture.
 
 ```
-Read <the report folder>/reference/<file>
+Read <the report folder>/<look_like>
 ```
 
 Everything in **Custom layouts and `look_like` pictures** below applies, unchanged: start
@@ -272,14 +272,14 @@ failed; fix it and run the same command again. Then look at every page, as alway
 
 ### Scaffold the boilerplate — do not type it
 
-Write a short `spec.json`, then generate the three files that carry no decisions:
+Write a short `verification/spec.json`, then generate the three files that carry no decisions:
 
 ```bash
 python3 "$P/scripts/scaffold.py" --example    # the spec format
-python3 "$P/scripts/scaffold.py" spec.json --out .
+python3 "$P/scripts/scaffold.py" verification/spec.json --out .
 ```
 
-It writes `gen_jrxml.py`, `verification/fixture.py` and `verification/run.sh` — ~170 lines
+It writes `verification/gen_jrxml.py`, `verification/fixture.py` and `verification/run.sh` — ~170 lines
 expressing maybe 15 lines of actual choices. Writing them by hand is three or four turns and
 several thousand of the slowest kind of token, to reach a file that was always going to be
 the same shape.

@@ -15,7 +15,7 @@
 #
 # IT ALSO DOES NOT REGENERATE THE .jrxml. This script verifies whatever .jrxml is on disk,
 # so editing gen_jrxml.py and then running only this file verifies the OLD layout and calls
-# it green. Run `python3 gen_jrxml.py <the jrxml>` first, every time. (Add that line to the
+# it green. Run `python3 verification/gen_jrxml.py` first, every time. (Add that line to the
 # PER-REPORT block if you would rather not remember it - nothing here depends on it being
 # absent.)
 set -euo pipefail

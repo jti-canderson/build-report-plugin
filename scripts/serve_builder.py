@@ -11,7 +11,7 @@ across two prompts that each wanted their own answer, and what forced a two-step
 menu. A form has no cap: six templates and five projects are just six and five, and every
 preview sits next to its own label permanently instead of being sent as attachments first.
 
-WHAT IT DOES AND DOES NOT DO. It writes `spec.json` into the project folder and prints the
+WHAT IT DOES AND DOES NOT DO. It writes `verification/spec.json` into the report folder and prints the
 one command to run. It does NOT invoke Claude - that is deliberate for now: no background
 process, nothing to debug through a browser, and a build that wants to ask a follow-up
 question can still ask it. Wiring a Generate button to `claude -p` is the next step, not
@@ -55,6 +55,7 @@ NAME_OK = re.compile(r'^[A-Za-z][A-Za-z0-9_]{0,60}$')
 WRITES = []
 WROTE = threading.Condition()
 WAITERS = [0]          # how many /api/wait calls are parked right now
+STARTED = time.time()  # names this run, so the page can tell its own draft from an old one
 
 
 # A picture the user uploaded as "make it look like THIS". Kept in a temp file keyed by
@@ -159,6 +160,16 @@ def templates():
                     "preview": f"/preview/{stem}.png" if
                     os.path.exists(os.path.join(PREVIEW, stem + ".png")) else ""})
     return out
+
+
+def icon_catalog():
+    """The eSeries icon class names the launcher can show (templates/eseries_icons.json)."""
+    try:
+        import launcher as LA
+        c = LA.icons()
+        return {"font": c["font"], "svg": c["svg"], "source": c.get("source", "")}
+    except (OSError, ValueError, KeyError):
+        return {"font": [], "svg": [], "source": ""}
 
 
 def inside_ws(d):
@@ -433,6 +444,11 @@ def write_spec(payload):
         errs = [f"the search criteria could not be read ({type(e).__name__})"]
     if errs:
         return False, "Search Criteria: " + "; ".join(errs[:3]) + ("" if len(errs) <= 3 else f" (+{len(errs) - 3} more)")
+    import launcher as LA
+    la = payload.get("launcher")
+    errs = LA.validate(la) if la else []
+    if errs:
+        return False, "Launcher: " + "; ".join(errs)
 
     out = folder / name
     out.mkdir(parents=True, exist_ok=True)
@@ -479,25 +495,91 @@ def write_spec(payload):
                 clean[str(fld)[:80]] = c
         if clean:
             spec["columnOptions"] = clean
+    if la:
+        spec["launcher"] = LA.clean(la)
+        spec["params"] = [p for p in (spec.get("params") or []) if isinstance(p, (list, tuple))]
+        LA.normalise(spec)                   # the input the launcher posts the record id to
     if look:
         # Copied, not referenced: a temp file disappears on reboot and the spec has to stay
         # readable weeks later, next to the report it describes.
-        ref = out / "reference"
+        ref = out / "verification" / "reference"
         ref.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(look["path"], ref / look["name"])
-        spec["look_like"] = "reference/" + look["name"]
+        spec["look_like"] = "verification/reference/" + look["name"]   # from the report folder
     spec["title"] = spec.get("title") or name.replace("_", " ")
     spec["variants"] = spec.get("variants") or ["full", "none"]
-    p = out / "spec.json"
+    # In verification/, not the top: the top holds only what ships (scripts/layout.py).
+    p = out / "verification" / "spec.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(spec, indent=2) + "\n")
     try:
         rel = str(p.relative_to(P.ROOT))
     except ValueError:
         rel = str(p)                       # a folder chosen outside the workspace
+    # Before the waiter is woken: the reply says whether Claude was waiting, and a waiter
+    # released first has already gone by the time a slower step finishes.
+    remember_project(folder)
     with WROTE:
         WRITES.append(rel)
         WROTE.notify_all()
     return True, rel
+
+
+# The project folders reports were built in, newest first - so a session started in another
+# folder (~/Documents/JTI AI) still offers the client folders used last time. Kept per USER,
+# not per browser: the app's own browser pane and Chrome do not share localStorage.
+RECENT_MAX = 8
+
+
+def recent_file():
+    return pathlib.Path(os.environ.get("JTI_RECENT_FILE")
+                        or pathlib.Path.home() / ".jti-reports" / "recent-projects.json")
+
+
+def _recent_paths():
+    try:
+        xs = json.loads(recent_file().read_text(encoding="utf8"))
+        return [x for x in xs if isinstance(x, str)][:RECENT_MAX] if isinstance(xs, list) else []
+    except (OSError, ValueError):
+        return []
+
+
+def remember_project(folder):
+    """Put this destination at the front of the recent list. Never fails a build."""
+    try:
+        d = str(pathlib.Path(folder).resolve())
+        xs = [d] + [x for x in _recent_paths() if x != d]
+        f = recent_file()
+        f.parent.mkdir(parents=True, exist_ok=True)
+        tmp = f.with_suffix(".tmp")
+        tmp.write_text(json.dumps(xs[:RECENT_MAX], indent=1), encoding="utf8")
+        os.replace(tmp, f)
+    except OSError:
+        pass
+
+
+def recent_projects():
+    """Recently used project folders that still exist, as the page lists them. One the
+    workspace list already shows is named the same way, so the page can tell they match."""
+    listed = {str((P.ROOT / p["name"]).resolve()): p["name"] for p in P.list_projects()}
+    out = []
+    for x in _recent_paths():
+        d = pathlib.Path(x)
+        try:
+            if not d.is_dir():
+                continue
+        except OSError:
+            continue
+        m = P._meta(d)
+        try:
+            where = "~/" + str(d.parent.relative_to(pathlib.Path.home()))
+        except ValueError:
+            where = str(d.parent)
+        out.append({"name": listed.get(str(d), str(d)), "listed": str(d) in listed,
+                    "label": d.name, "where": where, "reports": len(P._reports_in(d)),
+                    "sdk": bool(m.get("sdk")), "dd": bool(m.get("dd")),
+                    "environment": m.get("environment") or ""})
+    return out
 
 
 # --jobs mode, which /build-report runs. None in the default mode: the stand-alone form that
@@ -658,7 +740,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if path == "/api/bootstrap":
             boot = {"root": str(P.ROOT), "rootWhy": P.ROOT_WHY, "version": version_note(),
                     "projects": projects(), "templates": templates(),
-                    "plugin": os.path.realpath(PLUGIN), "pid": os.getpid()}
+                    "plugin": os.path.realpath(PLUGIN), "pid": os.getpid(),
+                    "icons": icon_catalog(), "recent": recent_projects(),
+                    "run": f"{os.getpid()}-{STARTED:.0f}"}
             if JOBS:
                 # Readable only by a page served from this origin (no CORS headers are ever
                 # sent), so a page elsewhere cannot learn the session token.

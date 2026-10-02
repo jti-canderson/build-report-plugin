@@ -61,6 +61,14 @@ if CORE_ONLY:
 TIER = "core"
 
 
+# Builder servers started by the suite must not write the user's real recent-projects list.
+os.environ.setdefault("JTI_RECENT_FILE", os.path.join(tempfile.mkdtemp(prefix="jti-recent-suite-"), "recent.json"))
+# Job servers and helpers started by the tests publish and look up their pointers here, not in
+# ~/.jti-builder: a helper that followed a pointer to the user's live builder (port 8789)
+# could claim one of their jobs or swallow their "tab closed" signal.
+os.environ["JTI_POINTER_DIR"] = tempfile.mkdtemp(prefix="jti-pointers-")
+
+
 def tier(name):
     global TIER
     TIER = name
@@ -144,7 +152,7 @@ def mutate(src, ws, tag, fn):
 
 
 def rule(f):    return os.path.join(f, "Probe_Report_V1.groovy")
-def gen(f):     return os.path.join(f, "gen_jrxml.py")
+def gen(f):     return os.path.join(f, "verification", "gen_jrxml.py")
 def fixture(f): return os.path.join(f, "verification", "fixture.py")
 
 
@@ -234,7 +242,7 @@ def criteria_tests(ws):
     rc, out = cgates(sp)
     check("launch inputs: a rule built from the criteria passes every gate, each input checked",
           rc == 0 and out.count("PASS  launch inputs:") >= 10 and "FAIL" not in out, out[-1500:])
-    reg = open(os.path.join(sp, "RULE_REGISTRATION.txt")).read() if rc == 0 else ""
+    reg = open(os.path.join(sp, "verification", "RULE_REGISTRATION.txt")).read() if rc == 0 else ""
     check("RULE_REGISTRATION says what the person running the report enters, per input",
           "WHAT THE PERSON RUNNING THE REPORT ENTERS" in reg and "FilingDateFrom / FilingDateTo" in reg
           and "(no input) Open only" in reg, reg[-800:])
@@ -374,7 +382,7 @@ ok, msg = B.write_spec({'name': 'Look_Probe', 'project': 'Probe Project',
                         'sections': [{'key': 'ROWS', 'title': 'Rows',
                                       'cols': [['A', 20, 'Left', 'a']]}]})
 folder = os.path.join(os.environ['JTI_PROJECT_ROOT'], 'Probe Project', 'Look_Probe')
-spec = json.load(open(os.path.join(folder, 'spec.json')))
+spec = json.load(open(os.path.join(folder, 'verification', 'spec.json')))
 notpl, why = B.write_spec({'name': 'No_Tpl', 'project': 'Probe Project', 'template': '',
                            'sections': [{'key': 'R', 'title': 'R',
                                          'cols': [['A', 20, 'Left', 'a']]}]})
@@ -392,7 +400,7 @@ print(json.dumps({'badRejected': not bad['ok'], 'goodOk': good.get('ok'),
     check("an uploaded example layout is sniffed, named and copied into the report folder",
           rc == 0 and d.get("badRejected") and d.get("goodOk")
           and d.get("name") == "my_screen_shot.png" and d.get("wrote")
-          and d.get("lookLike") == "reference/my_screen_shot.png" and d.get("copied"), out)
+          and d.get("lookLike") == "verification/reference/my_screen_shot.png" and d.get("copied"), out)
     check("a spec with neither a template nor a picture is refused",
           bool(d.get("refusedNoTemplate")) and "picture" in (d.get("why") or ""), out)
 
@@ -410,9 +418,9 @@ brief = B.write_spec({'name': 'Brief_Ok', 'project': 'Probe Project',
 empty = B.write_spec({'name': 'Empty_No', 'project': 'Probe Project',
                       'template': 'tabular_list', 'intent': '', 'sections': []})
 folder = os.path.join(os.environ['JTI_PROJECT_ROOT'], 'Probe Project', 'Brief_Ok')
-spec = json.load(open(os.path.join(folder, 'spec.json')))
+spec = json.load(open(os.path.join(folder, 'verification', 'spec.json')))
 sc = subprocess.run([sys.executable, os.path.join(%r, 'scaffold.py'),
-                     os.path.join(folder, 'spec.json'), '--out', os.path.join(folder, 'x')],
+                     os.path.join(folder, 'verification', 'spec.json'), '--out', os.path.join(folder, 'x')],
                     capture_output=True, text=True)
 print(json.dumps({'briefAccepted': brief[0], 'intentKept': bool(spec.get('intent')),
                   'noSections': spec.get('sections') == [],
@@ -488,7 +496,7 @@ print(json.dumps({'briefAccepted': brief[0], 'intentKept': bool(spec.get('intent
 
     check("the Write button reaches a waiting Claude",
           parked.get("watching") and wrote.get("watched")
-          and delivered.get("spec", "").endswith("Listener_Probe/spec.json"),
+          and delivered.get("spec", "").endswith("Listener_Probe/verification/spec.json"),
           f"parked={parked} wrote={wrote} delivered={delivered}")
     check("a Claude that hung up stops counting as watching",
           not idle.get("watching") and not released.get("watching"),
@@ -996,7 +1004,7 @@ print("RESOLVE", same, wrong, refused, typo)
     tw = tempfile.mkdtemp(prefix="jti-tpl-")
     rc, _ = run(["python3", os.path.join(PLUGIN, "scripts", "scaffold.py"),
                  os.path.join(FIX, "good_spec.json"), "--out", os.path.join(tw, "R")])
-    g = os.path.join(tw, "R", "gen_jrxml.py")
+    g = os.path.join(tw, "R", "verification", "gen_jrxml.py")
     fake = os.path.join(tw, "home")
     os.makedirs(os.path.join(fake, ".claude", "plugins", "cache", "m", "jti-reports"))
     os.symlink(os.path.realpath(PLUGIN),
@@ -1029,6 +1037,121 @@ print("RESOLVE", same, wrong, refused, typo)
           rc == 0 and 'pageWidth="792"' in body and 'name="caseNumber"' in body
           and "GrandTotal" not in body and 'name="amt"' not in body, out[-400:])
     shutil.rmtree(tw, ignore_errors=True)
+
+    # ---- the folder-view launcher: asked for in the builder, generated by scaffold -------
+    tl = tempfile.mkdtemp(prefix="jti-launcher-")
+    la_spec = json.load(open(os.path.join(FIX, "good_spec.json")))
+    la_spec["launcher"] = {"icon": "i-print", "text": "Print $it #now <b>", "param": "caseId"}
+    json.dump(la_spec, open(os.path.join(tl, "spec.json"), "w"))
+    rc, out = run(["python3", os.path.join(PLUGIN, "scripts", "scaffold.py"),
+                   os.path.join(tl, "spec.json"), "--out", os.path.join(tl, "R")])
+    vm_p = os.path.join(tl, "R", "Probe_Report_Launcher.vm")
+    vm = open(vm_p).read() if os.path.exists(vm_p) else ""
+    jr = glob.glob(os.path.join(tl, "R", "*.jrxml"))
+    check("launcher: scaffold writes <Name>_Launcher.vm with the icon, posts the record id to "
+          "the named input by report CODE, and adds that input to the report",
+          rc == 0 and '<span class="glyphicon i-print" aria-hidden="true"></span>' in vm
+          and "add('reportParams[2].name','caseId'); add('reportParams[2].value','$object.id');" in vm
+          and "reportParams[0]" not in vm.split("#set")[1] and "reportParams[1]" not in vm.split("#set")[1]
+          and 'reportsGenerate/run/$reportCode/onRun' in vm and '#set($reportCode = "Probe_Report")' in vm
+          and "_csrf" in vm and jr and 'parameter name="caseId"' in open(jr[0]).read(), out[-400:])
+    check("launcher: the link text is inert to Velocity and HTML ($ and # print, tags do not)",
+          "Print &#36;it &#35;now &lt;b&gt;</a>" in vm and "$it" not in vm, vm[-300:])
+    la_spec["launcher"] = {"icon": "i-not-a-class", "text": "", "param": "caseId"}
+    json.dump(la_spec, open(os.path.join(tl, "spec.json"), "w"))
+    rc2, out2 = run(["python3", os.path.join(PLUGIN, "scripts", "scaffold.py"),
+                     os.path.join(tl, "spec.json"), "--out", os.path.join(tl, "R2")])
+    check("launcher: an icon the eSeries style guide does not list is refused before anything is written",
+          rc2 == 2 and "not in the eSeries style guide" in out2
+          and not os.path.exists(os.path.join(tl, "R2", "Probe_Report_Launcher.vm")), out2[-300:])
+    sys.path.insert(0, os.path.join(PLUGIN, "scripts"))
+    import launcher as LA
+    cat = LA.icons()
+    check("launcher: the icon catalogue holds both eSeries families with their own markup",
+          len(cat["font"]) > 300 and len(cat["svg"]) > 100 and "i-print" in cat["font"]
+          and "printer" in cat["svg"] and "glyphicon {cls}" in cat["markup"]["font"]
+          and LA.gen({"name": "R", "title": "R", "launcher": {"icon": "printer", "text": "",
+                      "param": "caseId"}}).count('<span class="icon printer"></span></a>') == 1,
+          str(len(cat["font"])))
+    _gen = lambda st, text="Print": LA.gen({"name": "R", "title": "R", "launcher": {
+        "icon": "i-print", "text": text, "param": "caseId", "style": st}})
+    _b, _g, _r = _gen("blue"), _gen("grey", ""), _gen("red")
+    _l = LA.gen({"name": "R", "title": "R", "launcher": {"icon": "", "text": "Go", "param": "caseId"}})
+    check("launcher: blue/grey/red put the eSeries classes on the link (btn btn-primary / "
+          "btn-default / btn-danger) and draw nothing inline; no style is still the plain link",
+          '<a href="javascript:void(0)" class="btn btn-primary" title' in _b
+          and 'class="btn btn-default"' in _g and 'class="btn btn-danger"' in _r
+          and not any("background" in x or "inline-flex" in x for x in (_b, _g, _r))
+          and 'style="color:#054CFF;"' in _l and "btn" not in _l.split("#set")[1]
+          and LA.clean({"param": "caseId"})["style"] == "link"
+          and LA.validate({"param": "caseId", "style": "purple"})
+          and not LA.validate({"param": "caseId", "style": "red"}), _b[-400:])
+    # ---- report folder layout: only what ships at the top, the rest in verification/ ----
+    import layout as LY, harness_marker as HM
+    lay = os.path.join(tl, "Lay")
+    os.makedirs(os.path.join(lay, "verification"))
+    la_spec["launcher"] = {"icon": "i-print", "text": "", "param": "caseId", "style": "grey"}
+    json.dump(la_spec, open(os.path.join(lay, "verification", "spec.json"), "w"))
+    rc3, out3 = run(["python3", os.path.join(PLUGIN, "scripts", "scaffold.py"),
+                     os.path.join(lay, "verification", "spec.json")])
+    top = sorted(os.listdir(lay))
+    check("layout: a fresh scaffold leaves only the .jrxml and the launcher at the top - the "
+          "spec, the generator and the harness are in verification/",
+          rc3 == 0 and top == ["Probe_Report.jrxml", "Probe_Report_Launcher.vm", "verification"]
+          and all(os.path.isfile(os.path.join(lay, "verification", f))
+                  for f in ("spec.json", "gen_jrxml.py", "run.sh", "fixture.py")), f"{top} {out3[-300:]}")
+    # An old flat report: spec + generator at the top, a stamped run.sh calling the top one.
+    v = os.path.join(lay, "verification")
+    for f in ("spec.json", "gen_jrxml.py"):
+        shutil.move(os.path.join(v, f), os.path.join(lay, f))
+    g = os.path.join(lay, "gen_jrxml.py")
+    gt = open(g).read()
+    open(g, "w").write(gt.replace(LY.NEW_OUT, LY.OLD_OUT))
+    open(os.path.join(lay, "RULE_REGISTRATION.txt"), "w").write("my notes\n")
+    rs = os.path.join(v, "run.sh")
+    body = open(rs).read().split("\n")
+    open(rs, "w").write(HM.stamp("\n".join(body[:1] + body[2:]).replace(
+        "python3 verification/gen_jrxml.py", "python3 gen_jrxml.py")))
+    os.remove(os.path.join(lay, "Probe_Report.jrxml"))
+    moved = LY.migrate(lay)
+    rg = subprocess.run([sys.executable, os.path.join(v, "gen_jrxml.py")], cwd=lay,
+                        capture_output=True, text=True)
+    check("layout: an old flat report is moved into verification/ - its generator still writes "
+          "the .jrxml at the top, its unedited run.sh still passes the harness check, notes kept",
+          sorted(moved) == ["RULE_REGISTRATION.txt", "gen_jrxml.py", "spec.json"]
+          and rg.returncode == 0 and os.path.isfile(os.path.join(lay, "Probe_Report.jrxml"))
+          and not os.path.exists(os.path.join(v, "Probe_Report.jrxml"))
+          and HM.check(open(rs).read())[0] and "python3 verification/gen_jrxml.py" in open(rs).read()
+          and open(os.path.join(v, "RULE_REGISTRATION.txt")).read() == "my notes\n"
+          and LY.migrate(lay) == [], f"{moved} {rg.stderr[-200:]} top={sorted(os.listdir(lay))}")
+    _app = open(os.path.join(PLUGIN, "scripts", "app.js"), encoding="utf8").read()
+    _jh = open(os.path.join(PLUGIN, "scripts", "jobs_http.py"), encoding="utf8").read()
+    check("builder page: a Launcher step (checkbox, optional icon, optional text, the id input) "
+          "is sent as spec.launcher and its .vm is offered as a download",
+          "I want static-text Velocity that runs this report" in _app and "launcher: launcher.on ?" in _app
+          and "style: launcher.style" in _app and "launch-preview" in _app
+          and 'list="jti-icons"' in _app and '"_Launcher.vm"' in _jh
+          and "Never write a launcher by hand" in cmd_md, "app.js / jobs_http.py / build-report.md")
+    shutil.rmtree(tl, ignore_errors=True)
+
+    # ---- recently used project folders: remembered per user, listed in any session -------
+    tr = tempfile.mkdtemp(prefix="jti-recent-")
+    for d in ("ClientA", "ClientB", "Gone"):
+        os.makedirs(os.path.join(tr, d))
+    snippet = (
+        "import sys, json, shutil; sys.path.insert(0, sys.argv[1]); import serve_builder as S\n"
+        "for d in ('Gone', 'ClientA', 'ClientB', 'ClientA'): S.remember_project(sys.argv[2] + '/' + d)\n"
+        "shutil.rmtree(sys.argv[2] + '/Gone')\n"
+        "print(json.dumps([r['label'] for r in S.recent_projects()]))\n")
+    rc, out = run(["python3", "-c", snippet, os.path.join(PLUGIN, "scripts"), tr],
+                  env=dict(os.environ, JTI_RECENT_FILE=os.path.join(tr, "recent.json")))
+    check("recent projects: newest first, no duplicates, a deleted folder dropped",
+          rc == 0 and out.strip().splitlines()[-1] == '["ClientA", "ClientB"]', out[-300:])
+    check("builder page: recently used folders are listed and the last one is selected",
+          'optgroup label="Recently used"' in _app and "(d.recent || [])[0]" in _app
+          and "remember_project(folder)" in open(os.path.join(PLUGIN, "scripts", "serve_builder.py")).read(),
+          "app.js / serve_builder.py")
+    shutil.rmtree(tr, ignore_errors=True)
 
     # ---- /build-report: the browser-contained build (job coordinator + helper) --------
     import jobs_tests
@@ -1149,7 +1272,7 @@ print("RESOLVE", same, wrong, refused, typo)
               and (d.get("perf") or {}).get("jvms") == 1
               and {r["field"] for r in d.get("resolved", [])} == {"caseNumber", "caseType"},
               out[-600:])
-        notes = open(os.path.join(pw, "Proj", "Plan_Probe", "JRXML_CONTRACT.txt")).read()
+        notes = open(os.path.join(pw, "Proj", "Plan_Probe", "verification", "JRXML_CONTRACT.txt")).read()
         check("build_plan fills the untouched NOTES seed from the plan",
               "ASSUMPTIONS - decisions made without asking" in notes
               and "TODO before this ships" not in notes, notes[-400:])
@@ -1329,8 +1452,8 @@ print("RESOLVE", same, wrong, refused, typo)
           "mode: fast" in (run(fin_cmd, cwd=ff, env=fast_env)[1]), "")
     # a custom FAILING step, with every string the old detection looked for still present
     fc = mutate(good, ws, "fast_custom", lambda f: edit(
-        os.path.join(f, "verification", "run.sh"), "python3 gen_jrxml.py\n",
-        "python3 gen_jrxml.py\necho '  CUSTOM CHECK FAILED - site-specific step'; exit 7\n"))
+        os.path.join(f, "verification", "run.sh"), "python3 verification/gen_jrxml.py\n",
+        "python3 verification/gen_jrxml.py\necho '  CUSTOM CHECK FAILED - site-specific step'; exit 7\n"))
     rs_txt = open(os.path.join(fc, "verification", "run.sh")).read()
     rcL, outL = run(fin_cmd, cwd=fc, env={"JTI_VERIFIER": "legacy"})
     rcF, outF = run(fin_cmd, cwd=fc, env=fast_env)

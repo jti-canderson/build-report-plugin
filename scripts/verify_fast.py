@@ -195,10 +195,11 @@ def main():
     # ---- 0. regenerate -----------------------------------------------------------------
     mark("regenerate")
     jev("started", "regenerate")
-    if os.path.isfile("gen_jrxml.py"):
+    gen = os.path.join("verification", "gen_jrxml.py")      # scripts/layout.py
+    if os.path.isfile(gen):
         header("0/4  regenerate")
-        if run([sys.executable, "gen_jrxml.py"]).returncode != 0:
-            fail(0, "gen_jrxml.py failed")
+        if run([sys.executable, gen]).returncode != 0:
+            fail(0, "verification/gen_jrxml.py failed")
         print()
 
     # ---- 1. contract -------------------------------------------------------------------
@@ -341,7 +342,8 @@ def main():
     header("verdict")
     ok = True
     for f in [rule, jrxml] + (glob.glob("RULE-*.zip") or ["RULE-*.zip"]) + \
-             ["RULE_REGISTRATION.txt", "JRXML_CONTRACT.txt"]:
+             [os.path.join("verification", "RULE_REGISTRATION.txt"),
+              os.path.join("verification", "JRXML_CONTRACT.txt")]:
         if os.path.isfile(f):
             print(f"  ok      {f}")
         else:

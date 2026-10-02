@@ -43,7 +43,7 @@ Select the engine radio **before** touching the script: the CodeMirror editor is
 
 ## The registration block — hand this over with every report
 
-Whoever adds the rule is looking at an empty form with a Groovy file next to it, and the form will not tell them what to type. **Every time you hand over a report rule, hand over a filled-in block like the one below** — in the chat message, and as `RULE_REGISTRATION.txt` in the report's own folder (see "The report folder" in `SKILL.md`). It is the difference between "here is the code" and "here is a rule someone can add".
+Whoever adds the rule is looking at an empty form with a Groovy file next to it, and the form will not tell them what to type. **Every time you hand over a report rule, hand over a filled-in block like the one below** — in the chat message, and as `verification/RULE_REGISTRATION.txt` in the report's own folder (see "The report folder" in `SKILL.md`). It is the difference between "here is the code" and "here is a rule someone can add".
 
 Fill it in for real; do not ship the placeholders.
 
@@ -256,8 +256,8 @@ Use this shape:
 | [<name>.groovy](…) | rule source |
 | [RULE-<Code>.zip](…) | the same rule, importable — always include it |
 | [<name>.jrxml](…) | layout, N String fields |
-| [RULE_REGISTRATION.txt](…) | what to type in the rule form |
-| [JRXML_CONTRACT.txt](…) | fields, grouping, geometry |
+| [verification/RULE_REGISTRATION.txt](…) | what to type in the rule form |
+| [verification/JRXML_CONTRACT.txt](…) | fields, grouping, geometry |
 
 **Rule**
 

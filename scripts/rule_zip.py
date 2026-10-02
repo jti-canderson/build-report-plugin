@@ -94,7 +94,8 @@ def main():
     # has one: they belong to the rule's input registration, not to the .jrxml. Without a spec
     # every input stays OPTIONAL with no list, as before.
     launch, lines = {}, []
-    spec_path = os.path.join(os.path.dirname(os.path.abspath(a.jrxml)), 'spec.json')
+    import layout
+    spec_path = layout.find(os.path.dirname(os.path.abspath(a.jrxml)), 'spec.json')
     if os.path.exists(spec_path):
         import launch_inputs as LI
         spec = json.load(open(spec_path, encoding='utf8'))
@@ -127,10 +128,13 @@ def main():
     # contract_docs.py; finish.sh re-runs this on every iteration.
     present = SELF_SUPPLIED & set(re.findall(r'<parameter\\s+name="([^"]+)"',
                                             open(a.jrxml, encoding='utf8').read()))
-    reg, con = contract_docs.write(out_dir, meta, inputs, outputs, present, a.jrxml, a.template,
+    # The zip stays beside the rule; its registration notes go in verification/ (layout.py).
+    docs_dir = os.path.join(out_dir, layout.SUPPORT)
+    os.makedirs(docs_dir, exist_ok=True)
+    reg, con = contract_docs.write(docs_dir, meta, inputs, outputs, present, a.jrxml, a.template,
                                    launch_lines=lines)
     for f in (reg, con):
-        print(f"  wrote  {os.path.basename(f)}")
+        print(f"  wrote  {layout.SUPPORT}/{os.path.basename(f)}")
     print("\n  Fill the NOTES block in each - the generated part is the mechanical half only.")
 
     print("\n  IMPORTING IS A WRITE - hand this to the user; do not import it yourself.")
