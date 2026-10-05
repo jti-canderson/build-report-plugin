@@ -163,6 +163,9 @@
           border-radius:50%; background:var(--navy); color:#fff; display:grid; place-items:center;
           font-size:14px; font-weight:700; box-shadow:0 2px 6px rgba(16,24,40,.25) }
   .pick { margin-top:16px }
+  .lookdrop { display:flex; flex-wrap:wrap; align-items:center; gap:10px 12px; border-radius:var(--r-sm) }
+  .lookdrop .hint { margin:0 }
+  .lookdrop.drag input[type=file] { border-color:var(--navy); background:var(--navy-tint) }
 
   /* ---- sections grid ---- */
   .sec { border:1px solid var(--rule); border-radius:var(--r); padding:16px; margin:12px 0; background:var(--fill) }
@@ -405,6 +408,12 @@
   .bpanel.revise .pic .cap { font-size:11.5px; color:var(--ink-2); margin-top:3px }
   .bpanel.revise .pic.bad .cap { color:#B42318 }
   .bpanel.revise .pic .x { position:absolute; top:-8px; right:-8px; width:22px; height:22px; padding:0; border-radius:50%; line-height:20px; font-size:14px; background:#fff; border:1px solid var(--rule-2); cursor:pointer }
+  .bpanel.revise .pic .file { height:80px; border-radius:3px; background:var(--navy-tint); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px; padding:0 6px; overflow:hidden }
+  .bpanel.revise .pic .file .ext { font:700 12px/1 ui-monospace, Menlo, monospace; text-transform:uppercase; color:var(--navy); border:1.5px solid currentColor; border-radius:3px; padding:4px 6px }
+  .bpanel.revise .pic .file .fname { font-size:11px; color:var(--ink-2); max-width:100%; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+  .bpanel.revise .attachbar { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-top:10px }
+  .bpanel.revise .attachbar .note { margin:0 }
+  .bpanel.revise textarea.drag { outline:2px dashed var(--navy); outline-offset:2px; background:#F7F9FC }
   .bpanel.revise .revs { margin:6px 0 0 18px; padding:0; font-size:13px; color:var(--ink-2) }
   .bpanel.ask { background:var(--warn-bg); border-color:var(--warn-rule); box-shadow:0 0 0 4px rgba(247,144,9,.08) }
   .bpanel.done { background:var(--ok-bg); border-color:var(--ok-rule) } .bpanel.done h3 { color:var(--ok) }

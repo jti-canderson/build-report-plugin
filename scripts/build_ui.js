@@ -195,33 +195,77 @@
 
   // After a build: ASK about the report (answered in words, nothing changes) or REQUEST a
   // change (Claude changes THIS report, re-runs every gate and completes it again).
+  const MAX_ATTACH = 6;
+  const ACCEPT = 'image/png,image/jpeg,image/gif,image/webp,.pdf,.zip,.xlsx,.xls,.docx,.doc,.pptx,'
+    + '.txt,.csv,.tsv,.json,.xml,.jrxml,.groovy,.vm,.md,.log,.sql,.html,.htm,.yaml,.yml,.properties';
+  function attachNote(q) {
+    const n = (q.images || []).length, f = (q.files || []).length;
+    const parts = [n && n + ' picture' + (n > 1 ? 's' : ''), f && f + ' file' + (f > 1 ? 's' : '')].filter(Boolean);
+    return parts.length ? html` <span class="note">(with ${parts.join(' and ')})</span>` : '';
+  }
   function RevisePanel({ job, snap, onSent, onSnap }) {
     const [text, setText] = useState('');
     const [busy, setBusy] = useState('');
     const [err, setErr] = useState('');
-    const [pics, setPics] = useState([]);          // pasted screenshots: {key, url, id, err}
+    const [pics, setPics] = useState([]);          // attachments: {key, kind, name, url, id, err}
+    const [drag, setDrag] = useState(false);
+    const picker = useRef(null);
     const past = snap.revisions || [];
     const asked = snap.inquiries || [];
     const uploading = pics.some(p => !p.id && !p.err);
-    // Paste a screenshot straight into the box: each one is uploaded to this job's folder and
-    // goes to Claude with the message. Text pastes are left alone.
-    const onPaste = e => {
-      const files = [...((e.clipboardData && e.clipboardData.items) || [])]
-        .filter(it => it.kind === 'file' && /^image\//.test(it.type)).map(it => it.getAsFile()).filter(Boolean);
-      if (!files.length) return;
-      e.preventDefault();
-      files.forEach(f => {
+    const count = useRef(0);                       // attachments held, including ones still uploading
+    count.current = pics.length;
+    // Pasted, dropped or picked: each file is uploaded to this job's folder and goes to Claude
+    // with the message. Pictures go as pictures; anything else needs a name the server accepts.
+    const addFiles = files => {
+      files.filter(Boolean).forEach(f => {
+        if (count.current >= MAX_ATTACH) { setErr('Up to ' + MAX_ATTACH + ' attachments per message.'); return; }
+        count.current += 1;
         const key = Math.random().toString(36).slice(2);
-        if (pics.length >= 6) { setErr('Up to 6 pictures per message.'); return; }
-        setPics(ps => [...ps, { key, url: URL.createObjectURL(f) }]);
-        fetch('/api/jobs/' + job.id + '/attach', { method: 'POST', body: f,
-          headers: { 'X-JTI-Job': job.token, 'Content-Type': f.type } })
+        const img = /^image\/(png|jpeg|gif|webp)$/.test(f.type);
+        const name = f.name || (img ? 'screenshot' : 'file');
+        setPics(ps => [...ps, { key, kind: img ? 'image' : 'file', name, url: img ? URL.createObjectURL(f) : '' }]);
+        const headers = { 'X-JTI-Job': job.token, 'Content-Type': img ? f.type : 'application/octet-stream' };
+        if (!img || f.name) headers['X-JTI-Name'] = encodeURIComponent(name);
+        fetch('/api/jobs/' + job.id + '/attach', { method: 'POST', body: f, headers })
           .then(r => r.json()).then(d => setPics(ps => ps.map(p => p.key !== key ? p
-            : d.ok ? { ...p, id: d.id } : { ...p, err: d.message || 'Could not add that picture.' })))
+            : d.ok ? { ...p, id: d.id, kind: d.kind || p.kind } : { ...p, err: d.message || 'Could not add that file.' })))
           .catch(() => setPics(ps => ps.map(p => p.key === key ? { ...p, err: 'Could not reach the builder.' } : p)));
       });
     };
-    const drop = key => setPics(ps => ps.filter(p => { if (p.key === key) URL.revokeObjectURL(p.url); return p.key !== key; }));
+    // Text pastes are left alone; a pasted picture or file is attached.
+    const onPaste = e => {
+      const files = [...((e.clipboardData && e.clipboardData.items) || [])]
+        .filter(it => it.kind === 'file').map(it => it.getAsFile()).filter(Boolean);
+      if (!files.length) return;
+      e.preventDefault();
+      addFiles(files);
+    };
+    const onDrop = e => {
+      e.preventDefault(); setDrag(false);
+      addFiles([...((e.dataTransfer && e.dataTransfer.files) || [])]);
+    };
+    // The button reads the clipboard directly (the browser asks permission the first time).
+    const fromClipboard = async () => {
+      setErr('');
+      if (!navigator.clipboard || !navigator.clipboard.read) {
+        setErr('This browser cannot read the clipboard from a button - click in the box and press ⌘V / Ctrl+V.');
+        return;
+      }
+      try {
+        const items = await navigator.clipboard.read();
+        const files = [];
+        for (const it of items) {
+          const type = it.types.find(x => /^image\//.test(x));
+          if (type) { const b = await it.getType(type); files.push(new File([b], 'screenshot.' + (type.split('/')[1] || 'png'), { type })); }
+        }
+        if (!files.length) { setErr('There is no picture on the clipboard. Copy a screenshot first (⌘⇧⌃4 on a Mac copies one).'); return; }
+        addFiles(files);
+      } catch (x) {
+        setErr('The browser did not allow reading the clipboard - click in the box and press ⌘V / Ctrl+V instead.');
+      }
+    };
+    const drop = key => setPics(ps => ps.filter(p => { if (p.key === key && p.url) URL.revokeObjectURL(p.url); return p.key !== key; }));
     const waiting = asked.some(q => q.answer == null);
     // The event stream ends with a finished job, so poll while a question is open.
     useEffect(() => {
@@ -233,12 +277,13 @@
     const send = kind => {
       setBusy(kind); setErr('');
       fetch('/api/jobs/' + job.id + (kind === 'ask' ? '/inquire' : '/revise'), { method: 'POST',
-        body: JSON.stringify({ text, images: pics.filter(p => p.id).map(p => p.id) }),
+        body: JSON.stringify({ text, images: pics.filter(p => p.id && p.kind === 'image').map(p => p.id),
+                               files: pics.filter(p => p.id && p.kind === 'file').map(p => p.id) }),
         headers: { 'X-JTI-Job': job.token, 'Content-Type': 'application/json' } })
         .then(r => r.json()).then(d => {
           setBusy('');
           if (!d.ok) { setErr(d.message || 'Could not send that.'); return; }
-          setText(''); pics.forEach(p => URL.revokeObjectURL(p.url)); setPics([]);
+          setText(''); pics.forEach(p => p.url && URL.revokeObjectURL(p.url)); setPics([]);
           if (kind === 'ask') onSnap(d.job); else onSent(d.job);
         })
         .catch(() => { setBusy(''); setErr('Could not reach the builder - try again.'); });
@@ -250,16 +295,26 @@
         anything. Or describe a change, and Claude changes this report and verifies it again; the
         files above are replaced when it passes.</p>
       ${asked.length > 0 && html`<div class="thread">${asked.map(q => html`<div key=${q.n} class="qa">
-        <div class="q"><b>You asked</b> ${q.text}${(q.images || []).length > 0 && html` <span class="note">(with ${q.images.length} picture${q.images.length > 1 ? 's' : ''})</span>`}</div>
+        <div class="q"><b>You asked</b> ${q.text}${attachNote(q)}</div>
         <div class=${'a' + (q.answer == null ? ' pending' : '')}>${q.answer == null
           ? html`<span class="spin1"/> Claude is looking into it…` : html`<b>Claude</b> ${q.answer}`}</div></div>`)}</div>`}
-      <textarea maxLength="20000" placeholder="e.g. Where does the Courtroom column come from?  or  Add the filing date after the case number. Paste a screenshot here if it helps."
-                value=${text} onInput=${e => setText(e.target.value)} onPaste=${onPaste}/>
+      <textarea maxLength="20000" class=${drag ? 'drag' : ''}
+                placeholder="e.g. Where does the Courtroom column come from?  or  Add the filing date after the case number. Paste a screenshot or drop a file here if it helps."
+                value=${text} onInput=${e => setText(e.target.value)} onPaste=${onPaste}
+                onDragOver=${e => { e.preventDefault(); setDrag(true); }} onDragLeave=${() => setDrag(false)} onDrop=${onDrop}/>
       ${pics.length > 0 && html`<div class="pics">${pics.map(p => html`<div key=${p.key} class=${'pic' + (p.err ? ' bad' : '')}>
-        <img src=${p.url} alt="pasted screenshot"/>
+        ${p.kind === 'image' && p.url ? html`<img src=${p.url} alt="pasted screenshot"/>`
+          : html`<div class="file" title=${p.name}><span class="ext">${(p.name.split('.').pop() || 'file').slice(0, 5)}</span><span class="fname">${p.name}</span></div>`}
         <button class="x" title="Remove" onClick=${() => drop(p.key)}>×</button>
         <div class="cap">${p.err || (p.id ? 'Added' : 'Adding…')}</div></div>`)}</div>`}
-      <p class="note">Paste a screenshot (⌘V / Ctrl+V) into the box to send it with your message.</p>
+      <div class="attachbar">
+        <button class="mini" type="button" onClick=${() => picker.current && picker.current.click()}>Attach a file…</button>
+        <button class="mini" type="button" onClick=${fromClipboard}>Paste from clipboard</button>
+        <input ref=${picker} type="file" multiple hidden accept=${ACCEPT}
+               onChange=${e => { addFiles([...e.target.files]); e.target.value = ''; }}/>
+        <span class="note">Or paste (⌘V / Ctrl+V) or drop into the box. Pictures, PDF, Word, Excel, zip or
+          text files, up to ${MAX_ATTACH} per message, 10 MB each.</span>
+      </div>
       <div class="actions mt12">
         <button class="go sm" disabled=${!!busy || !text.trim() || waiting || uploading}
                 onClick=${() => send('ask')}>${busy === 'ask' ? 'Sending…' : 'Ask a question'}</button>

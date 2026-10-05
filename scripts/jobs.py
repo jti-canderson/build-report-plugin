@@ -287,7 +287,7 @@ class Store:
 
     MAX_IMAGES = 6
 
-    def revise(self, j, text, images=None):
+    def revise(self, j, text, images=None, files=None):
         """The page's "Request changes" box on a COMPLETE job. The same job goes back to
         submitted with the request attached, so the waiting worker claims it again, changes
         the report it already built, re-runs every gate and completes it again. Returns
@@ -304,7 +304,8 @@ class Store:
             if other and other["id"] != j["id"]:
                 return False, "Another build is running - request changes when it ends."
             n = len(j.get("revisions") or []) + 1
-            req = {"n": n, "text": text, "at": time.time(), "images": list(images or [])}
+            req = {"n": n, "text": text, "at": time.time(), "images": list(images or []),
+                   "files": list(files or [])}
             j.setdefault("revisions", []).append(req)
             # The setup stages are not redone for a change to the same report (same project,
             # SDK and field sources), so they stay ticked; everything from the rule on reruns.
@@ -323,7 +324,7 @@ class Store:
     # -- questions about a finished report ("Ask a question" on the page)
     INQUIRY_RECLAIM = 1200      # a question claimed this long ago and never answered is offered again
 
-    def inquire(self, j, text, images=None):
+    def inquire(self, j, text, images=None, files=None):
         """A question about a COMPLETE report. Unlike revise(), nothing about the job changes:
         it stays complete, its downloads stay valid, and the worker only answers in words."""
         text = (text or "").strip() if isinstance(text, str) else ""
@@ -338,7 +339,7 @@ class Store:
             if any(q["answer"] is None for q in qs):
                 return False, "Claude is still answering your last question."
             qs.append({"n": len(qs) + 1, "text": text, "at": time.time(), "images": list(images or []),
-                       "claimed": None, "answer": None, "answered_at": None})
+                       "files": list(files or []), "claimed": None, "answer": None, "answered_at": None})
             self.event(j, "inquiry", "complete", f"Question asked ({len(qs)})")
             self.save(j)
             self.changed.notify_all()

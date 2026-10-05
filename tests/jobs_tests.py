@@ -14,6 +14,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 import urllib.error
 import urllib.request
 
@@ -717,6 +718,51 @@ def run_revise(check, skip, ctx):
               and q2img == os.path.join(folder, ".jti-build", "attachments", pid)
               and open(q2img, "rb").read() == png,
               (a_code, pid, a_txt, a_fake, a_tok, q_forged, q2, q2w.stdout[-300:]))
+        # -- an attached FILE (picked or dropped): named by its extension, content checked
+        # against it, stored under a server-made id that keeps the original name as its tail
+        pdf = b"%PDF-1.4\n" + b"x" * 40
+        def att(raw, name, ctype="application/octet-stream", token=tok):
+            hd = {"X-JTI-Job": token, "Content-Type": ctype}
+            if name is not None:
+                hd["X-JTI-Name"] = urllib.parse.quote(name)
+            c, _, body = srv.req("POST", f"/api/jobs/{jid}/attach", headers=hd, raw=raw)
+            return c, json.loads(body or b"{}")
+        f_pdf = att(pdf, "Old report (v2).pdf")
+        f_csv = att(b"case,total\n1,2\n", "expected.csv")
+        f_exe = att(b"MZ\x90\x00", "setup.exe")
+        f_fakepdf = att(b"not a pdf", "fake.pdf")
+        f_bintxt = att(b"abc\0def", "notes.txt")
+        f_noext = att(b"hello", "README")
+        f_path = att(pdf, "../../etc/evil.pdf")
+        f_img = att(png, "shot.png", "image/png")
+        fid, cid = f_pdf[1].get("id", ""), f_csv[1].get("id", "")
+        too_many = srv.js("POST", f"/api/jobs/{jid}/inquire",
+                          {"text": "x", "images": [pid] * 4, "files": [fid] * 3}, hdr)[0]
+        f_forged = srv.js("POST", f"/api/jobs/{jid}/inquire",
+                          {"text": "x", "files": ["file-1-deadbeef-../../x.pdf"]}, hdr)[0]
+        q3 = srv.js("POST", f"/api/jobs/{jid}/inquire",
+                    {"text": "Does this match the old report?", "images": [pid], "files": [fid, cid]}, hdr)[0]
+        q3w = helper(plugin, ws, "wait", "--secs", "10")
+        q3got = (json.loads(q3w.stdout) if q3w.returncode == 0 else {}).get("inquiry") or {}
+        att_dir = os.path.join(folder, ".jti-build", "attachments")
+        helper(plugin, ws, "reply", "--job", jid, "--n", "3", "Yes.")
+        check("jobs: an attached file is accepted by extension with its content checked, keeps its "
+              "name as a safe tail, and reaches the worker as `files`; executables, mislabelled "
+              "files, nameless files, path tricks, forged ids and more than six attachments are refused",
+              f_pdf[0] == 200 and re.match(r"^file-\d+-[0-9a-f]{8}-Old_report_v2\.pdf$", fid)
+              and f_pdf[1].get("kind") == "file"
+              and f_csv[0] == 200 and cid.endswith("-expected.csv")
+              and f_exe[0] == 415 and f_fakepdf[0] == 400 and f_bintxt[0] == 400 and f_noext[0] == 415
+              and f_path[0] == 200 and re.match(r"^file-\d+-[0-9a-f]{8}-evil\.pdf$", f_path[1].get("id", ""))
+              and f_img[0] == 200 and f_img[1].get("kind") == "image"
+              and re.match(r"^img-\d+-[0-9a-f]{8}\.png$", f_img[1].get("id", ""))
+              and too_many == 400 and f_forged == 400 and q3 == 200
+              and q3got.get("files") == [os.path.join(att_dir, fid), os.path.join(att_dir, cid)]
+              and q3got.get("images") == [os.path.join(att_dir, pid)]
+              and open(os.path.join(att_dir, fid), "rb").read() == pdf
+              and all(not n.startswith("..") and "/" not in n for n in os.listdir(att_dir)),
+              (f_pdf, f_csv, f_exe[0], f_fakepdf[0], f_bintxt[0], f_noext[0], f_path, f_img,
+               too_many, f_forged, q3, q3w.stdout[-300:]))
         bad_tok = srv.js("POST", f"/api/jobs/{jid}/revise", {"text": "x"}, {"X-JTI-Job": "nope"})[0]
         empty = srv.js("POST", f"/api/jobs/{jid}/revise", {"text": "   "}, hdr)
         code, d = srv.js("POST", f"/api/jobs/{jid}/revise",
@@ -752,8 +798,18 @@ def run_revise(check, skip, ctx):
               "to /revise and follows the job again",
               "Questions or changes?" in ui and "'/revise'" in ui and "'/inquire'" in ui
               and "onPaste=${onPaste}" in ui and "'/attach'" in ui
+              and "onDrop=${onDrop}" in ui and 'type="file"' in ui and "Attach a file" in ui
+              and "navigator.clipboard.read()" in ui and "Paste from clipboard" in ui
+              and "files: pics.filter" in ui
               and "Ask a question" in ui and "RevisePanel" in ui
               and "useJob(job, round)" in ui, "build_ui.js")
+        app = open(os.path.join(plugin, "scripts", "app.js"), encoding="utf8").read()
+        check("builder page: 'match a picture' takes a pasted screenshot (page-wide, not in text "
+              "boxes), a dropped file, or the clipboard button, all through one upload",
+              "document.addEventListener('paste', onPaste)" in app and "el.tagName === 'TEXTAREA'" in app
+              and "class=${'mt12 lookdrop'" in app and "sendLook(firstFile(e.dataTransfer" in app
+              and "onClick=${lookFromClipboard}" in app and app.count("fetch('/api/look?name='") == 1,
+              "app.js")
     finally:
         srv.stop()
 

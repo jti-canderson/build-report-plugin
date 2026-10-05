@@ -8,7 +8,7 @@
  * Everything is one screen with no navigation. Adding a section, browsing for a folder and
  * showing the result all mutate state in place - nothing here reloads or changes pages.
  */
-const { useState, useEffect, useCallback } = React;
+const { useState, useEffect, useCallback, useRef } = React;
 const html = htm.bind(React.createElement);
 
 const TYPES = [
@@ -284,16 +284,56 @@ function App() {
 
   // The example layout. Uploaded now, but only COPIED into the report folder when the spec
   // is written - until then it is a temp file the server holds, like the folder-view export.
-  const onLook = e => {
-    const file = e.target.files && e.target.files[0];
+  // Chosen, dropped or pasted: the same upload. The server checks it is a picture or a PDF.
+  const lookRef = useRef(null);
+  lookRef.current = look;
+  const sendLook = file => {
     if (!file) return;
-    setLookErr(''); setLook(null);
+    setLookErr('');                          // a failed one leaves the picture already attached
     file.arrayBuffer().then(buf =>
-      fetch('/api/look?name=' + encodeURIComponent(file.name),
+      fetch('/api/look?name=' + encodeURIComponent(file.name || 'screenshot.png'),
             { method: 'POST', body: buf, headers: SESSION.h })
         .then(r => r.json())
-        .then(d => (d.ok ? setLook(d) : setLookErr(d.message))));
-    e.target.value = '';
+        .then(d => (d.ok ? setLook(d) : setLookErr(d.message + (lookRef.current ? ' The earlier picture is still attached.' : '')))))
+      .catch(() => setLookErr('Could not reach the builder - try again.'));
+  };
+  const onLook = e => { sendLook(e.target.files && e.target.files[0]); e.target.value = ''; };
+  const [lookDrag, setLookDrag] = useState(false);
+  const firstFile = list => [...(list || [])].map(it => it.getAsFile ? (it.kind === 'file' ? it.getAsFile() : null) : it)
+    .find(Boolean);
+  // ⌘V anywhere on the page while "match a picture" is picked - except into a text box,
+  // where a paste is somebody typing.
+  useEffect(() => {
+    if (tpl !== PICTURE) return;
+    const onPaste = e => {
+      const el = e.target;
+      if (el && (el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && el.type !== 'file') || el.isContentEditable)) return;
+      const f = firstFile(e.clipboardData && e.clipboardData.items);
+      if (!f) return;
+      e.preventDefault();
+      sendLook(f);
+    };
+    document.addEventListener('paste', onPaste);
+    return () => document.removeEventListener('paste', onPaste);
+  }, [tpl]);
+  const lookFromClipboard = async () => {
+    setLookErr('');
+    if (!navigator.clipboard || !navigator.clipboard.read) {
+      setLookErr('This browser cannot read the clipboard from a button - press ⌘V / Ctrl+V on the page instead.');
+      return;
+    }
+    try {
+      for (const it of await navigator.clipboard.read()) {
+        const type = it.types.find(x => /^image\//.test(x) || x === 'application/pdf');
+        if (type) {
+          const b = await it.getType(type);
+          return sendLook(new File([b], 'screenshot.' + (type === 'application/pdf' ? 'pdf' : type.split('/')[1] || 'png'), { type }));
+        }
+      }
+      setLookErr('There is no picture on the clipboard. Copy a screenshot first (⌘⇧⌃4 on a Mac copies one).');
+    } catch (x) {
+      setLookErr('The browser did not allow reading the clipboard - press ⌘V / Ctrl+V on the page instead.');
+    }
   };
 
   useEffect(() => {
@@ -586,7 +626,14 @@ function App() {
                   below if you want the picture's colours and fonts too — otherwise the JTI
                   masthead and styling stay. Charts and anything interactive cannot be
                   reproduced: a report is paper.</div>
-                <div class="mt12"><input type="file" accept="image/*,.pdf" onChange=${onLook}/></div>
+                <div class=${'mt12 lookdrop' + (lookDrag ? ' drag' : '')}
+                     onDragOver=${e => { e.preventDefault(); setLookDrag(true); }}
+                     onDragLeave=${() => setLookDrag(false)}
+                     onDrop=${e => { e.preventDefault(); setLookDrag(false); sendLook(firstFile(e.dataTransfer && e.dataTransfer.files)); }}>
+                  <input type="file" accept="image/*,.pdf" onChange=${onLook}/>
+                  <button class="mini" type="button" onClick=${lookFromClipboard}>Paste from clipboard</button>
+                  <span class="hint">or press ⌘V / Ctrl+V to paste a screenshot, or drop a file here.</span>
+                </div>
                 ${lookErr && html`<div class="out err">${lookErr}</div>`}
                 ${look && html`<div class="out ok">Attached <b>${look.name}</b> —
                   ${Math.max(1, Math.round(look.bytes / 1024))} KB. It gets copied into the
@@ -621,13 +668,13 @@ function App() {
 
           <section class=${'step' + (name.trim() && contentDone ? ' done' : '')}>
             <div class="step-h"><${Num} n="4" done=${!!(name.trim() && contentDone)}/>
-              <div><h2>Report</h2><p class="lead">Its name, its title, and in plain words what
+              <div><h2>Report</h2><p class="lead">Its code, its name, and in plain words what
                 it should show.</p></div></div>
             <div class="row">
-              <div><label>File name — letters, digits, underscores</label>
+              <div><label>Code — letters, digits, underscores</label>
                 <input type="text" placeholder="Cases_By_Type" value=${name}
                        onInput=${e => setName(e.target.value)}/></div>
-              <div><label>Title on the page</label>
+              <div><label>Name</label>
                 <input type="text" placeholder="Cases By Type" value=${title}
                        onInput=${e => setTitle(e.target.value)}/></div>
             </div>
@@ -677,7 +724,7 @@ function App() {
             <dl class="kv">
               <dt>Project</dt><dd class=${projObj || project ? '' : 'empty'}>${projObj ? projObj.label : (project || 'Workspace folder')}</dd>
               <dt>Template</dt><dd class=${tpl ? '' : 'empty'}>${tpl === PICTURE ? 'Match a picture' : tplObj ? tplObj.title : 'Not chosen'}</dd>
-              <dt>File name</dt><dd class=${name.trim() ? '' : 'empty'}>${name.trim() || 'Not set'}</dd>
+              <dt>Code</dt><dd class=${name.trim() ? '' : 'empty'}>${name.trim() || 'Not set'}</dd>
               <dt>Content</dt><dd class=${contentDone ? '' : 'empty'}>${realCols > 0
                 ? `${realCols} column${realCols === 1 ? '' : 's'}`
                 : hasBrief ? 'From your brief' : (tpl === PICTURE && look) ? 'From the picture' : 'Not described'}</dd>

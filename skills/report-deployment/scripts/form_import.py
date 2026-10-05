@@ -804,7 +804,7 @@ def build_search(donor, code, name, criteria, results, root=None, root_fqcn=None
 # order-insensitively. A condition's "hash" is not in the XStream at all and is masked.
 
 
-ORDER = "additionalItemToOperator, additionalItems, aggregateFunction, allowRange, displayTotals, extraCriteria, hideForLookup, subQueryFunction, subQueryIdentifier, operator, customFormat, split, staticFieldText, type, label, path, hidden, requiredTime, readonly, required, link, customListType, customListQuery, footerText, openInNewTab, title, lookupItemFormat, lookupSearchType, conditions, grid, treeTable, columnHeaders, columnStyles, condValue, sort, previewSummary, newRow, numberFormat, style, newColumn, numberMask, conditionalFormats, defaultValue, sortable, emptyPanelMessage, noLabel, panelAutoCompleteMinChars, defaultCollapsed, dropdown, expandIfCondition, multiSelectLookup, filterListByUser, filterable, parameters, styleClass, userSelectedList, useCommaDisplayMask, userInterface, num, widgetInMassType, dateFormat, linkForm, linkFormPathIndex, memo, monthsToShow, pageSize".split(", ")
+ORDER = "additionalItemToOperator, additionalItems, aggregateFunction, allowRange, displayTotals, extraCriteria, hideForLookup, subQueryFunction, subQueryIdentifier, operator, customFormat, split, staticFieldText, type, label, path, hidden, requiredTime, readonly, required, link, customListType, customListQuery, footerText, openInNewTab, title, lookupItemFormat, lookupSearchType, conditions, grid, treeTable, columnHeaders, columnStyles, condValue, sort, previewSummary, newRow, numberFormat, style, newColumn, numberMask, conditionalFormats, defaultValue, sortable, emptyPanelMessage, noLabel, panelAutoCompleteMinChars, panelLayout, defaultCollapsed, dropdown, expandIfCondition, multiSelectLookup, filterListByUser, filterable, parameters, styleClass, userSelectedList, useCommaDisplayMask, userInterface, num, widgetInMassType, dateFormat, linkForm, linkFormPathIndex, memo, monthsToShow, pageSize".split(", ")
 
 def blocks(it):
     """Top-level fields of every <default> block in this item's inheritance chain, NOT
@@ -925,6 +925,11 @@ def project(it):
             val = {"code": val[10:], "hash": None}
         if isinstance(val, str) and "\n" in val:
             val = re.split(r"\r\n|\n", val)
+            # The platform's JSON splits the way Java's String.split does, which drops
+            # trailing empty lines: text ending in a newline (a pasted .vm launcher) has one
+            # more line in the XStream than in the JSON. Seen 2026-10-02.
+            while len(val) > 1 and val[-1] == "":
+                val.pop()
         j[k] = val
     return j
 

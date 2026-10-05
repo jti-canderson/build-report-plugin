@@ -961,3 +961,62 @@ If "ALREADY RUNNING" ever stops matching what the checkout actually does, restar
   `caseId` included.** A rule that already had a local of that name (`def caseNumber = ...`)
   now has a duplicate declaration. Rename the RULE's local, never the block, which must be
   pasted unchanged. Paste it after the `import` lines: Groovy refuses an import after a statement.
+
+---
+
+## Field-level change history for CASE data — the audit trail, not a createUsername sweep
+
+*Established 2026-10-02 from `ecourt-sdk-local-2026-10-01` (DCMFCU) while building
+`DCMFCU/User_Activity`. Signatures only — NOT yet run on any environment for case data.*
+
+- `DomainObject` declares instance `searchAuditLog(Date, Date, Collection userNames,
+  Collection revisions, Collection actions, Long caseId, Integer offset, Integer limit)` and
+  static `getObjectVersion(Class, Long id, Number rev)`. Together they give per-field
+  before/after for ADD/MOD/DEL — the data behind `/ecms/audit`. `Config Change Audit Report`
+  used them for config records (eh-team-config); `User_Activity` uses them for everything.
+- **The `User Activity Audit Report` HANDOFF's "there is no field-level history" is the same
+  wrong conclusion the config report corrected** — do not build an audit on
+  createUsername/lastUpdateUsername sweeps (last editor only, no values).
+- Still open: the row shape, whether results are scoped to the receiver, whether `[]` means
+  "no filter", offset = rows vs pages, and whether `getObjectVersion(rev-1)` is "at or before".
+  The one Execute snippet that settles all of them is in
+  `DCMFCU/User_Activity/verification/JRXML_CONTRACT.txt` NOTES. Write the answer back here.
+
+## DCMFCU case-summary panels, and `sdk_fields.py --list` crashes
+
+*Found 2026-10-02 building `DCMFCU/Case_Summary` (0.35.0, perf/report-build-speed, 7e672d1)
+against `ecourt-sdk-local-2026-10-01_1_.jar`. The builder submitted field NAMES with no paths.*
+
+- **`sdk_fields.py --list <Class>` dies** with `UnboundLocalError: local variable 'short'`
+  (line 163). Named-field queries work. Workaround: `javap -p -cp <jar> <class>` and grep
+  `Set<|List<` to find a collection.
+- Field-backed on this jar, matched by name (never run on real data): `Case.researchRecords`
+  (CaseResearchRecord `researchType`, `researchNote`); `Case.specialStatuses` (CaseSpecialStatus
+  `status`, `category`, `startDate`, `endDate`, `value` - the likely "Attributes" panel);
+  `Case.dispositions` (CaseDisposition `dispositionManner/Date/Type`, which Case also carries
+  directly); `CaseAssignment.dateAssigned/dateRemoved`; `OtherCaseNumber.active/lead` are plain
+  Booleans here (no `cf_`/`c_` prefix); `Case.hearings` is the ScheduledEvent set (no
+  `scheduledEvents`); `Case.questionnaireResponses[].questionAnswers[]` -> `QuestionAnswer.value`
+  + `question.label`. `Person.age` is a stripped getter; Person has NO `cf_preferred*` fields.
+- **No `isPrimaryInvolvedPerson` on `Party` in this jar** (OKDAC's has one). DCMFCU's folder
+  view PIP condition body, supplied by the user 2026-10-02:
+  `DomainObject.find(LookupItem.class, sel("code"), "lookupList.name", "=", "PARTY_TYPE",
+  "attributes.attributeType", "=", "MC", "attributes.name", "=", "1")` then
+  `_this.partyType in` that. Used verbatim in `DCMFCU/Case_Involvements`; passes the local rule
+  gate, unrun on real data. `CaseAssignment.events` / `Party.events` (Set<ScheduledEvent>) exist.
+
+## The truncation gate reads a line that ENDS IN A HYPHEN as a cut — a false positive
+
+*Found 2026-10-02 on `DCMFCU/Case_Summary` and `DCMFCU/Case_Involvements` (0.35.0, 7e672d1).*
+
+Jasper wraps at a hyphen inside a token ("Suite 300-" / "B", "MFCU-2026-00417-" / "REF"). The
+whole value is on the page, but the truncation gate stops at the line ending in "-" and reports
+`cut mid-word`. Look at the PNG before "fixing" it. Real remedies: widen the column so the token
+fits on one line, or (with the user's OK) make the fixture wrap at a space and note the hyphen
+case as checked by eye. Worth fixing in the checker itself.
+
+Same session: replacing `eseries_summary`'s title band from a report's own `gen_jrxml.py` works
+cleanly. Assign `T._title = my_fn` before `T.build(...)` and DECLARE the new header fields via
+`header_cols` (they are only used to build the field list once `_title` is replaced). Reuse
+`T._banners()`, `T._folder()`, `T.HDR_LINE`, `T.HDRLBL`, `T.LINK`. `S.text` refuses a 14pt box for
+10pt text (MIN_LEAD): use 16.

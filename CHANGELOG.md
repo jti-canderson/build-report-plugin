@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.35.1 - 2026-10-05
+
+**Attach files, not just pasted screenshots.** The *Questions or changes?* box now has
+**Attach a file…** and **Paste from clipboard** buttons. Files can also be dropped onto the box,
+and ⌘V pastes copied files as well as pictures.
+
+- Accepted: pictures (PNG, JPEG, GIF, WebP), PDF, Word, Excel, PowerPoint, zip (FORM and RULE
+  exports included) and text files (`.txt .csv .json .xml .jrxml .groovy .vm .sql .log ...`).
+  Each file's content is checked against its extension. Up to 6 per message, 10 MB each.
+- A file is stored as `file-<time>-<hex>-<original name>` in the job's `.jti-build/attachments/`
+  and reaches the worker as `files`, next to `images`. The build instructions say how to read
+  each kind.
+- **Paste from clipboard** asks the browser for the clipboard. Where that is not allowed, it
+  says to use ⌘V instead.
+**Step 2's "match a picture" takes a pasted screenshot.** Once that card is picked, ⌘V
+anywhere on the page (except in a text box) attaches the screenshot on the clipboard. A file
+can also be dropped onto the upload box, and a **Paste from clipboard** button reads the
+clipboard. A failed upload keeps the picture already attached.
+
+**The form gate reads multi-line text the way the platform writes it.** A static text item ending in
+a newline (a pasted launcher `.vm`) has one more, empty, line in the XStream than in the JSON,
+because the platform splits like Java's `String.split`. The gate now drops trailing empty lines
+too, so such a form is no longer reported as *XStream and JSON disagree on staticFieldText*.
+
+**The form gate knows `panelLayout`.** A platform export with it (`SINGLE_COLUMN`) was reported
+as *XStream and JSON disagree*, though both halves agreed.
+
+**Step 4 labels match eSeries.** *File name* is now **Code**, and *Title on the page* is now
+**Name**.
+
+- Skill notes from the 2 October builds: the truncation gate misreads a value wrapped at a
+  hyphen (`gotchas.md`), a report that downloads as CSV is the registration's Default Format
+  (`running-reports`), and more model facts (`model-facts.md`).
+- Tests: one more check covering accepted and refused types, safe names, forged ids, the
+  six-attachment limit, and files reaching the worker.
+
 ## 0.35.0 - 2026-10-01
 
 **Ask a question or request changes after a build, with pasted screenshots.** When a report

@@ -27,6 +27,9 @@ separable from the corpus.
 
 A report is joined to its Groovy rule through **Data Source Generator**, stored as `rule:<Code>`.
 Registration also fixes **Isolation** (`READ_UNCOMMITTED`) and **Default Format** (usually `pdf`).
+A report that "downloads a CSV / saves to the clipboard instead of showing the report" is
+Default Format = `csv` on the registration (DCMFCU, 2026-10-02) - the `.jrxml` and rule
+cannot set the format, so the fix is in Reports Admin, never a rebuild.
 The Parameters tab is auto-detected from the `<parameter>` declarations in the `.jrxml`.
 
 ## How parameters actually travel — the part that misleads people

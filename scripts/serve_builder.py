@@ -380,7 +380,7 @@ def destination(payload):
     place is a grant to write a report there, not to create directory trees anywhere."""
     name = (payload.get("name") or "").strip()
     if not NAME_OK.match(name):
-        return None, ("Report name must start with a letter and use only letters, digits "
+        return None, ("Report code must start with a letter and use only letters, digits "
                       "and underscores - it becomes the .jrxml and rule file names.")
     proj = (payload.get("project") or "").strip()
     if proj in ("", "."):

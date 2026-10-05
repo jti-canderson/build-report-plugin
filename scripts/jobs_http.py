@@ -230,7 +230,7 @@ class Routes:
             return True
         if method == "POST" and action == "revise":
             b = body_json(h) or {}
-            ok, msg = self.s.revise(self.s.get(jid), b.get("text"), self.images(j, b.get("images")))
+            ok, msg = self.s.revise(self.s.get(jid), b.get("text"), *self.attached(j, b))
             if not ok:
                 raise Refuse(409, msg)
             h._send(200, json.dumps({"ok": True, "message": msg,
@@ -238,7 +238,7 @@ class Routes:
             return True
         if method == "POST" and action == "inquire":
             b = body_json(h) or {}
-            ok, msg = self.s.inquire(self.s.get(jid), b.get("text"), self.images(j, b.get("images")))
+            ok, msg = self.s.inquire(self.s.get(jid), b.get("text"), *self.attached(j, b))
             if not ok:
                 raise Refuse(409, msg)
             h._send(200, json.dumps({"ok": True, "message": msg,
@@ -308,7 +308,8 @@ class Routes:
                 _, jj, q = j
                 d = self.claimed(jj)
                 d.update({"revision": None, "status": jj["status"],
-                          "inquiry": {"n": q["n"], "text": q["text"], "images": q.get("images") or []},
+                          "inquiry": {"n": q["n"], "text": q["text"], "images": q.get("images") or [],
+                                      "files": q.get("files") or []},
                           "earlier": [{"q": x["text"], "a": x["answer"]}
                                       for x in jj.get("inquiries") or [] if x["answer"]]})
                 h._send(200, json.dumps({"ok": True, "job": d}))
@@ -475,13 +476,24 @@ class Routes:
         self.s.save(j)
         return {"ok": True}
 
-    # Screenshots pasted into the "Questions or changes?" box. Stored inside the job's own
-    # hidden folder under a name the SERVER picks; the request then names them by that id,
-    # and only ids that exist there are passed on to Claude (as paths it can open).
+    # Screenshots and files added to the "Questions or changes?" box (pasted, dropped or
+    # picked). Stored inside the job's own hidden folder under a name the SERVER picks; the
+    # request then names them by that id, and only ids that exist there are passed on to
+    # Claude (as paths it can open).
     IMAGE_TYPES = {"image/png": (".png", b"\x89PNG"), "image/jpeg": (".jpg", b"\xff\xd8\xff"),
                    "image/gif": (".gif", b"GIF8"), "image/webp": (".webp", b"RIFF")}
     MAX_IMAGE = 10 * 1024 * 1024
     IMAGE_ID = re.compile(r"^img-\d+-[0-9a-f]{8}\.(png|jpg|gif|webp)$")
+    # Other files, by extension, each with the check its content must pass. A file is never
+    # opened or run by the server - this only keeps an executable or a mislabelled blob out.
+    _ZIP, _OLE, _TEXT = (b"PK\x03\x04",), (b"\xd0\xcf\x11\xe0",), None
+    FILE_TYPES = {".pdf": (b"%PDF",), ".zip": _ZIP, ".xlsx": _ZIP, ".docx": _ZIP, ".pptx": _ZIP,
+                  ".xls": _OLE, ".doc": _OLE,
+                  **dict.fromkeys((".txt", ".csv", ".tsv", ".json", ".xml", ".jrxml", ".groovy",
+                                   ".vm", ".md", ".log", ".sql", ".html", ".htm", ".yaml",
+                                   ".yml", ".properties"), _TEXT)}
+    FILE_ID = re.compile(r"^file-\d+-[0-9a-f]{8}-[A-Za-z0-9_-][A-Za-z0-9._-]{0,79}$")
+    MAX_ATTACH = 10 * 1024 * 1024
 
     def attach_dir(self, j):
         d = pathlib.Path(j["report"]["folder"]) / ".jti-build" / "attachments"
@@ -489,45 +501,84 @@ class Routes:
             raise Refuse(400, "attachment folder is a symlink")
         return d
 
+    @classmethod
+    def safe_name(cls, raw):
+        """The browser's file name reduced to a plain basename the FILE_ID pattern accepts,
+        or None when its extension is not one we take."""
+        import urllib.parse as _u
+        name = os.path.basename(_u.unquote(raw or "").replace("\\", "/")).strip()
+        stem, ext = os.path.splitext(name)
+        ext = ext.lower()
+        if ext not in cls.FILE_TYPES:
+            return None, ext
+        stem = re.sub(r"[^A-Za-z0-9_-]+", "_", stem).strip("_")[:80 - len(ext)] or "file"
+        return stem + ext, ext
+
     def attach(self, h, j):
         import secrets as _s
         if j["status"] != "complete":
-            raise Refuse(409, "pictures can be added once the report is built")
+            raise Refuse(409, "files can be added once the report is built")
         kind = (h.headers.get("Content-Type") or "").split(";")[0].strip().lower()
-        if kind not in self.IMAGE_TYPES:
+        raw_name = h.headers.get("X-JTI-Name")
+        # A picture is a picture whether it was pasted (no name) or picked from disk; a file
+        # with a picture's extension but no picture type from the browser is treated the same.
+        by_ext = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                  ".gif": "image/gif", ".webp": "image/webp"}
+        if kind not in self.IMAGE_TYPES and raw_name:
+            kind = by_ext.get(os.path.splitext(raw_name)[1].lower(), kind)
+        if kind in self.IMAGE_TYPES:
+            ext, magic = self.IMAGE_TYPES[kind]
+            magics, stem = (magic,), "img"
+        elif raw_name:
+            name, ext = self.safe_name(raw_name)
+            if name is None:
+                raise Refuse(415, f"a {ext or 'file without an extension'} file cannot be attached - "
+                                  "pictures, PDF, Word, Excel, zip and text files can")
+            magics, stem = self.FILE_TYPES[ext], "file"
+        else:
             raise Refuse(415, "only a PNG, JPEG, GIF or WebP picture can be pasted")
         n = h.headers.get("Content-Length")
         if n is None:
             raise Refuse(411, "Content-Length is required")
         n = int(n)
-        if n <= 0 or n > self.MAX_IMAGE:
-            raise Refuse(413, "pictures are limited to 10 MB")
+        if n <= 0 or n > self.MAX_ATTACH:
+            raise Refuse(413, "files are limited to 10 MB each")
         data = h.rfile.read(n)
-        ext, magic = self.IMAGE_TYPES[kind]
-        if len(data) != n or not data.startswith(magic):
-            raise Refuse(400, "that is not a picture of the type it claims to be")
+        if len(data) != n:
+            raise Refuse(400, "the upload was cut short")
+        if magics is self._TEXT:
+            if b"\0" in data[:65536]:
+                raise Refuse(400, "that is not a text file")
+        elif not any(data.startswith(m) for m in magics):
+            raise Refuse(400, "that file is not the type its name says")
         d = self.attach_dir(j)
         d.mkdir(mode=0o700, parents=True, exist_ok=True)
-        name = f"img-{int(time.time())}-{_s.token_hex(4)}{ext}"
-        with open(d / name, "xb") as f:
+        tag = f"{int(time.time())}-{_s.token_hex(4)}"
+        fid = f"img-{tag}{ext}" if stem == "img" else f"file-{tag}-{name}"
+        with open(d / fid, "xb") as f:
             f.write(data)
-        os.chmod(d / name, 0o600)
-        return {"ok": True, "id": name, "bytes": n}
+        os.chmod(d / fid, 0o600)
+        return {"ok": True, "id": fid, "bytes": n, "kind": "image" if stem == "img" else "file"}
 
-    def images(self, j, ids):
-        """The pasted pictures a request names, as absolute paths - ids the server issued for
-        THIS job only. Anything else is refused rather than silently dropped."""
-        if not ids:
-            return []
-        if not isinstance(ids, list) or len(ids) > J.Store.MAX_IMAGES:
-            raise Refuse(400, f"up to {J.Store.MAX_IMAGES} pictures per message")
-        d, out = self.attach_dir(j), []
-        for i in ids:
-            p = d / str(i)
-            if not isinstance(i, str) or not self.IMAGE_ID.match(i) or p.is_symlink() or not p.is_file():
-                raise Refuse(400, "a pasted picture was not found - paste it again")
-            out.append(str(p))
-        return out
+    def attached(self, j, b):
+        """(image paths, file paths) for the attachments a request names - ids the server
+        issued for THIS job only. Anything else is refused rather than silently dropped."""
+        imgs, files = b.get("images") or [], b.get("files") or []
+        if not isinstance(imgs, list) or not isinstance(files, list):
+            raise Refuse(400, "attachments must be lists")
+        if len(imgs) + len(files) > J.Store.MAX_IMAGES:
+            raise Refuse(400, f"up to {J.Store.MAX_IMAGES} attachments per message")
+        d = self.attach_dir(j)
+
+        def paths(ids, pat, what):
+            out = []
+            for i in ids:
+                p = d / str(i)
+                if not isinstance(i, str) or not pat.match(i) or p.is_symlink() or not p.is_file():
+                    raise Refuse(400, f"an attached {what} was not found - add it again")
+                out.append(str(p))
+            return out
+        return paths(imgs, self.IMAGE_ID, "picture"), paths(files, self.FILE_ID, "file")
 
     def upload(self, h, j, qid):
         """The file for a `file` question, streamed to the job's own upload folder. The name

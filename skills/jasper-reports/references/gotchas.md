@@ -264,3 +264,10 @@ helper. One raw read among twelve wrapped ones is the one to audit.
 
 **Match whole tokens, never substrings, when testing a code.** `code.contains('ORG')` makes
 `MORGAN` and `BORGIA` organisations. Split on non-alphanumerics and compare whole tokens.
+
+## The truncation gate reads a hyphen-wrapped value as cut (2026-10-02)
+`cliphunt.py` joins the PDF text with spaces, so a cell that wraps at a hyphen
+(`26-CR-` / `00184`) never matches its fixture value and is reported "cut mid-word" although
+the page shows all of it. Look at the PNG before acting: if the value is whole, widen the
+column so the identifier fits on one line (better reading anyway), or keep hyphens off the
+wrap point in fixture prose. A banner or heading cut in the same report is a REAL hit.

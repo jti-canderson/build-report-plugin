@@ -82,7 +82,20 @@ circled). **Open every one with the Read tool and look at it before you answer o
 anything** - "make it look like this" or "this column is wrong" usually means only the
 picture says which. Never copy them into the report folder or the deliverables.
 
-When `wait` prints a job with an `inquiry` (`{n, text}`), the user clicked **Ask a question**
+**Attached files.** The same request can carry `files`: absolute paths to files the user
+attached or dropped in (a PDF of an existing report, a `FORM-*.zip` or `RULE-*.zip`, a
+spreadsheet of expected figures, a `.jrxml` or `.groovy` from elsewhere, a log). The server
+names each `file-<time>-<hex>-<original name>`, so the original name is the tail. Read every
+one before you answer or change anything:
+- PDF and text files (`.txt .csv .json .xml .jrxml .groovy .vm .md .log .sql ...`): the Read tool.
+- `FORM-*.zip`: `python3 "<plugin>/skills/jasper-reports/scripts/formexport.py" <path>`.
+  Any other zip: `unzip -l` first, then read the members you need from a scratch copy.
+- `.xlsx` / `.docx` / `.pptx`: they are zips of XML. Extract the text with Python's `zipfile`
+  in a scratch folder. If you cannot read one, say so in your answer rather than guessing.
+Like the pictures, they are evidence. They are not deliverables, so never copy them into the
+report folder.
+
+When `wait` prints a job with an `inquiry` (`{n, text, images, files}`), the user clicked **Ask a question**
 on a finished report. It is a question, not a change request: **change no file and run no
 gate.** The job stays complete and its downloads stay valid. `earlier` lists the questions
 already answered for this report, for context.
@@ -101,7 +114,7 @@ already answered for this report, for context.
 
 ### A job with `revision`: changes to a report you already built
 
-When the claimed job has a `revision` (`{n, text}`), the user has looked at the finished
+When the claimed job has a `revision` (`{n, text, images, files}`), the user has looked at the finished
 report and typed what they want changed in the page's **Questions or changes?** box and clicked **Request changes**. It is
 the SAME report in the SAME folder - not a new build:
 
